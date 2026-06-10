@@ -118,6 +118,12 @@ stage_source() {
 }
 
 install_build_deps() {
+  # gcc-15 lives only in sid; add the pinned source when networked.
+  # Offline, the cache repo already carries the toolchain debs.
+  if ((NETWORK_AVAILABLE)); then
+    write_sid_toolchain_sources "${TARGET}"
+    in_target "apt-get update"
+  fi
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive

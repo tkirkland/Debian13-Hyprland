@@ -156,9 +156,38 @@ declare -A HYPR_MESON_ARGS=(
 
 # Compiler for the source-built stack. Trixie's default GCC 14 libstdc++
 # lacks C++23 container-ranges members (std::vector::append_range) that
-# current hyprwire/Hyprland use; GCC 15 ships in the archive alongside it.
+# current hyprwire/Hyprland use. GCC 15 is NOT in trixie; it is pulled
+# from sid via a pinned source (see write_sid_toolchain_sources).
 HYPR_CC="${HYPR_CC:-gcc-15}"
 HYPR_CXX="${HYPR_CXX:-g++-15}"
+SID_MIRROR="${SID_MIRROR:-http://deb.debian.org/debian}"
+
+# write_sid_toolchain_sources <root>
+#   Adds a sid source pinned to priority 100 under <root>: apt only takes
+#   packages from sid when trixie has no candidate at all (gcc-15/g++-15
+#   and their toolchain dependencies), and never upgrades anything else
+#   to unstable. Only used when the network is available; offline installs
+#   get the toolchain debs from the cache repo instead.
+write_sid_toolchain_sources() {
+  local root="${1:-}"
+  mkdir -p "${root%/}/etc/apt/sources.list.d" \
+    "${root%/}/etc/apt/preferences.d"
+  cat >"${root%/}/etc/apt/sources.list.d/sid-toolchain.sources" <<EOF
+Types: deb
+URIs: ${SID_MIRROR}
+Suites: sid
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+  cat >"${root%/}/etc/apt/preferences.d/sid-toolchain" <<'EOF'
+# Managed by hypr-deb: sid exists ONLY to supply gcc-15 (absent from
+# trixie). Priority 100 = never auto-upgrade installed packages to sid;
+# sid candidates are used only where trixie offers none.
+Package: *
+Pin: release a=unstable
+Pin-Priority: 100
+EOF
+}
 # Filled by the hyprland phase: name -> resolved tag.
 declare -A HYPR_RESOLVED_TAG=()
 

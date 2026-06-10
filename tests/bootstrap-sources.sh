@@ -40,6 +40,21 @@ out="$(gen 0)"
 assert_contains "${out}" "URIs: file:///var/cache/hypr-deb/repo" \
   "offline URI points at the embedded cache repo"
 assert_contains "${out}" "Trusted: yes" "offline cache repo trusted"
+
+# Pinned sid toolchain source: suite sid, priority 100 (only used where
+# trixie has no candidate, e.g. gcc-15).
+mkdir -p "${tmp}/sidroot"
+bash -c "
+  source lib/00-config.sh
+  source lib/01-log.sh
+  write_sid_toolchain_sources '${tmp}/sidroot'
+"
+sid_out="$(cat "${tmp}/sidroot/etc/apt/sources.list.d/sid-toolchain.sources" \
+  "${tmp}/sidroot/etc/apt/preferences.d/sid-toolchain")"
+assert_contains "${sid_out}" "Suites: sid" "sid suite present"
+assert_contains "${sid_out}" "Pin: release a=unstable" "pin targets unstable"
+assert_contains "${sid_out}" "Pin-Priority: 100" \
+  "pin priority 100 (no auto-upgrades)"
 if [[ "${out}" == *"deb.debian.org"* ]]; then
   echo "  FAIL: offline regen must remove the online debian.sources" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))

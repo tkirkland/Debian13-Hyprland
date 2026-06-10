@@ -41,6 +41,9 @@ cache_populate_debs() {
 
   info "Resolving full package closure in a scratch chroot..."
   debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
+  # The pinned sid source supplies gcc-15 (absent from trixie), so the
+  # offline cache carries the toolchain debs too.
+  write_sid_toolchain_sources "${work}/closure"
   chroot "${work}/closure" /usr/bin/env bash -c "
     set -e
     echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
