@@ -16,6 +16,9 @@ case \"\$*\" in
 $2
 TABLE
     ;;
+  *-o\ TYPE\ *) echo disk ;;   # per-disk queries from is_internal_whole_disk
+  *-o\ RM\ *) echo 0 ;;
+  *-o\ TRAN\ *) exit 0 ;;      # empty TRAN (virtio) must stay eligible
   *MOUNTPOINTS*) exit 0 ;;   # nothing mounted on candidates
 esac"
 }
@@ -53,18 +56,20 @@ vdc disk 0
 vdd disk 0"
 assert_fails "VM with 4 disks fails" run_select
 
-# VM mode honors VM_DISK overrides.
+# VM mode honors VM_DISK overrides. Overrides now pass real validation
+# ([[ -b ]] cannot be stubbed), so use host block devices /dev/sd{a,b,c};
+# the fake lsblk answers the per-disk TYPE/RM/TRAN/MOUNTPOINTS queries.
 setup_env "qemu" "vda disk 0
 vdb disk 0
 vdc disk 0"
-out="$(VM_DISK1=/dev/vdc VM_DISK2=/dev/vdb VM_DISK3=/dev/vda \
+out="$(VM_DISK1=/dev/sdc VM_DISK2=/dev/sdb VM_DISK3=/dev/sda \
   PATH="${tmp}/bin:${PATH}" bash -c '
     source lib/00-config.sh
     source lib/01-log.sh
     source scripts/00-preflight.sh
     detect_virt; select_disks
     echo "${DISK1}|${DISK2}|${DISK3}"' | last_line)"
-assert_eq "/dev/vdc|/dev/vdb|/dev/vda" "${out}" "VM_DISK overrides honored"
+assert_eq "/dev/sdc|/dev/sdb|/dev/sda" "${out}" "VM_DISK overrides honored"
 
 # Bare metal: fixed ids retained, no detection (lsblk table ignored).
 # The fixed by-id devices do not exist on the test host, so device

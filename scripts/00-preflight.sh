@@ -43,9 +43,10 @@ disk_has_mounts() {
 }
 
 vm_detect_disks() {
-  local name="" type="" rm="" candidates=()
-  while read -r name type rm _; do
+  local name="" type="" rm="" tran="" candidates=()
+  while read -r name type rm tran; do
     [[ "${type}" == "disk" && "${rm}" == "0" ]] || continue
+    [[ "${tran}" != "usb" ]] || continue
     [[ "${name}" =~ ^(vd[a-z]+|sd[a-z]+|nvme[0-9]+n[0-9]+)$ ]] || continue
     disk_has_mounts "/dev/${name}" && continue
     candidates+=("/dev/${name}")
@@ -60,6 +61,7 @@ vm_detect_disks() {
 }
 
 select_disks() {
+  local d=""
   if [[ "${VIRT_TYPE}" == "none" ]]; then
     info "BARE METAL mode: fixed target disks only."
     validate_by_id_disk "${DISK1}"
@@ -79,6 +81,13 @@ select_disks() {
       DISK1="${VM_DISK1}"
       DISK2="${VM_DISK2}"
       DISK3="${VM_DISK3}"
+      for d in "${DISK1}" "${DISK2}" "${DISK3}"; do
+        [[ -b "${d}" ]] || fatal "VM_DISK override is not a block device: ${d}"
+        is_internal_whole_disk "${d}" ||
+          fatal "VM_DISK override is not an internal whole disk: ${d}"
+        disk_has_mounts "${d}" &&
+          fatal "VM_DISK override has mounted filesystems: ${d}"
+      done
     else
       vm_detect_disks
     fi
@@ -147,7 +156,7 @@ bootstrap_live_tools() {
 
   info "Missing live tools: ${missing[*]}"
   if ((NETWORK_AVAILABLE)); then
-    apt-get update
+    apt-get update || warn "apt-get update failed; trying install with existing lists."
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
   elif cache_repo_exists; then
     install_from_cache_repo "${missing[@]}"

@@ -47,10 +47,11 @@ destroy_existing_layout() {
       fatal "Cannot export or destroy pool ${POOL_NAME}."
   elif zpool import -N -f -d /dev/disk/by-id "${POOL_NAME}" 2>/dev/null; then
     info "Stale pool ${POOL_NAME} imported; destroying..."
-    zpool destroy -f "${POOL_NAME}" 2>/dev/null || true
+    zpool destroy -f "${POOL_NAME}" ||
+      fatal "Imported stale pool ${POOL_NAME} but could not destroy it."
   fi
 
-  swapoff /dev/md/swap 2>/dev/null || true
+  swapoff -a 2>/dev/null || true
   local arr=""
   for arr in /dev/md/efi /dev/md/swap; do
     mdadm --stop "${arr}" 2>/dev/null || true

@@ -7,6 +7,8 @@
 #   ${CACHE_DIR}/repo/dists/${SUITE}/Release
 #   ${CACHE_DIR}/sources/<name>-<tag>.tar.gz + MANIFEST ("name tag" lines)
 #   ${CACHE_DIR}/zfsbootmenu.EFI
+# Depends on resolve_latest_release_tag from scripts/60-hyprland.sh; the
+# orchestrator sources all modules before dispatching any phase.
 
 cache_repo_exists() {
   [[ -f "${CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
@@ -18,19 +20,24 @@ install_from_cache_repo() {
   echo "deb [trusted=yes] file://${CACHE_DIR}/repo ${SUITE} main" >"${list}"
   apt-get update -o Dir::Etc::sourcelist="${list}" \
     -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    -o Dir::Etc::sourcelist="${list}" \
+    -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" "$@"
 }
 
 # Resolve the full .deb closure for all package sets using a throwaway
 # bootstrap, then index the pool with apt-ftparchive. Network required.
 cache_populate_debs() {
   local work="${CACHE_DIR}/.work" pool="${CACHE_DIR}/repo/pool"
+  rm -rf "${work}"
   mkdir -p "${pool}" "${work}"
 
   info "Downloading debootstrap base packages..."
   debootstrap --download-only --arch="${ARCH}" "${SUITE}" \
     "${work}/bootstrap" "${MIRROR}"
-  cp -n "${work}/bootstrap/var/cache/apt/archives/"*.deb "${pool}/" 2>/dev/null || true
+  if compgen -G "${work}/bootstrap/var/cache/apt/archives/*.deb" >/dev/null; then
+    cp -n "${work}/bootstrap/var/cache/apt/archives/"*.deb "${pool}/"
+  fi
 
   info "Resolving full package closure in a scratch chroot..."
   debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
