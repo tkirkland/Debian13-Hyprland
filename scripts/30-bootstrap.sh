@@ -78,34 +78,22 @@ EOF
 }
 
 # Target apt sources are written in deb822 format under
-# /etc/apt/sources.list.d/ with every component enabled;
-# /etc/apt/sources.list is reduced to a pointer comment so the
-# debootstrap-generated one-line entries never linger.
+# /etc/apt/sources.list.d/ (components from DEBIAN_COMPONENTS, shared with
+# the live environment via write_debian_sources); /etc/apt/sources.list is
+# reduced to a pointer comment so debootstrap's one-line entries never
+# linger.
 write_target_apt_sources() {
   local apt_dir="${TARGET}/etc/apt"
-  local components="main contrib non-free non-free-firmware"
   mkdir -p "${apt_dir}/sources.list.d"
   rm -f "${apt_dir}/sources.list.d/debian.sources" \
     "${apt_dir}/sources.list.d/hypr-deb-cache.sources"
-  cat >"${apt_dir}/sources.list" <<'EOF'
-# Managed by hypr-deb.sh: apt sources live in deb822 format under
+  if ((NETWORK_AVAILABLE)); then
+    write_debian_sources "${TARGET}"
+  else
+    cat >"${apt_dir}/sources.list" <<'EOF'
+# Managed by hypr-deb: APT sources are defined in
 # /etc/apt/sources.list.d/.
 EOF
-  if ((NETWORK_AVAILABLE)); then
-    cat >"${apt_dir}/sources.list.d/debian.sources" <<EOF
-Types: deb
-URIs: ${MIRROR}
-Suites: ${SUITE} ${SUITE}-updates
-Components: ${components}
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-
-Types: deb
-URIs: http://security.debian.org/debian-security
-Suites: ${SUITE}-security
-Components: ${components}
-Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
-EOF
-  else
     cat >"${apt_dir}/sources.list.d/hypr-deb-cache.sources" <<EOF
 Types: deb
 URIs: file://${TARGET_CACHE_DIR}/repo

@@ -7,6 +7,9 @@ echo "test: virt-gated disk selection"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 mkdir -p "${tmp}/bin"
+# select_disks persists its selection under STATE_DIR; keep it in the
+# sandbox and clear it between cases that expect fresh detection.
+export STATE_DIR="${tmp}/state"
 
 setup_env() { # $1 = systemd-detect-virt output, $2 = lsblk disk table
   make_fake "${tmp}/bin" systemd-detect-virt "echo '$1'"
@@ -45,11 +48,13 @@ out="$(run_select | last_line)"
 assert_eq "kvm|/dev/vda|/dev/vdb|/dev/vdc" "${out}" "VM auto-detect, 3 disks"
 
 # VM with two disks -> hard failure.
+rm -f "${STATE_DIR}/disks"
 setup_env "kvm" "vda disk 0
 vdb disk 0"
 assert_fails "VM with 2 disks fails" run_select
 
 # VM with four disks -> hard failure (never guess).
+rm -f "${STATE_DIR}/disks"
 setup_env "kvm" "vda disk 0
 vdb disk 0
 vdc disk 0
@@ -84,7 +89,8 @@ else
     "VM_DISK overrides honored"
 fi
 
-# VM_DISK override pointing at a nonexistent device must fail validation.
+# VM_DISK override pointing at a nonexistent device must fail validation
+# (explicit overrides take precedence over any saved selection).
 assert_fails "VM_DISK override rejects nonexistent device" \
   env VM_DISK1=/dev/does-not-exist VM_DISK2=/dev/does-not-exist-2 \
   VM_DISK3=/dev/does-not-exist-3 \
@@ -93,6 +99,32 @@ assert_fails "VM_DISK override rejects nonexistent device" \
     source lib/01-log.sh
     source scripts/00-preflight.sh
     detect_virt; select_disks'
+
+# A saved selection from a previous run is reused on resume — re-detection
+# would exclude target disks that still carry the in-progress install.
+if ((${#hostdevs[@]} < 3)); then
+  echo "  skip: saved-selection reuse (host has <3 block devices)"
+else
+  mkdir -p "${STATE_DIR}"
+  printf '%s\n' "${hostdevs[0]}" "${hostdevs[1]}" "${hostdevs[2]}" \
+    >"${STATE_DIR}/disks"
+  # Detection alone would fatal here (only 2 disks in the fake table).
+  setup_env "kvm" "vda disk 0
+vdb disk 0"
+  out="$(run_select | last_line)"
+  assert_eq "kvm|${hostdevs[0]}|${hostdevs[1]}|${hostdevs[2]}" "${out}" \
+    "saved disk selection reused on resume"
+fi
+
+# A stale saved selection (devices gone) falls back to detection.
+mkdir -p "${STATE_DIR}"
+printf '%s\n' /dev/gone-1 /dev/gone-2 /dev/gone-3 >"${STATE_DIR}/disks"
+setup_env "kvm" "vda disk 0
+vdb disk 0
+vdc disk 0"
+out="$(run_select | last_line)"
+assert_eq "kvm|/dev/vda|/dev/vdb|/dev/vdc" "${out}" \
+  "stale saved selection falls back to detection"
 
 # Bare metal: fixed ids retained, no detection (lsblk table ignored).
 # The fixed by-id devices do not exist on the test host, so device

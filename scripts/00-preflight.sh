@@ -56,21 +56,63 @@ disk_has_mounts() {
 }
 
 vm_detect_disks() {
-  local name="" type="" rm="" tran="" candidates=()
+  local name="" type="" rm="" tran="" candidates=() rejected=()
   while read -r name type rm tran; do
-    [[ "${type}" == "disk" && "${rm}" == "0" ]] || continue
-    [[ "${tran}" != "usb" ]] || continue
-    [[ "${name}" =~ ^(vd[a-z]+|sd[a-z]+|nvme[0-9]+n[0-9]+)$ ]] || continue
-    disk_has_mounts "/dev/${name}" && continue
+    [[ "${type}" == "disk" ]] || continue
+    if [[ "${rm}" != "0" ]]; then
+      rejected+=("/dev/${name}[removable]")
+      continue
+    fi
+    if [[ "${tran}" == "usb" ]]; then
+      rejected+=("/dev/${name}[usb]")
+      continue
+    fi
+    if [[ ! "${name}" =~ ^(vd[a-z]+|sd[a-z]+|nvme[0-9]+n[0-9]+)$ ]]; then
+      rejected+=("/dev/${name}[name]")
+      continue
+    fi
+    if disk_has_mounts "/dev/${name}"; then
+      rejected+=("/dev/${name}[mounted]")
+      continue
+    fi
     candidates+=("/dev/${name}")
   done < <(lsblk -dn -o NAME,TYPE,RM,TRAN)
 
   ((${#candidates[@]} == 3)) || fatal \
-    "VM mode needs exactly 3 eligible disks, found ${#candidates[@]}: ${candidates[*]:-none}"
+    "VM mode needs exactly 3 eligible disks, found ${#candidates[@]}:" \
+    "${candidates[*]:-none}. Rejected: ${rejected[*]:-none}." \
+    "If a previous run left mounts behind, run --phase=cleanup first."
 
   DISK1="${candidates[0]}"
   DISK2="${candidates[1]}"
   DISK3="${candidates[2]}"
+}
+
+# A resumed run must not re-detect VM disks: the targets carry the
+# in-progress installation (possibly mounted), so detection would exclude
+# them. The first successful selection is persisted and reused; --fresh
+# discards it along with the phase stamps.
+load_saved_disks() {
+  [[ -f "${STATE_DIR}/disks" ]] || return 1
+  local d1="" d2="" d3=""
+  {
+    read -r d1
+    read -r d2
+    read -r d3
+  } <"${STATE_DIR}/disks"
+  if [[ ! -b "${d1}" || ! -b "${d2}" || ! -b "${d3}" ]]; then
+    warn "Saved disk selection is stale (${STATE_DIR}/disks); re-detecting."
+    rm -f "${STATE_DIR}/disks"
+    return 1
+  fi
+  DISK1="${d1}"
+  DISK2="${d2}"
+  DISK3="${d3}"
+}
+
+save_disks() {
+  mkdir -p "${STATE_DIR}"
+  printf '%s\n' "${DISK1}" "${DISK2}" "${DISK3}" >"${STATE_DIR}/disks"
 }
 
 select_disks() {
@@ -88,6 +130,8 @@ select_disks() {
       fatal "${DISK3} is not an internal whole disk"
   else
     info "VM TEST mode (${VIRT_TYPE}): auto-detecting target disks."
+    # Explicit VM_DISK overrides win over a saved selection; a saved
+    # selection wins over re-detection (resume safety).
     if [[ -n "${VM_DISK1:-}" || -n "${VM_DISK2:-}" || -n "${VM_DISK3:-}" ]]; then
       [[ -n "${VM_DISK1:-}" && -n "${VM_DISK2:-}" && -n "${VM_DISK3:-}" ]] ||
         fatal "Set all of VM_DISK1/VM_DISK2/VM_DISK3 or none."
@@ -101,6 +145,8 @@ select_disks() {
         disk_has_mounts "${d}" &&
           fatal "VM_DISK override has mounted filesystems: ${d}"
       done
+    elif load_saved_disks; then
+      info "Reusing disk selection from previous run (${STATE_DIR}/disks)."
     else
       vm_detect_disks
     fi
@@ -115,6 +161,7 @@ select_disks() {
   fi
   [[ "${DISK1}" != "${DISK2}" && "${DISK1}" != "${DISK3}" &&
     "${DISK2}" != "${DISK3}" ]] || fatal "Target disks must be distinct."
+  save_disks
   info "Targets: DISK1=${DISK1} DISK2=${DISK2} DISK3=${DISK3}"
 }
 

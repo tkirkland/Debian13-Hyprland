@@ -25,8 +25,8 @@ assert_contains "${out}" "URIs: http://deb.debian.org/debian" \
   "deb822 mirror URI online"
 assert_contains "${out}" "Suites: trixie trixie-updates" \
   "base and updates suites enabled"
-assert_contains "${out}" "Components: main contrib non-free non-free-firmware" \
-  "all components enabled"
+assert_contains "${out}" "Components: main contrib non-free-firmware" \
+  "DEBIAN_COMPONENTS default enabled (contrib carries zfs-dkms)"
 assert_contains "${out}" "Suites: trixie-security" "security suite online"
 assert_contains "${out}" \
   "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \

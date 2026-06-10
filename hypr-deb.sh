@@ -55,6 +55,16 @@ main() {
   trap on_error ERR
   trap on_exit EXIT
 
+  # --phase=cleanup must work on a half-torn-down system: skip preflight
+  # entirely (its VM disk detection would refuse disks that still carry
+  # mounts — clearing those is exactly cleanup's job).
+  if [[ "${RUN_PHASE}" == "cleanup" ]]; then
+    CURRENT_PHASE="cleanup"
+    require_root
+    phase_cleanup
+    return 0
+  fi
+
   # Preflight is never stamped/skipped: it sets per-run state
   # (NETWORK_AVAILABLE, VIRT_TYPE, disk selection) that resumed runs need.
   # It is idempotent by design.
