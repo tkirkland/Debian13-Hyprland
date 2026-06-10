@@ -21,7 +21,11 @@ gen_cfg() { # $1 = function to call
 }
 
 gen_cfg write_grub_cfg
-out="$(cat "${tmp}/target/boot/efi/EFI/debian/grub.cfg")"
+# grub-install's embedded prefix is (ESP)/EFI/debian/grub/, so the cfg must
+# live in that subdirectory or GRUB drops to a rescue prompt.
+assert_eq "1" "$(test -f "${tmp}/target/boot/efi/EFI/debian/grub/grub.cfg" &&
+  echo 1)" "grub: cfg under EFI/debian/grub/"
+out="$(cat "${tmp}/target/boot/efi/EFI/debian/grub/grub.cfg")"
 assert_contains "${out}" "root=ZFS=PRECISION/ROOT/debian13" "grub: ZFS root"
 assert_contains "${out}" "/EFI/debian/vmlinuz" "grub: ESP kernel copy path"
 assert_contains "${out}" "search --no-floppy --fs-uuid --set=root AAAA-1111" \

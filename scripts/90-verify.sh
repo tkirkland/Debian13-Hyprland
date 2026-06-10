@@ -38,8 +38,7 @@ phase_verify() {
   else
     vcheck "Hyprland binary runs" in_target "/usr/local/bin/Hyprland --version"
     vcheck "Hyprland links resolve" in_target \
-      "ldd /usr/local/bin/Hyprland | grep -v 'not found' >/dev/null &&
-       ! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
+      "! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
   fi
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
@@ -61,7 +60,7 @@ phase_verify() {
       ;;
     grub)
       vcheck "GRUB EFI on ESP" test -f "${esp}/EFI/debian/grubx64.efi"
-      vcheck "grub.cfg on ESP" test -f "${esp}/EFI/debian/grub.cfg"
+      vcheck "grub.cfg on ESP" test -f "${esp}/EFI/debian/grub/grub.cfg"
       vcheck "kernel copy on ESP" test -f "${esp}/EFI/debian/vmlinuz"
       ;;
     systemd-boot)
@@ -76,8 +75,8 @@ phase_verify() {
     "efibootmgr | grep -qiE 'ZFSBootMenu|debian|Linux Boot Manager'"
 
   vcheck "fstab ESP UUID valid" bash -c \
-    "grep -oP 'UUID=\K[^ ]+(?= /boot/efi)' '${TARGET}/etc/fstab' |
-     xargs -I{} blkid -U {}"
+    "uuid=\$(grep -oP 'UUID=\K[^ ]+(?= /boot/efi)' '${TARGET}/etc/fstab');
+     [[ -n \"\${uuid}\" ]] && blkid -U \"\${uuid}\""
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
