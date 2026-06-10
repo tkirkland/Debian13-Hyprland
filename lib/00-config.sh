@@ -228,7 +228,7 @@ TARGET_BASE_PACKAGES=(
   linux-image-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd kitty
-  python3 python3-xdg whiptail dbus-user-session
+  python3 python3-xdg python3-dbus whiptail dbus-user-session
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
