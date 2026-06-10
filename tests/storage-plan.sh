@@ -58,6 +58,12 @@ else
   echo "  ok: no md/boot in amended layout"
 fi
 
+# Downloads must be canmount=noauto at creation: mounting it before
+# adduser would pre-create a root-owned /home/<user>.
+assert_contains "${calls}" \
+  "zfs create -u -o canmount=noauto -o mountpoint=/home/me/Downloads -o compression=off PRECISION/home/Downloads" \
+  "Downloads dataset created canmount=noauto"
+
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh
   source scripts/20-storage.sh

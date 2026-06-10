@@ -54,15 +54,25 @@ install_base_packages() {
 }
 
 create_user() {
+  # The Downloads dataset is created canmount=noauto (20-storage.sh) so no
+  # zfs mount -a can pre-create a root-owned /home/<user>: adduser runs
+  # against a clean /home and builds the home directory properly.
   in_target "
     set -e
     id '${TARGET_USERNAME}' >/dev/null 2>&1 ||
       adduser --disabled-password --gecos '' '${TARGET_USERNAME}'
     usermod -aG sudo '${TARGET_USERNAME}'
-    # The home dir pre-exists: the Downloads dataset mounts beneath it
-    # before the user is created, so adduser leaves it root-owned and
-    # without skeleton files. Copy skel (no clobber) and fix ownership,
-    # recursing into the mounted Downloads dataset on purpose.
+  "
+  # Now that the user owns its parent, enable and mount the dataset; from
+  # here on (resumes and the booted system) it auto-mounts normally.
+  zfs set canmount=on "${POOL_NAME}/home/Downloads"
+  mountpoint -q "${TARGET}/home/${TARGET_USERNAME}/Downloads" ||
+    zfs mount "${POOL_NAME}/home/Downloads"
+  # Defense in depth for targets installed before the noauto ordering (or
+  # any other pre-created home): skel without clobber, then own the whole
+  # tree including the Downloads mountpoint.
+  in_target "
+    set -e
     cp -rnT /etc/skel '/home/${TARGET_USERNAME}'
     chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
   "

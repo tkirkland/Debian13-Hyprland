@@ -42,6 +42,8 @@ assert_contains "${user_body}" "cp -rnT /etc/skel" \
   "create_user copies skeleton files into the pre-existing home"
 assert_contains "${user_body}" "chown -R" \
   "create_user fixes ownership of the pre-existing home"
+assert_contains "${user_body}" "canmount=on" \
+  "create_user enables the Downloads dataset only after adduser"
 
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.

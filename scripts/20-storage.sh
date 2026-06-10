@@ -154,7 +154,11 @@ create_pool_and_datasets() {
   zfs create -o canmount=off -o mountpoint=none "${POOL_NAME}/ROOT"
   zfs create -o canmount=noauto -o mountpoint=/ "${ROOT_DATASET}"
   zfs create -u -o mountpoint=/home "${POOL_NAME}/home"
-  zfs create -u -o mountpoint="/home/${TARGET_USERNAME}/Downloads" \
+  # canmount=noauto until create_user (40-system) flips it: mounting this
+  # dataset earlier would pre-create a root-owned /home/<user>, and adduser
+  # would then refuse to populate it (no skel files, wrong ownership).
+  zfs create -u -o canmount=noauto \
+    -o mountpoint="/home/${TARGET_USERNAME}/Downloads" \
     -o compression=off "${POOL_NAME}/home/Downloads"
   zfs create -u -o mountpoint=/srv "${POOL_NAME}/srv"
   zfs create -o canmount=off -o mountpoint=none "${POOL_NAME}/var"
