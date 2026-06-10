@@ -110,8 +110,9 @@ stage_source() {
   elif ((NETWORK_AVAILABLE)); then
     # Clone, not a codeload tarball: tag tarballs omit git submodules
     # (Hyprland needs subprojects/udis86).
-    git clone --depth 1 --branch "${tag}" --recurse-submodules \
-      --shallow-submodules "${HYPR_REPO_URL[${name}]}" "${dest}"
+    git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
+      --recurse-submodules --shallow-submodules \
+      "${HYPR_REPO_URL[${name}]}" "${dest}"
   else
     fatal "No cached source for ${name} ${tag} and no network."
   fi

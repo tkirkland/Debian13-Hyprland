@@ -88,8 +88,8 @@ cache_populate_sources() {
     info "Caching ${name} ${tag}"
     clone="${CACHE_DIR}/sources/${name}-${tag}"
     rm -rf "${clone}"
-    git clone --depth 1 --branch "${tag}" --recurse-submodules \
-      --shallow-submodules "${repo}" "${clone}"
+    git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
+      --recurse-submodules --shallow-submodules "${repo}" "${clone}"
     tar -czf "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" \
       --exclude-vcs -C "${CACHE_DIR}/sources" "${name}-${tag}"
     rm -rf "${clone}"
