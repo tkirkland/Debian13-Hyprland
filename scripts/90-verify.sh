@@ -6,14 +6,18 @@ VERIFY_TOTAL=0
 VERIFY_FAILED=0
 
 vcheck() { # $1=label, rest=command
-  local label="$1"
+  local label="$1" out="" rc=0
   shift
   VERIFY_TOTAL=$((VERIFY_TOTAL + 1))
-  if "$@" >/dev/null 2>&1; then
+  if out="$("$@" 2>&1)"; then
     info "PASS: ${label}"
   else
-    warn "FAIL: ${label}"
+    rc=$?
     VERIFY_FAILED=$((VERIFY_FAILED + 1))
+    warn "FAIL: ${label} (exit ${rc})"
+    # Surface the failing command's tail so failures are diagnosable
+    # from the report alone.
+    [[ -z "${out}" ]] || warn "      $(printf '%s' "${out}" | tail -n 3)"
   fi
 }
 
