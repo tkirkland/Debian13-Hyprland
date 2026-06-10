@@ -41,10 +41,16 @@ phase_verify() {
       test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
     vcheck "toolchain staged for firstboot" in_target "command -v cmake"
   else
-    # Hyprland refuses to run as root, so exercise it as the user who
-    # will actually launch it.
-    vcheck "Hyprland binary runs" in_target \
-      "runuser -u '${TARGET_USERNAME}' -- /usr/local/bin/Hyprland --version"
+    # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
+    # (set by pam_systemd in real logins); provide both for the check.
+    vcheck "Hyprland binary runs" in_target "
+      set -e
+      install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
+      runuser -u '${TARGET_USERNAME}' -- \
+        env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
+        /usr/local/bin/Hyprland --version
+      rm -rf /tmp/hypr-verify-rt
+    "
     vcheck "Hyprland links resolve" in_target \
       "! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
   fi
