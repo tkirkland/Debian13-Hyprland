@@ -24,7 +24,11 @@ Debian install and the Hyprland source build succeed and verify.
   live-ISO kernel (zfs-dkms needs matching headers); this constraint is
   documented and checked.
 
-## Target Disks — fixed, no exceptions
+## Target Disks
+
+Preflight gates disk selection on `systemd-detect-virt`:
+
+**Bare metal (`systemd-detect-virt` = `none`) — fixed, no exceptions:**
 
 ```
 DISK1=/dev/disk/by-id/nvme-eui.0025384331408197
@@ -36,6 +40,20 @@ No auto-detection, no fallback list, no override path. Each path must exist,
 be a `/dev/disk/by-id/` path, and resolve to an internal whole disk
 (`lsblk` TYPE=disk, RM=0, HOTPLUG=0, TRAN!=usb), mirroring the validation in
 the reference project `Hyprland-on-Debian13/scripts/10-storage-prep.sh`.
+
+**VM test mode (any other `systemd-detect-virt` result) — auto-detected:**
+
+VM disks (virtio etc.) carry no stable `nvme-eui` identity and change across
+VM rebuilds, so the fixed paths can never match. In a VM the script instead
+auto-detects targets: it enumerates internal whole disks (`vd*`/`sd*`/
+`nvme*`, RM=0, TRAN!=usb), excludes the live/boot medium and any disk with
+mounted filesystems, and requires **exactly three** candidates — fewer or
+more is a hard `fatal` listing what was found, never a guess. Candidates are
+assigned DISK1..3 in name order; a warning fires if the smallest disk lands
+in a DISK1/DISK2 (EFI-carrying) role. `VM_DISK1/2/3` environment overrides
+are honored in VM mode only. A loud banner states the active mode and the
+disks to be destroyed; the destructive confirmation gate applies in both
+modes.
 
 ## Storage Layout
 
@@ -153,7 +171,8 @@ confirmation (`--yes` to skip).
 Phases (resumable via state stamps; `--phase X` runs one; default runs all):
 
 ```
-preflight   host detection, tool bootstrap, disk validation, clock sync
+preflight   host + virt detection, tool bootstrap, disk selection/validation,
+            clock sync
 cache       populate/validate the offline cache (network required to populate)
 storage     destroy/wipe/partition/mdadm/ZFS (destructive gate here)
 bootstrap   mount target, debootstrap, bind mounts, apt sources
@@ -199,9 +218,11 @@ Final report printed; nonzero exit on any failure.
 ## Testing
 
 - The `verify` phase is the runtime test.
-- Recommended manual smoke test: QEMU/OVMF boot of the target disks is not
-  applicable (physical disks); instead, post-install reboot into the chosen
-  bootloader and `systemctl status greetd` + login.
+- Recommended smoke test: QEMU/OVMF VM with three blank virtio disks
+  (>=16G each) booted from a Debian live ISO; VM test mode auto-detects the
+  disks, the full install runs end to end, then reboot into the chosen
+  bootloader and confirm greetd login. Bare-metal validation is the
+  post-install reboot on the real machine.
 - Development: shellcheck + bash -n as above; optional focused unit checks
   in `tests/` following the reference project's fake-chroot pattern where
   practical (tag resolution, compatibility gate, cache validation are pure
