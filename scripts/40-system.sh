@@ -30,9 +30,13 @@ write_mdadm_conf() {
   } >"${TARGET}/etc/mdadm/mdadm.conf"
 }
 
+# Requires the locales package (/etc/locale.gen, locale-gen), so this must
+# run after install_base_packages — a minimal debootstrap does not ship it.
 configure_locale_tz() {
   in_target "
     set -e
+    test -f /etc/locale.gen ||
+      { echo 'locales package missing (/etc/locale.gen)' >&2; exit 1; }
     echo '${TIMEZONE}' > /etc/timezone
     ln -sf '/usr/share/zoneinfo/${TIMEZONE}' /etc/localtime
     sed -i 's/^# *${LOCALE}/${LOCALE}/' /etc/locale.gen
@@ -87,8 +91,8 @@ phase_system() {
   write_identity
   write_fstab
   write_mdadm_conf
-  configure_locale_tz
   install_base_packages
+  configure_locale_tz
   create_user
   configure_zfs_boot_support
 }

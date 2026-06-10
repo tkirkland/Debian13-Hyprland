@@ -31,4 +31,15 @@ else
   echo "  ok: no root line (ZFS-managed)"
 fi
 
+# configure_locale_tz needs /etc/locale.gen from the locales package, so
+# install_base_packages must come first in phase_system.
+first_step="$(bash -c '
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f phase_system' |
+  grep -oE 'install_base_packages|configure_locale_tz' | head -n1)"
+assert_eq "install_base_packages" "${first_step}" \
+  "base packages install before locale configuration"
+
 finish_test
