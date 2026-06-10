@@ -41,7 +41,10 @@ phase_verify() {
       test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
     vcheck "toolchain staged for firstboot" in_target "command -v cmake"
   else
-    vcheck "Hyprland binary runs" in_target "/usr/local/bin/Hyprland --version"
+    # Hyprland refuses to run as root, so exercise it as the user who
+    # will actually launch it.
+    vcheck "Hyprland binary runs" in_target \
+      "runuser -u '${TARGET_USERNAME}' -- /usr/local/bin/Hyprland --version"
     vcheck "Hyprland links resolve" in_target \
       "! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
   fi
