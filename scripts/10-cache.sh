@@ -76,11 +76,11 @@ cache_populate_sources() {
   mkdir -p "${CACHE_DIR}/sources"
   : >"${manifest}"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
-    repo="${HYPR_REPO_NAME[${name}]}"
-    tag="$(resolve_latest_release_tag "${HYPR_GIT_BASE}/${repo}")"
+    repo="${HYPR_REPO_URL[${name}]}"
+    tag="$(resolve_latest_release_tag "${repo}")"
     info "Caching ${name} ${tag}"
     curl -fsSL -o "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" \
-      "${HYPR_GIT_BASE}/${repo}/archive/refs/tags/${tag}.tar.gz"
+      "${repo}/archive/refs/tags/${tag}.tar.gz"
     echo "${name} ${tag}" >>"${manifest}"
   done
 }

@@ -101,7 +101,8 @@ This intentionally diverges from `precision-zfs-dr.sh` layout parity
 - A `cache` phase (networked) populates `CACHE_DIR` with:
   - the full .deb closure for: live-preflight tools, debootstrap base,
     target base system, bootloader packages, Hyprland build dependencies,
-    greetd + uwsm — indexed with `apt-ftparchive` into a valid local repo
+    greetd and uwsm's runtime deps — indexed with `apt-ftparchive` into a
+    valid local repo
     usable by both debootstrap and chroot apt via `file://`;
   - source archives of Hyprland and each hyprwm dependency at their
     resolved release tags;
@@ -135,7 +136,10 @@ The storage layout is identical regardless of loader choice.
 ## Hyprland Stack — bare scope, source-built at release tags
 
 Scope: Debian base + compiled Hyprland + greetd + uwsm. No waybar, no
-NVIDIA, no extras. greetd config execs `uwsm start hyprland`; a minimal
+NVIDIA, no extras. uwsm is not in the Debian archive, so it is built from
+source at its latest release tag (meson) alongside the hyprwm stack, with
+its runtime dependencies (python3, pyxdg, whiptail, dbus) from Debian
+packages. greetd config execs `uwsm start hyprland`; a minimal
 valid `hyprland.conf` is installed for the user; greetd service enabled,
 graphical target default.
 

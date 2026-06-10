@@ -74,7 +74,7 @@ resolve_all_tags() {
   local name="" tag=""
   if ((NETWORK_AVAILABLE)); then
     for name in "${HYPR_BUILD_ORDER[@]}"; do
-      tag="$(resolve_latest_release_tag "${HYPR_GIT_BASE}/${HYPR_REPO_NAME[${name}]}")"
+      tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}")"
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       info "Resolved ${name} -> ${tag}"
     done
@@ -100,7 +100,7 @@ stage_source() {
   if [[ -f "${tarball}" ]]; then
     tar -xzf "${tarball}" -C "${dest}" --strip-components=1
   elif ((NETWORK_AVAILABLE)); then
-    curl -fsSL "${HYPR_GIT_BASE}/${HYPR_REPO_NAME[${name}]}/archive/refs/tags/${tag}.tar.gz" |
+    curl -fsSL "${HYPR_REPO_URL[${name}]}/archive/refs/tags/${tag}.tar.gz" |
       tar -xz -C "${dest}" --strip-components=1
   else
     fatal "No cached source for ${name} ${tag} and no network."
@@ -118,16 +118,25 @@ install_build_deps() {
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
 }
 
+# Builds CMake projects (the hyprwm stack) and meson projects (uwsm).
 build_one() {
   local name="$1"
   info "Building ${name} ${HYPR_RESOLVED_TAG[${name}]}..."
   in_target "
     set -e
     cd '${HYPR_SRC_DIR}/${name}'
-    cmake -B build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr/local
-    cmake --build build -j\"\$(nproc)\"
-    cmake --install build
+    if [[ -f CMakeLists.txt ]]; then
+      cmake -B build -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local
+      cmake --build build -j\"\$(nproc)\"
+      cmake --install build
+    elif [[ -f meson.build ]]; then
+      meson setup build --prefix=/usr/local --buildtype=release
+      meson install -C build
+    else
+      echo 'No CMakeLists.txt or meson.build in ${name}' >&2
+      exit 1
+    fi
     ldconfig
   "
 }

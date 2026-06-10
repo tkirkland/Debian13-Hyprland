@@ -146,10 +146,10 @@ The installer prefers the network but can run fully offline:
 1. On a networked machine, run `sudo ./hypr-deb.sh --phase=cache
    --cache-dir=/path/on/real/storage`. This downloads the complete .deb
    closure (live tools, debootstrap base, target base, bootloaders,
-   Hyprland build deps, greetd+uwsm) indexed with `apt-ftparchive` as a
-   `file://` repo, the source archives of Hyprland and every hyprwm
-   dependency at their resolved release tags, and the ZFSBootMenu EFI
-   binary.
+   Hyprland build deps, greetd and uwsm's runtime deps) indexed with
+   `apt-ftparchive` as a `file://` repo, the source archives of Hyprland,
+   every hyprwm dependency, and uwsm at their resolved release tags, and
+   the ZFSBootMenu EFI binary.
 2. Carry the cache directory to the target machine (it must be on real
    storage, not the live overlay).
 3. Run `sudo ./hypr-deb.sh --offline --cache-dir=/path/to/cache ...`.
@@ -202,7 +202,10 @@ why you run ZFS, choose `zbm`.
 ## Hyprland stack
 
 Scope is deliberately bare: Debian base + compiled Hyprland + greetd +
-uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. greetd runs
+uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. uwsm is not
+packaged in Debian, so it is built from source (meson) at its latest
+release tag, like the hyprwm stack; its runtime dependencies (python3,
+python3-xdg, whiptail, dbus-user-session) come from Debian. greetd runs
 `agreety --cmd 'uwsm start -- hyprland.desktop'`; a minimal valid
 `hyprland.conf` is installed for the user; the greetd service is enabled and the graphical target is default.
 

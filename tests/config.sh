@@ -22,7 +22,26 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols aquamarine hyprland" \
-  "${out}" "hyprwm build order"
+assert_eq "hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols aquamarine hyprland uwsm" \
+  "${out}" "build order (hyprwm stack, then uwsm)"
+
+# Every build-order entry must map to a repo URL. Guards against assoc-array
+# key mangling (a formatter once rewrote [hyprland-protocols] with spaces).
+out="$(bash -c 'source lib/00-config.sh
+  for n in "${HYPR_BUILD_ORDER[@]}"; do
+    [[ -n "${HYPR_REPO_URL[${n}]:-}" ]] || { echo "missing ${n}"; exit 1; }
+  done
+  echo all-mapped')"
+assert_eq "all-mapped" "${out}" "every build-order entry has a repo URL"
+
+# uwsm is not in the Debian archive; it must never be in the apt lists.
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${TARGET_BASE_PACKAGES[@]}" "${HYPR_BUILD_PACKAGES[@]}"')"
+if printf '%s\n' "${out}" | grep -qx 'uwsm\|libhwdata-dev'; then
+  echo "  FAIL: uwsm/libhwdata-dev must not be apt packages" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: uwsm and libhwdata-dev absent from apt package lists"
+fi
 
 finish_test

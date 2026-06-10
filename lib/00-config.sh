@@ -102,7 +102,9 @@ KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"
 
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
-# Build order satisfies the dependency graph; hyprland always last.
+# Build order satisfies the dependency graph; hyprland after its deps.
+# uwsm is independent of the hyprwm graph (and not packaged in Debian),
+# so it builds last.
 HYPR_BUILD_ORDER=(
   hyprwayland-scanner
   hyprutils
@@ -112,17 +114,20 @@ HYPR_BUILD_ORDER=(
   hyprland-protocols
   aquamarine
   hyprland
+  uwsm
 )
-# Repo name on github (differs in case for Hyprland itself).
-declare -A HYPR_REPO_NAME=(
-  [hyprwayland - scanner]="hyprwayland-scanner"
-  [hyprutils]="hyprutils"
-  [hyprlang]="hyprlang"
-  [hyprcursor]="hyprcursor"
-  [hyprgraphics]="hyprgraphics"
-  [hyprland - protocols]="hyprland-protocols"
-  [aquamarine]="aquamarine"
-  [hyprland]="Hyprland"
+# Source repository per component. Keys are quoted so formatters cannot
+# mangle the hyphenated names into invalid subscripts.
+declare -A HYPR_REPO_URL=(
+  ["hyprwayland-scanner"]="${HYPR_GIT_BASE}/hyprwayland-scanner"
+  ["hyprutils"]="${HYPR_GIT_BASE}/hyprutils"
+  ["hyprlang"]="${HYPR_GIT_BASE}/hyprlang"
+  ["hyprcursor"]="${HYPR_GIT_BASE}/hyprcursor"
+  ["hyprgraphics"]="${HYPR_GIT_BASE}/hyprgraphics"
+  ["hyprland-protocols"]="${HYPR_GIT_BASE}/hyprland-protocols"
+  ["aquamarine"]="${HYPR_GIT_BASE}/aquamarine"
+  ["hyprland"]="${HYPR_GIT_BASE}/Hyprland"
+  ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Filled by the hyprland phase: name -> resolved tag.
 declare -A HYPR_RESOLVED_TAG=()
@@ -136,18 +141,21 @@ HYPR_BUILD_PACKAGES=(
   libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev
   glslang-tools libudev-dev libseat-dev libdisplay-info-dev
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
-  libmagic-dev libhwdata-dev libzip-dev libtomlplusplus-dev
+  libmagic-dev libzip-dev libtomlplusplus-dev scdoc
   libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
 )
 
-# Target base packages beyond debootstrap's minimal set.
+# Target base packages beyond debootstrap's minimal set. uwsm is not in
+# the Debian archive — it is built from source with the hyprwm stack; its
+# runtime dependencies (python3/pyxdg/whiptail/dbus) are listed here.
 TARGET_BASE_PACKAGES=(
   linux-image-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   mdadm dosfstools efibootmgr network-manager sudo locales
-  console-setup ca-certificates curl greetd uwsm kitty
+  console-setup ca-certificates curl greetd kitty
+  python3 python3-xdg whiptail dbus-user-session
   intel-microcode amd64-microcode hwdata xwayland
 )
 
