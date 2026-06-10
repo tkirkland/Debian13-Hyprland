@@ -121,4 +121,7 @@ STATE_DIR="${STATE_DIR:-/run/hypr-deb/state}"
 LOG_DIR="${LOG_DIR:-/tmp/hypr-deb-logs}"
 LOG_FILE=""
 IS_INTERACTIVE=0
-[[ -t 0 && -t 1 ]] && IS_INTERACTIVE=1
+# `if` (not `&&`) so sourcing this file returns 0 in non-tty contexts.
+if [[ -t 0 && -t 1 ]]; then
+  IS_INTERACTIVE=1
+fi
