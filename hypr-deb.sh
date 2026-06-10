@@ -29,11 +29,21 @@ on_error() {
   exit "${exit_code}"
 }
 
+# EXIT trap: fatal() exits without tripping the ERR trap, so binds must
+# also be torn down here on any nonzero exit (spec: every failure path).
+on_exit() {
+  local exit_code=$?
+  if ((exit_code != 0)); then
+    teardown_chroot_binds
+  fi
+}
+
 main() {
   parse_args "$@"
   state_init "${FRESH}"
   setup_logging "${LOG_DIR}"
   trap on_error ERR
+  trap on_exit EXIT
 
   CURRENT_PHASE="preflight"
   run_phase preflight phase_preflight

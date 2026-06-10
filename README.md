@@ -1,0 +1,228 @@
+# Hypr-Deb
+
+A bash installer that puts Debian 13 (trixie) onto one specific three-disk
+workstation — ZFS root on a raidz1 pool, mdadm RAID for the ESP and swap —
+makes it bootable (UEFI, one user-chosen bootloader), and builds Hyprland
+and its hyprwm dependencies from their **latest release tags** with a
+version-compatibility gate. The install is complete only when both the
+bootable Debian system and the Hyprland build pass the verification suite.
+
+**This installer DESTROYS the target disks.** On bare metal the targets are
+fixed — these exact three disks, no detection, no fallback, no override:
+
+```
+DISK1=/dev/disk/by-id/nvme-eui.0025384331408197
+DISK2=/dev/disk/by-id/nvme-eui.002538433140818a
+DISK3=/dev/disk/by-id/nvme-eui.002538433140819d
+```
+
+Each path must exist and resolve to an internal whole disk (not removable,
+not USB). If you are not installing onto that machine, run it in a VM.
+
+## VM test mode
+
+Preflight gates disk selection on `systemd-detect-virt`:
+
+- **Bare metal** (`systemd-detect-virt` returns `none`): the three fixed
+  by-id paths above, validated, no exceptions.
+- **Any VM**: virtio/SCSI disks have no stable `nvme-eui` identity, so the
+  installer auto-detects instead. It enumerates internal whole disks
+  (`vd*`/`sd*`/`nvme*`, non-removable, non-USB), excludes the live/boot
+  medium and anything with mounted filesystems, and requires **exactly
+  three** candidates — fewer or more is a hard failure listing what was
+  found, never a guess. Candidates are assigned DISK1..3 in name order.
+
+In VM mode only, `VM_DISK1`/`VM_DISK2`/`VM_DISK3` environment variables
+override auto-detection (set all three or none; each is validated as a real
+internal whole disk). A banner states the active mode and the disks about
+to be destroyed; the `destroy` confirmation gate applies in both modes
+unless `--yes` is given.
+
+QEMU/OVMF smoke-test recipe:
+
+```bash
+qemu-img create -f qcow2 d1.qcow2 32G
+qemu-img create -f qcow2 d2.qcow2 32G
+qemu-img create -f qcow2 d3.qcow2 32G
+qemu-system-x86_64 -enable-kvm -m 8G -smp 4 \
+  -bios /usr/share/ovmf/OVMF.fd \
+  -drive file=d1.qcow2,if=virtio -drive file=d2.qcow2,if=virtio \
+  -drive file=d3.qcow2,if=virtio \
+  -cdrom debian-live-13-amd64.iso -boot d
+```
+
+Boot the live ISO, get root, run the installer; VM mode picks up the three
+blank virtio disks. After the install, reboot into the chosen bootloader
+and confirm the greetd login.
+
+## Storage layout
+
+```
+DISK1/DISK2: EFI(2G) SWAP(4G) ZFS(rest)
+DISK3:               SWAP(4G) ZFS(rest)
+
+/dev/md/efi:  FAT32 RAID1 (metadata 1.0) — DISK1-part1 + DISK2-part1
+/dev/md/swap: swap  RAID0 (metadata 1.2) — DISK1-part2 + DISK2-part2 + DISK3-part1
+ZFS pool PRECISION: raidz1 — DISK1-part3 + DISK2-part3 + DISK3-part2
+```
+
+Datasets follow the reference hierarchy: `PRECISION/ROOT/debian13`
+(bootfs), `home`, `home/Downloads`, `srv`, `var/cache`, `var/lib/docker`,
+`var/log`, `var/tmp`. Kernels live in `/boot` **on the root dataset** —
+there is no separate boot filesystem, so a snapshot captures kernel and
+modules atomically.
+
+This **intentionally diverges** from `precision-zfs-dr.sh` layout parity:
+the separate `md/boot` array is removed (4 partitions become 3 on
+DISK1/DISK2) and the ESP grows to 2G so that any of the three supported
+bootloaders fits, including kernel/initramfs copies for grub and
+systemd-boot.
+
+## Usage
+
+From a Debian 13 live session (or an installed Debian system), as root:
+
+```bash
+sudo ./hypr-deb.sh
+```
+
+With no flags it prompts for the bootloader and then for the destructive
+confirmation (type `destroy`). Preflight self-bootstraps its own tool
+prerequisites (debootstrap, gdisk, mdadm, zfs-dkms, ...) from the network
+or the cache.
+
+Common flags (see `--help` for the full list):
+
+```
+--bootloader=<zbm|grub|systemd-boot>   bootloader (required with --yes)
+--build-on-firstboot                   defer the Hyprland build to first boot
+--offline                              install only from the local cache
+--phase=<name>                         run a single phase
+--keep-build-deps                      do not purge build deps after success
+--mirror=<url>                         Debian mirror (default deb.debian.org)
+--cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
+--fresh                                discard phase state and start over
+--yes                                  skip the destructive confirmation
+--verbose                              detailed logging
+```
+
+Identity and layout knobs are environment overrides (set before launch):
+`TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
+`TIMEZONE`, `LOCALE`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and more — see
+`lib/00-config.sh`.
+
+### Phases
+
+A full run executes the phases in order; each phase stamps its completion
+under `/run/hypr-deb/state`, so a failed run resumes where it stopped
+(`--fresh` discards the stamps). `--phase=<name>` runs exactly one phase —
+preflight always runs first for safety, and single-phase runs skip stamps
+so a phase can be re-run explicitly.
+
+```
+preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
+cache       populate or validate the offline cache (network needed to populate)
+storage     destroy/wipe/partition/mdadm/ZFS (the destructive gate lives here)
+bootstrap   mount target, debootstrap, bind mounts, apt sources, embed cache
+system      fstab, mdadm.conf, hostname, locale, timezone, user, initramfs
+boot        chosen bootloader install + NVRAM entry + ESP kernel-sync hook
+hyprland    tag resolution, compatibility gate, builds (or firstboot staging)
+verify      full verification suite (nonzero exit on any failure)
+cleanup     unmount binds and target tree, export the pool
+```
+
+### Offline workflow
+
+The installer prefers the network but can run fully offline:
+
+1. On a networked machine, run `sudo ./hypr-deb.sh --phase=cache
+   --cache-dir=/path/on/real/storage`. This downloads the complete .deb
+   closure (live tools, debootstrap base, target base, bootloaders,
+   Hyprland build deps, greetd+uwsm) indexed with `apt-ftparchive` as a
+   `file://` repo, the source archives of Hyprland and every hyprwm
+   dependency at their resolved release tags, and the ZFSBootMenu EFI
+   binary.
+2. Carry the cache directory to the target machine (it must be on real
+   storage, not the live overlay).
+3. Run `sudo ./hypr-deb.sh --offline --cache-dir=/path/to/cache ...`.
+   Offline runs validate the cache first and fail with a precise list of
+   anything missing.
+
+Caveat: offline live-session preflight installs zfs-dkms against the
+running live kernel, so the cache must have been built against the same
+live-ISO kernel version (matching `linux-headers`). This is checked.
+
+Either way, the complete cache is copied into the installed system at
+`/var/cache/hypr-deb/` (with a README) so the target can rebuild Hyprland
+or reinstall packages fully offline later.
+
+## Bootloader choice
+
+Exactly one bootloader is installed — `--bootloader=zbm|grub|systemd-boot`,
+or an interactive prompt when the flag is omitted (non-interactive/`--yes`
+runs require the flag). The chosen loader gets a single NVRAM boot entry
+via `efibootmgr` (deduplicated by label; creation must succeed), and the
+storage layout is identical regardless of choice.
+
+- **zbm** — the upstream ZFSBootMenu release EFI binary on the ESP
+  (`EFI/zbm/zfsbootmenu.efi`). It reads kernels directly from the ZFS pool
+  and can boot snapshots and alternate boot environments directly. No
+  kernel-sync hook is needed.
+- **grub** — `grub-efi-amd64` with a static `grub.cfg` on the ESP
+  (`EFI/debian/grub/grub.cfg`) that loads kernel copies **from the ESP**,
+  never from the pool, so no ZFS pool-feature restrictions apply.
+- **systemd-boot** — `bootctl install` with loader entries pointing at ESP
+  kernel copies.
+
+For grub and systemd-boot, a kernel postinst/initramfs hook syncs the
+current kernel + initramfs from `/boot` (on ZFS) to the ESP on every kernel
+or initramfs update.
+
+**Rollback caveat:** with grub or systemd-boot, after rolling back the root
+dataset the ESP still carries the newer kernel copy until the hook next
+runs — the system boots the new kernel on the old root. Only ZBM boots true
+point-in-time snapshots (kernel and userland together). If snapshot boot is
+why you run ZFS, choose `zbm`.
+
+## Hyprland stack
+
+Scope is deliberately bare: Debian base + compiled Hyprland + greetd +
+uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. greetd execs
+`uwsm start hyprland`; a minimal valid `hyprland.conf` is installed for the
+user; the greetd service is enabled and the graphical target is default.
+
+Source policy:
+
+- The **latest release tag** (semver-highest, pre-releases excluded — not
+  the latest commit) of Hyprland is resolved via `git ls-remote --tags`.
+- Dependencies are built from source, each at its own latest release tag:
+  hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
+  hyprland-protocols, aquamarine — then Hyprland last.
+- **Compatibility gate:** Hyprland's CMake version requirements at the
+  resolved tag are parsed and every dependency's resolved tag must satisfy
+  them. On any mismatch the run aborts with a requirement-vs-resolved
+  matrix. No silent downgrades.
+- Builds run **inside the target** (chroot, or on first boot) so binaries
+  link against exactly the userland that runs them. CMake Release builds
+  installed to `/usr/local`, build trees under `/var/tmp`, deleted after
+  install.
+
+Build hygiene: the exact build-dependency package set is recorded and, after
+a successful build + verify, purged (`apt-get purge --autoremove`), leaving
+only the Hyprland artifacts and their runtime libraries. Use
+`--keep-build-deps` to keep the toolchain installed; either way the cached
+build-dep .debs stay in `/var/cache/hypr-deb` for offline reinstallation.
+
+`--build-on-firstboot` stages the sources and cached debs in the target and
+installs a one-shot systemd unit (`hypr-deb-firstboot.service`) that runs
+the identical build logic on first boot, disables itself on success, and
+leaves a clear failure log otherwise.
+
+## Development checks
+
+```bash
+bash tools/check.sh     # bash -n + shellcheck over every shell file
+bash tests/run-all.sh   # all unit tests (fake-command pattern, no root)
+```
+
+Design spec and implementation plan live under `docs/superpowers/`.
