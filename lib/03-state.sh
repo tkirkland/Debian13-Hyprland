@@ -22,6 +22,12 @@ mark_phase_done() {
 }
 
 # Run a phase function unless already stamped. Usage: run_phase NAME FUNC
+#
+# The phase call is deliberately NOT wrapped in `|| fatal`: a condition
+# context would suppress errexit inside the entire phase function, letting
+# intermediate failures slide. run_phase must only be called under `set -e`
+# (never in a condition context); a failing phase then aborts via the
+# caller's ERR trap before the stamp line is reached.
 run_phase() {
   local name="$1" func="$2"
   if phase_done "${name}"; then
@@ -29,6 +35,6 @@ run_phase() {
     return 0
   fi
   info "=== Phase: ${name} ==="
-  "${func}" || fatal "Phase ${name} failed."
+  "${func}"
   mark_phase_done "${name}"
 }
