@@ -3,12 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source tests/test-helpers.sh
 
-echo "test: apt sources generation"
+echo "test: apt sources generation (deb822)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 mkdir -p "${tmp}/target/etc/apt"
 
-gen() { # $1=NETWORK_AVAILABLE
+gen() { # $1=NETWORK_AVAILABLE; prints the generated .sources stanzas
   bash -c "
     source lib/00-config.sh
     source lib/01-log.sh
@@ -16,19 +16,35 @@ gen() { # $1=NETWORK_AVAILABLE
     TARGET='${tmp}/target'
     NETWORK_AVAILABLE=$1
     write_target_apt_sources
-    cat '${tmp}/target/etc/apt/sources.list'
+    cat '${tmp}/target/etc/apt/sources.list.d/'*.sources
   "
 }
 
 out="$(gen 1)"
+assert_contains "${out}" "URIs: http://deb.debian.org/debian" \
+  "deb822 mirror URI online"
+assert_contains "${out}" "Suites: trixie trixie-updates" \
+  "base and updates suites enabled"
+assert_contains "${out}" "Components: main contrib non-free non-free-firmware" \
+  "all components enabled"
+assert_contains "${out}" "Suites: trixie-security" "security suite online"
 assert_contains "${out}" \
-  "deb http://deb.debian.org/debian trixie main contrib non-free-firmware" \
-  "network sources include contrib (ZFS) and firmware"
-assert_contains "${out}" "trixie-security" "security suite present online"
+  "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
+  "stanzas pinned to the Debian archive keyring"
+
+# Legacy sources.list must carry no active one-line entries.
+assert_fails "no legacy deb lines in sources.list" \
+  grep -q '^deb ' "${tmp}/target/etc/apt/sources.list"
 
 out="$(gen 0)"
-assert_contains "${out}" \
-  "deb [trusted=yes] file:///var/cache/hypr-deb/repo trixie main" \
-  "offline sources point at the embedded cache repo"
+assert_contains "${out}" "URIs: file:///var/cache/hypr-deb/repo" \
+  "offline URI points at the embedded cache repo"
+assert_contains "${out}" "Trusted: yes" "offline cache repo trusted"
+if [[ "${out}" == *"deb.debian.org"* ]]; then
+  echo "  FAIL: offline regen must remove the online debian.sources" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: offline regen removes the online debian.sources"
+fi
 
 finish_test
