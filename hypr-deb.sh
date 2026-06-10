@@ -25,7 +25,16 @@ on_error() {
   local exit_code=$?
   warn "FAILED in phase '${CURRENT_PHASE:-startup}' (exit ${exit_code})."
   [[ -n "${LOG_FILE}" ]] && warn "Full log: ${LOG_FILE}"
+  warn "Re-run hypr-deb.sh to resume; completed phases are skipped."
   teardown_chroot_binds
+  if mountpoint -q "${TARGET}${ESP_MOUNT}" 2>/dev/null; then
+    umount "${TARGET}${ESP_MOUNT}" 2>/dev/null || true
+  fi
+  zfs unmount -a 2>/dev/null || true
+  if zpool list "${POOL_NAME}" >/dev/null 2>&1; then
+    zpool export "${POOL_NAME}" 2>/dev/null ||
+      warn "Could not export ${POOL_NAME}; export manually before reboot."
+  fi
   exit "${exit_code}"
 }
 
@@ -51,10 +60,14 @@ main() {
 
   if [[ "${RUN_PHASE}" != "full" ]]; then
     CURRENT_PHASE="${RUN_PHASE}"
+    case "${RUN_PHASE}" in
+      system | boot | hyprland | verify) ensure_target_ready ;;
+    esac
     "phase_${RUN_PHASE//-/_}"
     return 0
   fi
 
+  ensure_target_ready
   local name=""
   for name in cache storage bootstrap system boot hyprland verify; do
     CURRENT_PHASE="${name}"

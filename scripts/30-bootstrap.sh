@@ -11,6 +11,24 @@ mount_target_tree() {
   mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
 }
 
+# After a failure trap (which unmounts and exports) a resumed run skips the
+# stamped bootstrap phase, so the target tree and chroot binds must be
+# re-established before any later phase touches the target.
+ensure_target_ready() {
+  phase_done bootstrap || return 0
+  if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
+    zpool import -R "${TARGET}" "${POOL_NAME}" ||
+      fatal "Cannot import pool ${POOL_NAME} to resume."
+  fi
+  if ! mountpoint -q "${TARGET}"; then
+    zfs mount "${ROOT_DATASET}"
+    zfs mount -a
+  fi
+  mountpoint -q "${TARGET}${ESP_MOUNT}" ||
+    mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
+  mountpoint -q "${TARGET}/proc" || mount_chroot_binds
+}
+
 run_debootstrap() {
   if [[ -f "${TARGET}/etc/debian_version" ]]; then
     info "Target already bootstrapped; skipping debootstrap."

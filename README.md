@@ -117,7 +117,9 @@ A full run executes the phases in order; each phase stamps its completion
 under `/run/hypr-deb/state`, so a failed run resumes where it stopped
 (`--fresh` discards the stamps). `--phase=<name>` runs exactly one phase —
 preflight always runs first for safety, and single-phase runs skip stamps
-so a phase can be re-run explicitly.
+so a phase can be re-run explicitly. When resuming after a failure, the
+installer re-imports the ZFS pool and re-establishes the target mounts and
+chroot binds automatically.
 
 ```
 preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
@@ -187,9 +189,9 @@ why you run ZFS, choose `zbm`.
 ## Hyprland stack
 
 Scope is deliberately bare: Debian base + compiled Hyprland + greetd +
-uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. greetd execs
-`uwsm start hyprland`; a minimal valid `hyprland.conf` is installed for the
-user; the greetd service is enabled and the graphical target is default.
+uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. greetd runs
+`agreety --cmd 'uwsm start -- hyprland.desktop'`; a minimal valid
+`hyprland.conf` is installed for the user; the greetd service is enabled and the graphical target is default.
 
 Source policy:
 
