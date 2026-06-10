@@ -30,7 +30,12 @@ verify_report() {
 }
 
 phase_verify() {
-  local esp="${TARGET}${ESP_MOUNT}"
+  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f=""
+  for f in "${TARGET}"/boot/vmlinuz-*; do
+    [[ -e "${f}" ]] || continue
+    vers+="${f##*/vmlinuz-}"$'\n'
+  done
+  kver="$(printf '%s' "${vers}" | sort -V | tail -n1)"
 
   if ((BUILD_ON_FIRSTBOOT)); then
     vcheck "firstboot unit enabled" in_target \
@@ -64,6 +69,12 @@ phase_verify() {
     bash -c "ls ${TARGET}/boot/vmlinuz-* >/dev/null 2>&1"
   vcheck "initramfs on ZFS /boot" \
     bash -c "ls ${TARGET}/boot/initrd.img-* >/dev/null 2>&1"
+  # A root-on-ZFS system is unbootable without these two; dkms skips the
+  # module build silently when target kernel headers are missing.
+  vcheck "zfs module built for target kernel" in_target \
+    "modinfo -k '${kver}' zfs >/dev/null"
+  vcheck "initramfs contains zfs module" in_target \
+    "lsinitramfs '/boot/initrd.img-${kver}' | grep -q '/zfs.ko'"
 
   case "${BOOTLOADER}" in
     zbm)

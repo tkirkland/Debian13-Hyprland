@@ -231,8 +231,12 @@ UWSM_RUNTIME_PACKAGES=(
 )
 
 # Target base packages beyond debootstrap's minimal set.
+# linux-headers-amd64 is REQUIRED alongside zfs-dkms: without headers for
+# the target kernel, dkms silently skips the zfs module build and the
+# system drops to the initramfs shell at first boot. Image and headers
+# metapackages come from the same archive snapshot, so they match.
 TARGET_BASE_PACKAGES=(
-  linux-image-amd64 zfs-initramfs zfs-dkms zfsutils-linux
+  linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd kitty
   "${UWSM_RUNTIME_PACKAGES[@]}"

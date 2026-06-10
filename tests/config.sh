@@ -46,6 +46,11 @@ assert_contains "${out}" "gcc-15 g++-15" "toolchain packages split out"
 assert_contains "${out}" "0" \
   "toolchain absent from general build packages (no sid leakage)"
 
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${TARGET_BASE_PACKAGES[@]}"')"
+assert_contains "${out}" "linux-headers-amd64" \
+  "target gets kernel headers so dkms can build the zfs module"
+
 # uwsm is not in the Debian archive; it must never be in the apt lists.
 out="$(bash -c 'source lib/00-config.sh
   printf "%s\n" "${TARGET_BASE_PACKAGES[@]}" "${HYPR_BUILD_PACKAGES[@]}"')"

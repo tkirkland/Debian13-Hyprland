@@ -18,23 +18,27 @@ mount_target_tree() {
   mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
 }
 
-# After a failure trap (which unmounts and exports) a resumed run skips the
-# stamped bootstrap phase, so the target tree and chroot binds must be
-# re-established before any later phase touches the target.
+# Ready the target whenever its pool exists (already imported, or
+# importable). Resumed runs AND post-reboot --phase=X maintenance both
+# depend on this; phase stamps do not survive live-session reboots, so the
+# pool itself — not a stamp — is the signal. No-op when the pool is absent
+# (fresh install before the storage phase).
 ensure_target_ready() {
-  phase_done bootstrap || return 0
-  # -N: never automount on import — canmount=on children mounting before
-  # the noauto root dataset would be shadowed by the root overlay-mount.
   if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
-    zpool import -N -R "${TARGET}" "${POOL_NAME}" ||
-      fatal "Cannot import pool ${POOL_NAME} to resume."
+    # -N: never automount on import — canmount=on children mounting before
+    # the noauto root dataset would be shadowed by the root overlay-mount.
+    zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null || return 0
   fi
   if ! mountpoint -q "${TARGET}"; then
     zfs mount "${ROOT_DATASET}"
     zfs mount -a
   fi
-  mountpoint -q "${TARGET}${ESP_MOUNT}" ||
-    mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
+  if [[ -b /dev/md/efi ]]; then
+    mountpoint -q "${TARGET}${ESP_MOUNT}" ||
+      mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
+  else
+    warn "/dev/md/efi absent; ESP not mounted (assemble the array first if a phase needs it)."
+  fi
   mountpoint -q "${TARGET}/proc" || mount_chroot_binds
 }
 
