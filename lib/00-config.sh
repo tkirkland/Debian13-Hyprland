@@ -96,6 +96,8 @@ TARGET_CACHE_DIR="/var/cache/hypr-deb"
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
 BOOTLOADER="${BOOTLOADER:-}"
+ZBM_REPO_URL="${ZBM_REPO_URL:-https://github.com/zbm-dev/zfsbootmenu}"
+# Fallback redirector, used only if the direct release-asset fetch fails.
 ZBM_EFI_URL="${ZBM_EFI_URL:-https://get.zfsbootmenu.org/efi}"
 ESP_MOUNT="/boot/efi"
 KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"

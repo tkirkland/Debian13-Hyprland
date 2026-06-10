@@ -99,7 +99,9 @@ cache_populate_sources() {
 
 cache_populate_zbm() {
   info "Caching ZFSBootMenu EFI binary..."
-  curl -fsSL -o "${CACHE_DIR}/zfsbootmenu.EFI" "${ZBM_EFI_URL}"
+  # fetch_zbm_efi lives in scripts/50-boot.sh (sourced by the orchestrator
+  # before any phase runs).
+  fetch_zbm_efi "${CACHE_DIR}/zfsbootmenu.EFI"
 }
 
 cache_validate() {

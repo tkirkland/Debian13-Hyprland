@@ -83,12 +83,30 @@ create_nvram_entry() { # $1=label $2=loader-path (backslash form)
 
 # --- ZFSBootMenu -------------------------------------------------------------
 
+# Download the ZFSBootMenu release EFI to $1. Resolves the latest release
+# tag and fetches the GitHub asset directly (with retries — the
+# get.zfsbootmenu.org redirector intermittently returns 5xx); the
+# redirector remains as fallback. Also used by the cache phase.
+fetch_zbm_efi() {
+  local dest="$1" tag="" url=""
+  if tag="$(resolve_latest_release_tag "${ZBM_REPO_URL}" 2>/dev/null)"; then
+    url="${ZBM_REPO_URL}/releases/download/${tag}/zfsbootmenu-release-x86_64-${tag}.EFI"
+    info "Fetching ZFSBootMenu ${tag}..."
+    if curl -fsSL --retry 5 --retry-all-errors -o "${dest}" "${url}"; then
+      return 0
+    fi
+    warn "Direct asset download failed (${url}); trying ${ZBM_EFI_URL}."
+  fi
+  curl -fsSL --retry 5 --retry-all-errors -o "${dest}" "${ZBM_EFI_URL}" ||
+    fatal "Could not download ZFSBootMenu (asset and redirector both failed)."
+}
+
 install_zbm() {
   local efi_src="${CACHE_DIR}/zfsbootmenu.EFI"
   if [[ ! -f "${efi_src}" ]]; then
     ((NETWORK_AVAILABLE)) || fatal "No cached ZBM binary and no network."
     mkdir -p "${CACHE_DIR}"
-    curl -fsSL -o "${efi_src}" "${ZBM_EFI_URL}"
+    fetch_zbm_efi "${efi_src}"
   fi
   mkdir -p "${TARGET}${ESP_MOUNT}/EFI/zbm"
   cp "${efi_src}" "${TARGET}${ESP_MOUNT}/EFI/zbm/zfsbootmenu.efi"
