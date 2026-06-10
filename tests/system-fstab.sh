@@ -31,6 +31,18 @@ else
   echo "  ok: no root line (ZFS-managed)"
 fi
 
+# The Downloads dataset mounts under /home/<user> before adduser runs, so
+# create_user must copy skel itself and chown the pre-existing home tree.
+user_body="$(bash -c '
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f create_user')"
+assert_contains "${user_body}" "cp -rnT /etc/skel" \
+  "create_user copies skeleton files into the pre-existing home"
+assert_contains "${user_body}" "chown -R" \
+  "create_user fixes ownership of the pre-existing home"
+
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.
 first_step="$(bash -c '

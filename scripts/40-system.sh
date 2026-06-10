@@ -59,6 +59,12 @@ create_user() {
     id '${TARGET_USERNAME}' >/dev/null 2>&1 ||
       adduser --disabled-password --gecos '' '${TARGET_USERNAME}'
     usermod -aG sudo '${TARGET_USERNAME}'
+    # The home dir pre-exists: the Downloads dataset mounts beneath it
+    # before the user is created, so adduser leaves it root-owned and
+    # without skeleton files. Copy skel (no clobber) and fix ownership,
+    # recursing into the mounted Downloads dataset on purpose.
+    cp -rnT /etc/skel '/home/${TARGET_USERNAME}'
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
   "
   if [[ -n "${USER_PASSWORD}" ]]; then
     echo "${TARGET_USERNAME}:${USER_PASSWORD}" | chroot "${TARGET}" chpasswd
