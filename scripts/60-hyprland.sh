@@ -118,19 +118,34 @@ stage_source() {
 }
 
 install_build_deps() {
-  # gcc-15 lives only in sid; add the pinned source when networked.
-  # Offline, the cache repo already carries the toolchain debs.
+  # gcc-15 lives only in sid. When networked, add the pinned source and
+  # install the toolchain in its own `-t sid` transaction so its versioned
+  # runtime deps (libstdc++6 >= 15 etc.) may follow from sid while the
+  # 100-pin keeps every other package on trixie. Offline, the cache repo
+  # serves both versions and the resolver picks what gcc-15 requires.
   if ((NETWORK_AVAILABLE)); then
     write_sid_toolchain_sources "${TARGET}"
     in_target "apt-get update"
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+    "
+  else
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
+    "
   fi
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y ${HYPR_BUILD_PACKAGES[*]}
   "
-  # Record exactly what we may purge later.
-  printf '%s\n' "${HYPR_BUILD_PACKAGES[@]}" \
+  # Record exactly what we may purge later (toolchain included; the
+  # upgraded runtime libs are upgrades, not purge candidates).
+  printf '%s\n' "${HYPR_BUILD_PACKAGES[@]}" "${HYPR_TOOLCHAIN_PACKAGES[@]}" \
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
 }
 

@@ -161,6 +161,12 @@ declare -A HYPR_MESON_ARGS=(
 HYPR_CC="${HYPR_CC:-gcc-15}"
 HYPR_CXX="${HYPR_CXX:-g++-15}"
 SID_MIRROR="${SID_MIRROR:-http://deb.debian.org/debian}"
+# Installed in their own `apt-get -t sid` transaction so their versioned
+# runtime deps (libstdc++6/libgcc-s1 >= 15, binutils chain) may follow
+# from sid; the 100-pin alone would refuse those upgrades and everything
+# else stays on trixie. Kept out of HYPR_BUILD_PACKAGES so the general
+# build-deps install never resolves against sid.
+HYPR_TOOLCHAIN_PACKAGES=(gcc-15 g++-15)
 
 # write_sid_toolchain_sources <root>
 #   Adds a sid source pinned to priority 100 under <root>: apt only takes
@@ -202,7 +208,7 @@ HYPR_BUILD_PACKAGES=(
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
   libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
-  libffi-dev libexpat1-dev gcc-15 g++-15
+  libffi-dev libexpat1-dev
   libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev

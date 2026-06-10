@@ -52,6 +52,8 @@ cache_populate_debs() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
       ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_PACKAGES[*]} \
       ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 systemd-boot
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+      -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"
