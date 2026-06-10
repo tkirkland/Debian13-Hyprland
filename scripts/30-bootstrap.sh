@@ -57,6 +57,10 @@ run_debootstrap() {
 # The complete cache is always embedded so the installed system can rebuild
 # or reinstall fully offline (spec: Cache section).
 embed_cache_in_target() {
+  if ((SKIP_CACHE)); then
+    info "--skip-cache: not embedding an offline cache in the target."
+    return 0
+  fi
   [[ -d "${CACHE_DIR}/repo" ]] || {
     warn "No cache at ${CACHE_DIR}; target will not carry an offline cache."
     return 0

@@ -154,6 +154,9 @@ install_build_deps() {
 build_one() {
   local name="$1"
   local meson_args="${HYPR_MESON_ARGS[${name}]:-}"
+  # Empty --jobs means one job per CPU (expanded inside the target).
+  local jobs="${HYPR_BUILD_JOBS:-}"
+  [[ -n "${jobs}" ]] || jobs="\$(nproc)"
   info "Building ${name} ${HYPR_RESOLVED_TAG[${name}]}..."
   in_target "
     set -e
@@ -162,10 +165,11 @@ build_one() {
     if [[ -f CMakeLists.txt ]]; then
       cmake -B build -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr/local
-      cmake --build build -j\"\$(nproc)\"
+      cmake --build build -j\"${jobs}\"
       cmake --install build
     elif [[ -f meson.build ]]; then
       meson setup build --prefix=/usr/local --buildtype=release ${meson_args}
+      meson compile -C build -j \"${jobs}\"
       meson install -C build
     else
       echo 'No CMakeLists.txt or meson.build in ${name}' >&2

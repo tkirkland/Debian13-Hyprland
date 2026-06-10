@@ -23,6 +23,11 @@ Options:
                         preflight cache storage bootstrap system boot
                         hyprland verify cleanup
   --keep-build-deps     Do not purge build dependencies after success
+  --skip-cache          Do not populate or embed the offline cache (saves
+                        several GB; the installed system loses offline
+                        rebuild capability)
+  --jobs=<n>            Cap build parallelism (default: one per CPU);
+                        lower it if compiles exhaust RAM
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
   --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
@@ -51,6 +56,12 @@ parse_args() {
           fatal "Unknown phase '${RUN_PHASE}'. Valid: ${VALID_PHASES}"
         ;;
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
+      --skip-cache) SKIP_CACHE=1 ;;
+      --jobs=*)
+        HYPR_BUILD_JOBS="${arg#*=}"
+        [[ "${HYPR_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] ||
+          fatal "--jobs expects a positive integer, got '${HYPR_BUILD_JOBS}'"
+        ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
       --cache-dir=*) CACHE_DIR="${arg#*=}" ;;
       --fresh) FRESH=1 ;;

@@ -240,6 +240,12 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
+# --skip-cache: no offline cache is populated or embedded (saves several
+# GB — important in live sessions where CACHE_DIR is RAM-backed).
+SKIP_CACHE="${SKIP_CACHE:-0}"
+# --jobs=N caps build parallelism (empty = one job per CPU). Lower this
+# when compiles exhaust RAM in small VMs.
+HYPR_BUILD_JOBS="${HYPR_BUILD_JOBS:-}"
 FRESH="${FRESH:-0}"
 VERBOSE="${VERBOSE:-0}"
 OFFLINE="${OFFLINE:-0}"

@@ -88,8 +88,12 @@ phase_verify() {
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
      grep -qx '${ROOT_DATASET}'"
-  vcheck "embedded cache repo valid" \
-    test -f "${TARGET}${TARGET_CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages"
+  if ((SKIP_CACHE)); then
+    info "skip: embedded cache check (--skip-cache)"
+  else
+    vcheck "embedded cache repo valid" \
+      test -f "${TARGET}${TARGET_CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages"
+  fi
 
   verify_report || fatal "Verification failed — installation is NOT complete."
   info "SUCCESS: bootable Debian + Hyprland conditions both met."
