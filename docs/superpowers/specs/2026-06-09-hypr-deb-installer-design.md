@@ -5,7 +5,8 @@ Status: Approved pending user review
 
 ## Goal
 
-A single bash script, `hypr-deb.sh`, that installs Debian 13 (trixie) onto a
+A bash installer — a thin orchestrator `hypr-deb.sh` plus compartmentalized
+function-specific modules — that installs Debian 13 (trixie) onto a
 fixed three-disk workstation, makes it bootable (UEFI), and builds Hyprland
 and its hyprwm dependencies from their latest release tags with verified
 version compatibility. The result is complete only when both the bootable
@@ -163,10 +164,38 @@ Build timing (`--build-on-firstboot`):
 
 ## Script Structure
 
-Single file `hypr-deb.sh`, bash strict mode, Google Shell Style Guide.
-Conventions follow the reference project: `info`/`verbose`/`fatal` logging,
-env-var-overridable config block, tee'd timestamped log, destructive-action
-confirmation (`--yes` to skip).
+`hypr-deb.sh` is a thin orchestrator: it sources the lib and phase modules,
+parses arguments, and dispatches phases. All real work lives in
+compartmentalized, function-specific modules, mirroring the reference
+project's layout:
+
+```
+hypr-deb.sh                  orchestrator: source modules, parse args,
+                             dispatch phases, top-level traps
+lib/00-config.sh             defaults, fixed disk ids, derived values
+lib/01-log.sh                info/verbose/fatal logging, tee'd log setup
+lib/02-args.sh               usage, argument parsing, confirmation prompts
+lib/03-state.sh              phase stamps, resume/--fresh handling
+lib/04-chroot-mounts.sh      bind mount tracking and teardown
+scripts/00-preflight.sh      host + virt detection, tool bootstrap,
+                             disk selection/validation, clock sync
+scripts/10-cache.sh          offline cache populate/validate, local repo
+scripts/20-storage.sh        destroy/wipe/partition/mdadm/ZFS
+scripts/30-bootstrap.sh      mount target, debootstrap, apt sources
+scripts/40-system.sh         base Debian configuration
+scripts/50-boot.sh           bootloader install (zbm/grub/systemd-boot),
+                             NVRAM entry, kernel-sync hook
+scripts/60-hyprland.sh       tag resolution, compatibility gate, builds,
+                             firstboot staging, greetd/uwsm
+scripts/90-verify.sh         verification suite
+scripts/99-cleanup.sh        unmount binds, export pool
+```
+
+Modules are sourced (not executed); each contains functions for exactly one
+concern. Bash strict mode in the orchestrator, Google Shell Style Guide
+throughout. Conventions follow the reference project: `info`/`verbose`/
+`fatal` logging, env-var-overridable config block, tee'd timestamped log,
+destructive-action confirmation (`--yes` to skip).
 
 Phases (resumable via state stamps; `--phase X` runs one; default runs all):
 
@@ -209,7 +238,7 @@ Final report printed; nonzero exit on any failure.
 
 ## Code Quality Gates (development-time)
 
-- `bash -n` clean on every shell file.
+- `bash -n` clean on every shell file (orchestrator, lib, scripts, tests).
 - `shellcheck` clean (no suppressed findings without an inline justified
   directive) on every shell file.
 - Google Shell Style Guide adherence unless technically impossible, without
