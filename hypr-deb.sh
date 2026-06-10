@@ -26,6 +26,11 @@ on_error() {
   warn "FAILED in phase '${CURRENT_PHASE:-startup}' (exit ${exit_code})."
   [[ -n "${LOG_FILE}" ]] && warn "Full log: ${LOG_FILE}"
   warn "Re-run hypr-deb.sh to resume; completed phases are skipped."
+  # Storage failures are almost always "something holds the disk" — trace
+  # the holders into the log before the teardown hides the evidence.
+  if [[ "${CURRENT_PHASE:-}" == "storage" ]]; then
+    report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
+  fi
   # policy-rc.d is intentionally NOT removed here: it must keep guarding
   # apt runs on resumed installs. Only phase_cleanup removes it.
   kill_target_processes
@@ -35,8 +40,10 @@ on_error() {
   fi
   zfs unmount -a 2>/dev/null || true
   if zpool list "${POOL_NAME}" >/dev/null 2>&1; then
-    zpool export "${POOL_NAME}" 2>/dev/null ||
+    if ! zpool export "${POOL_NAME}" 2>/dev/null; then
       warn "Could not export ${POOL_NAME}; export manually before reboot."
+      report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
+    fi
   fi
   exit "${exit_code}"
 }

@@ -74,4 +74,15 @@ assert_eq "/dev/disk/by-id/nvme-eui.abc-part3
 /dev/vda3
 /dev/nvme0n1p3" "${out}" "part_dev naming for by-id, vdX, nvme"
 
+# Failure diagnostics must run best-effort even with no tools present,
+# and the failure trap must invoke them for storage-phase errors.
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh
+  source scripts/20-storage.sh
+  report_disk_holders /dev/vda /dev/vdb' 2>&1)"
+assert_contains "${out}" "Storage diagnostics" "holder diagnostics run"
+assert_contains "${out}" "Imported pools" "diagnostics cover pools"
+assert_contains "$(cat hypr-deb.sh)" "report_disk_holders" \
+  "failure trap traces disk holders"
+
 finish_test

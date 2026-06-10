@@ -15,6 +15,15 @@ fatal() {
   exit 1
 }
 
+# Prefix each stdin line as an indented warn-level detail line (for
+# embedding multi-line tool output in failure diagnostics).
+warn_lines() {
+  local line=""
+  while IFS= read -r line; do
+    warn "    ${line}"
+  done
+}
+
 # Tee all further output into a timestamped log file under $1.
 setup_logging() {
   local dir="$1" ts=""

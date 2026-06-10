@@ -16,8 +16,10 @@ phase_cleanup() {
   fi
   zfs unmount -a 2>/dev/null || true
   if zpool list "${POOL_NAME}" >/dev/null 2>&1; then
-    zpool export "${POOL_NAME}" ||
+    if ! zpool export "${POOL_NAME}"; then
       warn "Pool export failed; export manually before reboot."
+      report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
+    fi
   fi
   info "Cleanup done. Remove the live medium and reboot."
 }

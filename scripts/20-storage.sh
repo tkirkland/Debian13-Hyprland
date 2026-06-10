@@ -7,6 +7,37 @@
 #   /dev/md/swap: RAID0 DISK1p2+DISK2p2+DISK3p1
 #   ZFS raidz1:   DISK1p3+DISK2p3+DISK3p2
 
+# When a wipe/partition/array/pool operation fails, the cause is almost
+# always something still holding a disk. Print who and what before the
+# trap tears down, so the failure is diagnosable from the log alone:
+# per-disk lsblk tree, processes with the disk or its partitions open,
+# active md arrays, and imported pools. Best effort — never fails.
+report_disk_holders() {
+  local disk="" real="" part="" parts=()
+  warn "Storage diagnostics — what is holding the target disks:"
+  for disk in "$@"; do
+    real="$(readlink -f "${disk}" 2>/dev/null)" || real="${disk}"
+    warn "  ${disk} -> ${real}"
+    lsblk -n -o NAME,TYPE,FSTYPE,MOUNTPOINTS "${real}" 2>/dev/null |
+      warn_lines || true
+    if command -v fuser >/dev/null 2>&1; then
+      parts=()
+      for part in "${real}" "${real}"*; do
+        [[ -b "${part}" ]] && parts+=("${part}")
+      done
+      if ((${#parts[@]} > 0)); then
+        fuser -v "${parts[@]}" 2>&1 | warn_lines || true
+      fi
+    fi
+  done
+  warn "  Active md arrays:"
+  grep -E '^md' /proc/mdstat 2>/dev/null | warn_lines ||
+    warn "    none"
+  warn "  Imported pools:"
+  zpool list -H 2>/dev/null | warn_lines ||
+    warn "    none"
+}
+
 # Partition device name for disk $1, partition number $2.
 part_dev() {
   local disk="$1" num="$2"
