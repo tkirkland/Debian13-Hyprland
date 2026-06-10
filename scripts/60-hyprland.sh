@@ -143,6 +143,14 @@ install_build_deps() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y ${HYPR_BUILD_PACKAGES[*]}
   "
+  # uwsm's meson probes its Python runtime deps at configure time; the
+  # system phase that installs them may be stamped done on a resume, so
+  # re-ensure them here (idempotent, and NOT part of the purge set).
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${UWSM_RUNTIME_PACKAGES[*]}
+  "
   # Record exactly what we may purge later (toolchain included; the
   # upgraded runtime libs are upgrades, not purge candidates).
   printf '%s\n' "${HYPR_BUILD_PACKAGES[@]}" "${HYPR_TOOLCHAIN_PACKAGES[@]}" \

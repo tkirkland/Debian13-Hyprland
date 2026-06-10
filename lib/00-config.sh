@@ -221,14 +221,21 @@ HYPR_BUILD_PACKAGES=(
   libxcb-xinput-dev
 )
 
-# Target base packages beyond debootstrap's minimal set. uwsm is not in
-# the Debian archive — it is built from source with the hyprwm stack; its
-# runtime dependencies (python3/pyxdg/whiptail/dbus) are listed here.
+# uwsm is not in the Debian archive — it is built from source with the
+# hyprwm stack. Its Python runtime deps double as meson configure-time
+# probes, so the hyprland phase re-ensures them (the system phase that
+# normally installs them may already be stamped done on a resumed run).
+# They are runtime deps: never in HYPR_BUILD_PACKAGES, never purged.
+UWSM_RUNTIME_PACKAGES=(
+  python3 python3-xdg python3-dbus whiptail dbus-user-session
+)
+
+# Target base packages beyond debootstrap's minimal set.
 TARGET_BASE_PACKAGES=(
   linux-image-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd kitty
-  python3 python3-xdg python3-dbus whiptail dbus-user-session
+  "${UWSM_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
