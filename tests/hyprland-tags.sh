@@ -97,4 +97,40 @@ assert_contains "${out}" "hyprutils" "matrix names failing dep"
 assert_contains "${out}" "0.11.0" "matrix shows required minimum"
 assert_fails "compat gate aborts on mismatch" gate
 
+# Per-repo tag patterns: xkbcommon-X.Y.Z and plain X.YY schemes.
+make_fake "${tmp}/bin" git 'cat <<EOF
+sha	refs/tags/xkbcommon-1.10.0
+sha	refs/tags/xkbcommon-1.11.0
+sha	refs/tags/1.44
+sha	refs/tags/1.47
+sha	refs/tags/v0.5.0
+EOF'
+resolve_with() {
+  PATH="${tmp}/bin:${PATH}" bash -c "
+    source lib/00-config.sh; source lib/01-log.sh
+    source scripts/60-hyprland.sh
+    resolve_latest_release_tag https://example.invalid/repo '$1'"
+}
+assert_eq "xkbcommon-1.11.0" \
+  "$(resolve_with '^xkbcommon-[0-9]+\.[0-9]+\.[0-9]+$')" \
+  "xkbcommon tag pattern picks newest prefixed tag"
+assert_eq "1.47" "$(resolve_with '^[0-9]+\.[0-9]+$')" \
+  "wayland-protocols two-part tag pattern"
+
+# Compat gate strips non-numeric tag prefixes before comparing.
+cat >"${tmp}/CMakeLists3.txt" <<'EOF'
+pkg_check_modules(deps REQUIRED IMPORTED_TARGET
+  xkbcommon>=1.11.0
+  wayland-protocols>=1.47)
+EOF
+out="$(bash -c "
+  source lib/00-config.sh; source lib/01-log.sh
+  source scripts/60-hyprland.sh
+  HYPR_RESOLVED_TAG=([xkbcommon]=xkbcommon-1.11.0 [wayland-protocols]=1.47)
+  check_compat '${tmp}/CMakeLists3.txt'")"
+assert_contains "${out}" "xkbcommon              1.11.0       1.11.0       OK" \
+  "prefixed tag compares as plain version"
+assert_contains "${out}" "wayland-protocols      1.47         1.47         OK" \
+  "two-part tag passes the gate"
+
 finish_test

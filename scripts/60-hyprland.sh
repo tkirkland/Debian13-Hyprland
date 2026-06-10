@@ -13,14 +13,17 @@ fi
 
 HYPR_SRC_DIR="/var/tmp/hypr-deb-build"
 
-# Latest stable release tag (vX.Y.Z or X.Y.Z; rc/alpha/nightly excluded).
+# Latest stable release tag. Default pattern: vX.Y.Z or X.Y.Z
+# (rc/alpha/nightly excluded). $2 overrides the pattern for repos with
+# other schemes (see HYPR_TAG_PATTERN).
 resolve_latest_release_tag() {
-  local repo_url="$1" raw="" tag=""
+  local repo_url="$1" pattern="${2:-}" raw="" tag=""
+  [[ -n "${pattern}" ]] || pattern='^v?[0-9]+\.[0-9]+\.[0-9]+$'
   raw="$(git ls-remote --tags --refs "${repo_url}")" ||
     fatal "git ls-remote failed for ${repo_url} (network/URL problem)."
   tag="$(printf '%s\n' "${raw}" |
     awk -F/ '{print $NF}' |
-    grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
+    grep -E "${pattern}" |
     sort -V | tail -n1 || true)"
   [[ -n "${tag}" ]] || fatal "No release tag found for ${repo_url}"
   printf '%s\n' "${tag}"
@@ -53,7 +56,10 @@ check_compat() {
   printf '  %-22s %-12s %-12s %s\n' "dependency" "required>=" "resolved" "status"
   for name in "${!HYPR_RESOLVED_TAG[@]}"; do
     required="$(extract_min_version "${cmake_file}" "${name}")"
-    resolved="${HYPR_RESOLVED_TAG[${name}]#v}"
+    # Strip any non-numeric tag prefix ('v', 'xkbcommon-', ...) so the
+    # comparison sees a plain version.
+    resolved="${HYPR_RESOLVED_TAG[${name}]}"
+    resolved="${resolved#"${resolved%%[0-9]*}"}"
     if [[ -z "${required}" ]]; then
       printf '  %-22s %-12s %-12s %s\n' "${name}" "-" "${resolved}" "n/a"
       continue
@@ -74,7 +80,8 @@ resolve_all_tags() {
   local name="" tag=""
   if ((NETWORK_AVAILABLE)); then
     for name in "${HYPR_BUILD_ORDER[@]}"; do
-      tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}")"
+      tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" \
+        "${HYPR_TAG_PATTERN[${name}]:-}")"
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       info "Resolved ${name} -> ${tag}"
     done
@@ -121,9 +128,11 @@ install_build_deps() {
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
 }
 
-# Builds CMake projects (the hyprwm stack) and meson projects (uwsm).
+# Builds CMake projects (the hyprwm stack) and meson projects (xkbcommon,
+# wayland-protocols, uwsm).
 build_one() {
   local name="$1"
+  local meson_args="${HYPR_MESON_ARGS[${name}]:-}"
   info "Building ${name} ${HYPR_RESOLVED_TAG[${name}]}..."
   in_target "
     set -e
@@ -134,7 +143,7 @@ build_one() {
       cmake --build build -j\"\$(nproc)\"
       cmake --install build
     elif [[ -f meson.build ]]; then
-      meson setup build --prefix=/usr/local --buildtype=release
+      meson setup build --prefix=/usr/local --buildtype=release ${meson_args}
       meson install -C build
     else
       echo 'No CMakeLists.txt or meson.build in ${name}' >&2

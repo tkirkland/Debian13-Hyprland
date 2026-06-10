@@ -103,9 +103,13 @@ KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
 # Build order satisfies the dependency graph; hyprland after its deps.
-# uwsm is independent of the hyprwm graph (and not packaged in Debian),
-# so it builds last.
+# xkbcommon and wayland-protocols are built first because Debian 13's
+# packages are too old for current Hyprland (xkbcommon>=1.11,
+# wayland-protocols>=1.47). uwsm is independent of the hyprwm graph (and
+# not packaged in Debian), so it builds last.
 HYPR_BUILD_ORDER=(
+  xkbcommon
+  wayland-protocols
   hyprwayland-scanner
   hyprutils
   hyprlang
@@ -119,6 +123,8 @@ HYPR_BUILD_ORDER=(
 # Source repository per component. Keys are quoted so formatters cannot
 # mangle the hyphenated names into invalid subscripts.
 declare -A HYPR_REPO_URL=(
+  ["xkbcommon"]="https://github.com/xkbcommon/libxkbcommon"
+  ["wayland-protocols"]="https://gitlab.freedesktop.org/wayland/wayland-protocols"
   ["hyprwayland-scanner"]="${HYPR_GIT_BASE}/hyprwayland-scanner"
   ["hyprutils"]="${HYPR_GIT_BASE}/hyprutils"
   ["hyprlang"]="${HYPR_GIT_BASE}/hyprlang"
@@ -128,6 +134,17 @@ declare -A HYPR_REPO_URL=(
   ["aquamarine"]="${HYPR_GIT_BASE}/aquamarine"
   ["hyprland"]="${HYPR_GIT_BASE}/Hyprland"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
+)
+# Release-tag pattern per component when it differs from the default
+# v-prefixed semver (xkbcommon tags 'xkbcommon-X.Y.Z'; wayland-protocols
+# tags plain 'X.YY').
+declare -A HYPR_TAG_PATTERN=(
+  ["xkbcommon"]='^xkbcommon-[0-9]+\.[0-9]+\.[0-9]+$'
+  ["wayland-protocols"]='^[0-9]+\.[0-9]+$'
+)
+# Extra meson options per meson-built component.
+declare -A HYPR_MESON_ARGS=(
+  ["xkbcommon"]="-Denable-docs=false"
 )
 # Filled by the hyprland phase: name -> resolved tag.
 declare -A HYPR_RESOLVED_TAG=()
@@ -142,6 +159,7 @@ HYPR_BUILD_PACKAGES=(
   glslang-tools glslang-dev libudev-dev libseat-dev libdisplay-info-dev
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
+  libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
   libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
@@ -156,7 +174,7 @@ TARGET_BASE_PACKAGES=(
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd kitty
   python3 python3-xdg whiptail dbus-user-session
-  intel-microcode amd64-microcode hwdata xwayland
+  intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
 # zfs-dkms must build against the RUNNING kernel's headers. The

@@ -79,7 +79,7 @@ cache_populate_sources() {
   : >"${manifest}"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     repo="${HYPR_REPO_URL[${name}]}"
-    tag="$(resolve_latest_release_tag "${repo}")"
+    tag="$(resolve_latest_release_tag "${repo}" "${HYPR_TAG_PATTERN[${name}]:-}")"
     info "Caching ${name} ${tag}"
     clone="${CACHE_DIR}/sources/${name}-${tag}"
     rm -rf "${clone}"
