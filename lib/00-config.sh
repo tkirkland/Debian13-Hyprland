@@ -119,6 +119,7 @@ HYPR_BUILD_ORDER=(
   hyprcursor
   hyprgraphics
   hyprland-protocols
+  hyprwire
   aquamarine
   hyprland
   uwsm
@@ -135,6 +136,7 @@ declare -A HYPR_REPO_URL=(
   ["hyprcursor"]="${HYPR_GIT_BASE}/hyprcursor"
   ["hyprgraphics"]="${HYPR_GIT_BASE}/hyprgraphics"
   ["hyprland-protocols"]="${HYPR_GIT_BASE}/hyprland-protocols"
+  ["hyprwire"]="${HYPR_GIT_BASE}/hyprwire"
   ["aquamarine"]="${HYPR_GIT_BASE}/aquamarine"
   ["hyprland"]="${HYPR_GIT_BASE}/Hyprland"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
