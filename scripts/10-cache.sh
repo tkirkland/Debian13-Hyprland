@@ -71,16 +71,23 @@ cache_index_repo() {
   )
 }
 
+# GitHub's tag tarballs omit git submodules (Hyprland vendors udis86 that
+# way), so sources are cached from recursive clones, not codeload tarballs.
 cache_populate_sources() {
-  local name="" repo="" tag="" manifest="${CACHE_DIR}/sources/MANIFEST"
+  local name="" repo="" tag="" clone="" manifest="${CACHE_DIR}/sources/MANIFEST"
   mkdir -p "${CACHE_DIR}/sources"
   : >"${manifest}"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     repo="${HYPR_REPO_URL[${name}]}"
     tag="$(resolve_latest_release_tag "${repo}")"
     info "Caching ${name} ${tag}"
-    curl -fsSL -o "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" \
-      "${repo}/archive/refs/tags/${tag}.tar.gz"
+    clone="${CACHE_DIR}/sources/${name}-${tag}"
+    rm -rf "${clone}"
+    git clone --depth 1 --branch "${tag}" --recurse-submodules \
+      --shallow-submodules "${repo}" "${clone}"
+    tar -czf "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" \
+      --exclude-vcs -C "${CACHE_DIR}/sources" "${name}-${tag}"
+    rm -rf "${clone}"
     echo "${name} ${tag}" >>"${manifest}"
   done
 }

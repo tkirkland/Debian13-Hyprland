@@ -96,12 +96,15 @@ stage_source() {
   local tag="${HYPR_RESOLVED_TAG[${name}]}" dest="" tarball=""
   dest="${TARGET}${HYPR_SRC_DIR}/${name}"
   tarball="${CACHE_DIR}/sources/${name}-${tag}.tar.gz"
-  mkdir -p "${dest}"
+  rm -rf "${dest}"
   if [[ -f "${tarball}" ]]; then
+    mkdir -p "${dest}"
     tar -xzf "${tarball}" -C "${dest}" --strip-components=1
   elif ((NETWORK_AVAILABLE)); then
-    curl -fsSL "${HYPR_REPO_URL[${name}]}/archive/refs/tags/${tag}.tar.gz" |
-      tar -xz -C "${dest}" --strip-components=1
+    # Clone, not a codeload tarball: tag tarballs omit git submodules
+    # (Hyprland needs subprojects/udis86).
+    git clone --depth 1 --branch "${tag}" --recurse-submodules \
+      --shallow-submodules "${HYPR_REPO_URL[${name}]}" "${dest}"
   else
     fatal "No cached source for ${name} ${tag} and no network."
   fi

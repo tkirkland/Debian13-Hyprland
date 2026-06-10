@@ -139,7 +139,7 @@ HYPR_BUILD_PACKAGES=(
   build-essential cmake meson ninja-build pkg-config git
   wayland-protocols libwayland-dev libxkbcommon-dev libinput-dev
   libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev
-  glslang-tools libudev-dev libseat-dev libdisplay-info-dev
+  glslang-tools glslang-dev libudev-dev libseat-dev libdisplay-info-dev
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
   libpugixml-dev libre2-dev
