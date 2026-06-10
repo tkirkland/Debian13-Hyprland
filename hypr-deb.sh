@@ -99,7 +99,13 @@ main() {
   done
   CURRENT_PHASE="cleanup"
   phase_cleanup
+  # A completed install has no resume state worth keeping: clearing the
+  # stamps (and saved disk selection) makes an immediate re-run a genuine
+  # fresh install — still behind the destructive confirmation gate —
+  # instead of a confusing all-phases-skipped no-op.
+  rm -rf "${STATE_DIR}"
   info "Installation complete. Reboot into '${BOOTLOADER}'."
+  info "Phase state cleared; a re-run starts a fresh install."
 }
 
 main "$@"

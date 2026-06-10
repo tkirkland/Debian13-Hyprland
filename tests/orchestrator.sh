@@ -40,6 +40,12 @@ out="$(STATE_DIR="$(mktemp -d)" bash -c '
   source lib/03-state.sh; source lib/04-chroot-mounts.sh
   source scripts/30-bootstrap.sh
   ensure_target_ready')"
-assert_eq "" "${out}" "ensure_target_ready no-op without bootstrap stamp"
+assert_eq "" "${out}" "ensure_target_ready no-op when no pool exists"
+
+# Success must clear resume state so an immediate re-run is a fresh
+# install (behind the destroy gate), not an all-phases-skipped no-op.
+# shellcheck disable=SC2016  # the needle is a literal source-code snippet
+assert_contains "$(cat hypr-deb.sh)" 'rm -rf "${STATE_DIR}"' \
+  "completed install clears phase state"
 
 finish_test
