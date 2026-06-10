@@ -115,6 +115,7 @@ HYPR_BUILD_ORDER=(
   wayland
   wayland-protocols
   xkbcommon
+  lua
   hyprwayland-scanner
   hyprutils
   hyprlang
@@ -131,6 +132,9 @@ HYPR_BUILD_ORDER=(
 declare -A HYPR_REPO_URL=(
   ["wayland"]="https://gitlab.freedesktop.org/wayland/wayland"
   ["xkbcommon"]="https://github.com/xkbcommon/libxkbcommon"
+  # Hyprland needs lua>=5.5 (<5.6); trixie tops out at lua5.4. Built by
+  # build_custom_lua (plain-Makefile project, no cmake/meson, no .pc).
+  ["lua"]="https://github.com/lua/lua"
   ["wayland-protocols"]="https://gitlab.freedesktop.org/wayland/wayland-protocols"
   ["hyprwayland-scanner"]="${HYPR_GIT_BASE}/hyprwayland-scanner"
   ["hyprutils"]="${HYPR_GIT_BASE}/hyprutils"

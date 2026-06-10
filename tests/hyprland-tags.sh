@@ -133,4 +133,13 @@ assert_contains "${out}" "xkbcommon              1.11.0       1.11.0       OK" \
 assert_contains "${out}" "wayland-protocols      1.47         1.47         OK" \
   "two-part tag passes the gate"
 
+# Components with a build_custom_<name> function bypass cmake/meson.
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh
+  source scripts/60-hyprland.sh
+  declare -f build_custom_lua >/dev/null && echo has-custom
+  declare -f build_one | grep -q custom_fn && echo dispatches')"
+assert_contains "${out}" "has-custom" "custom lua build exists"
+assert_contains "${out}" "dispatches" "build_one dispatches custom builds"
+
 finish_test

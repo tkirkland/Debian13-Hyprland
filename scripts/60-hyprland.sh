@@ -149,10 +149,62 @@ install_build_deps() {
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
 }
 
-# Builds CMake projects (the hyprwm stack) and meson projects (xkbcommon,
-# wayland-protocols, uwsm).
+# Lua ships a plain Makefile, no pkg-config file, and (post-5.3) no
+# lua.hpp. Compile a static PIC library directly (it links into the PIE
+# Hyprland executable), install headers, and generate the lua.pc that
+# pkg_search_module('lua>=5.5') needs. The interpreter/compiler mains and
+# the amalgamation unit are excluded; readline is not needed for the
+# library. Handles both the github mirror layout (sources at the repo
+# root) and tarball layout (src/).
+build_custom_lua() {
+  local ver="${HYPR_RESOLVED_TAG[lua]#v}"
+  info "Building lua ${ver} (static PIC lib + pkg-config file)..."
+  in_target "
+    set -e
+    cd '${HYPR_SRC_DIR}/lua'
+    [[ -d src ]] && cd src
+    rm -f ./*.o
+    for f in *.c; do
+      case \"\${f}\" in lua.c | luac.c | onelua.c) continue ;; esac
+      '${HYPR_CC}' -O2 -fPIC -DLUA_USE_LINUX -c \"\${f}\"
+    done
+    ar rcs liblua.a ./*.o
+    install -d /usr/local/include /usr/local/lib/pkgconfig
+    install -m644 lua.h luaconf.h lualib.h lauxlib.h /usr/local/include/
+    install -m644 liblua.a /usr/local/lib/
+  "
+  cat >"${TARGET}/usr/local/lib/pkgconfig/lua.pc" <<EOF
+prefix=/usr/local
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: Lua
+Description: Lua language engine
+Version: ${ver}
+Libs: -L\${libdir} -llua -lm -ldl
+Cflags: -I\${includedir}
+EOF
+  if [[ ! -f "${TARGET}/usr/local/include/lua.hpp" ]]; then
+    cat >"${TARGET}/usr/local/include/lua.hpp" <<'EOF'
+// lua.hpp shim: upstream stopped shipping it after Lua 5.3.
+extern "C" {
+#include "lua.h"
+#include "lualib.h"
+#include "lauxlib.h"
+}
+EOF
+  fi
+}
+
+# Builds CMake projects (the hyprwm stack), meson projects (xkbcommon,
+# wayland-protocols, uwsm), and components with a build_custom_<name>
+# override (lua).
 build_one() {
-  local name="$1"
+  local name="$1" custom_fn="build_custom_${1//-/_}"
+  if declare -f "${custom_fn}" >/dev/null; then
+    "${custom_fn}"
+    return 0
+  fi
   local meson_args="${HYPR_MESON_ARGS[${name}]:-}"
   # Empty --jobs means one job per CPU (expanded inside the target).
   local jobs="${HYPR_BUILD_JOBS:-}"
