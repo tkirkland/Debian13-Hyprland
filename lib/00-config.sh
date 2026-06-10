@@ -32,11 +32,59 @@ ARCH="${ARCH:-amd64}"
 MIRROR="${MIRROR:-http://deb.debian.org/debian}"
 TARGET="${TARGET:-/target}"
 
+# --- APT sources (deb822) -----------------------------------------------------
+# Debian 13 defaults are "main non-free-firmware"; contrib is added because the
+# zfs* DKMS packages (in both LIVE_TOOL_PACKAGES and TARGET_BASE_PACKAGES) live
+# there. non-free is intentionally NOT enabled.
+DEBIAN_COMPONENTS="${DEBIAN_COMPONENTS:-main contrib non-free-firmware}"
+SECURITY_MIRROR="${SECURITY_MIRROR:-http://security.debian.org/debian-security}"
+
+# write_debian_sources [root]
+#   root: "" or "/" for the live environment, "$TARGET" for the installed
+#   system. Completely rewrites apt's source configuration under <root>:
+#     - writes a deb822 debian.sources (release, -updates, -security suites)
+#     - neutralises debootstrap's legacy one-line /etc/apt/sources.list so it
+#       can't re-introduce duplicate or narrower entries
+#   Each file is backed up to <file>.orig once (first write only) so re-runs
+#   don't clobber the real original. Run `apt update` afterwards.
+write_debian_sources() {
+  local root="${1:-}"
+  local dir="${root%/}/etc/apt/sources.list.d"
+  local file="${dir}/debian.sources"
+
+  mkdir -p "$dir"
+  if [[ -e "$file" && ! -e "${file}.orig" ]]; then
+    cp -a "$file" "${file}.orig"
+  fi
+
+  cat >"$file" <<EOF
+Types: deb
+URIs: ${MIRROR}
+Suites: ${SUITE} ${SUITE}-updates
+Components: ${DEBIAN_COMPONENTS}
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: ${SECURITY_MIRROR}
+Suites: ${SUITE}-security
+Components: ${DEBIAN_COMPONENTS}
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+
+  # debootstrap writes a legacy one-line sources.list; empty it so the deb822
+  # file above is the sole authority and apt can't see duplicate suites.
+  local legacy="${root%/}/etc/apt/sources.list"
+  if [[ -e "$legacy" && ! -e "${legacy}.orig" ]]; then
+    cp -a "$legacy" "${legacy}.orig"
+  fi
+  printf '# Managed by hypr-deb: APT sources are defined in\n# /etc/apt/sources.list.d/debian.sources\n' >"$legacy"
+}
+
 # --- System identity ---------------------------------------------------------
 TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
-USER_PASSWORD="${USER_PASSWORD:-}"   # empty = interactive adduser prompt
-ROOT_PASSWORD="${ROOT_PASSWORD:-}"   # empty = root stays locked
+USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
+ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
 
@@ -67,12 +115,12 @@ HYPR_BUILD_ORDER=(
 )
 # Repo name on github (differs in case for Hyprland itself).
 declare -A HYPR_REPO_NAME=(
-  [hyprwayland-scanner]="hyprwayland-scanner"
+  [hyprwayland - scanner]="hyprwayland-scanner"
   [hyprutils]="hyprutils"
   [hyprlang]="hyprlang"
   [hyprcursor]="hyprcursor"
   [hyprgraphics]="hyprgraphics"
-  [hyprland-protocols]="hyprland-protocols"
+  [hyprland - protocols]="hyprland-protocols"
   [aquamarine]="aquamarine"
   [hyprland]="Hyprland"
 )
@@ -103,10 +151,16 @@ TARGET_BASE_PACKAGES=(
   intel-microcode amd64-microcode hwdata xwayland
 )
 
+# zfs-dkms must build against the RUNNING kernel's headers. The
+# linux-headers-amd64 metapackage tracks the archive's NEWEST kernel, which
+# is often newer than a live ISO's running kernel — DKMS would then build
+# modules only for a kernel that isn't running and modprobe would fail.
+LIVE_KERNEL_HEADERS="linux-headers-$(uname -r)"
+
 # Live-environment tools the preflight must be able to install offline.
 LIVE_TOOL_PACKAGES=(
   debootstrap gdisk parted mdadm dosfstools zfsutils-linux zfs-dkms
-  linux-headers-amd64 apt-utils git curl efibootmgr rsync
+  "${LIVE_KERNEL_HEADERS}" apt-utils git curl efibootmgr rsync
 )
 
 # --- Behaviour ------------------------------------------------------------------
@@ -116,7 +170,7 @@ VERBOSE="${VERBOSE:-0}"
 OFFLINE="${OFFLINE:-0}"
 BUILD_ON_FIRSTBOOT="${BUILD_ON_FIRSTBOOT:-0}"
 KEEP_BUILD_DEPS="${KEEP_BUILD_DEPS:-0}"
-NETWORK_AVAILABLE=""   # set by preflight: 1 or 0
+NETWORK_AVAILABLE="" # set by preflight: 1 or 0
 STATE_DIR="${STATE_DIR:-/run/hypr-deb/state}"
 LOG_DIR="${LOG_DIR:-/tmp/hypr-deb-logs}"
 LOG_FILE=""

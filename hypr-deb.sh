@@ -51,6 +51,7 @@ main() {
   parse_args "$@"
   state_init "${FRESH}"
   setup_logging "${LOG_DIR}"
+  write_debian_sources
   trap on_error ERR
   trap on_exit EXIT
 

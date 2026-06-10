@@ -149,7 +149,8 @@ detect_live_environment() {
 }
 
 bootstrap_live_tools() {
-  local missing=() pkg=""
+  local missing=() pkg="" need_zfs_build=0 running_kernel=""
+  running_kernel="$(uname -r)"
   local -A pkg_probe=(
     [debootstrap]=debootstrap [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
     [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool [apt-utils]=apt-ftparchive
@@ -158,9 +159,12 @@ bootstrap_live_tools() {
   for pkg in "${!pkg_probe[@]}"; do
     command -v "${pkg_probe[${pkg}]}" >/dev/null 2>&1 || missing+=("${pkg}")
   done
-  # zfs-dkms has no binary probe of its own: presence of the module suffices.
+  # zfs-dkms has no binary probe of its own: a loadable module for the
+  # RUNNING kernel is the requirement. Headers must match the running
+  # kernel, not the archive's newest (see LIVE_KERNEL_HEADERS).
   if ! modinfo zfs >/dev/null 2>&1; then
-    missing+=(zfs-dkms linux-headers-amd64)
+    need_zfs_build=1
+    missing+=(zfs-dkms "${LIVE_KERNEL_HEADERS}")
   fi
   ((${#missing[@]} == 0)) && {
     info "All live tools present."
@@ -170,13 +174,29 @@ bootstrap_live_tools() {
   info "Missing live tools: ${missing[*]}"
   if ((NETWORK_AVAILABLE)); then
     apt-get update || warn "apt-get update failed; trying install with existing lists."
+    if ((need_zfs_build)) &&
+      ! apt-cache show "${LIVE_KERNEL_HEADERS}" >/dev/null 2>&1; then
+      fatal "Mirror has no ${LIVE_KERNEL_HEADERS} — the live ISO's kernel" \
+        "(${running_kernel}) is older than the archive carries. Boot a live" \
+        "ISO matching the current Debian point release, or use an offline" \
+        "cache built for this kernel."
+    fi
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
   elif cache_repo_exists; then
     install_from_cache_repo "${missing[@]}"
   else
     fatal "No network and no cache; cannot install: ${missing[*]}"
   fi
-  modprobe zfs || fatal "ZFS kernel module unavailable after bootstrap."
+
+  if ! modprobe zfs 2>/dev/null; then
+    # zfs-dkms's postinst builds for kernels whose headers were present at
+    # install time; force a build for the running kernel if it was missed.
+    info "Building ZFS module for ${running_kernel} via dkms..."
+    dkms autoinstall -k "${running_kernel}" || true
+    modprobe zfs || fatal "ZFS module unavailable for the running kernel" \
+      "(${running_kernel}). zfs-dkms must build against this kernel's" \
+      "headers (${LIVE_KERNEL_HEADERS})."
+  fi
 }
 
 sync_clock() {

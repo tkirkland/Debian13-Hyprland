@@ -160,6 +160,13 @@ Caveat: offline live-session preflight installs zfs-dkms against the
 running live kernel, so the cache must have been built against the same
 live-ISO kernel version (matching `linux-headers`). This is checked.
 
+Online runs install `linux-headers-$(uname -r)` (the running kernel), not
+`linux-headers-amd64` (the archive's newest), because zfs-dkms must build
+for the kernel the live session is actually running. If the mirror no
+longer carries headers for the live ISO's kernel — typically because a
+newer point release shipped — preflight fails early with instructions to
+boot a current live ISO.
+
 Either way, the complete cache is copied into the installed system at
 `/var/cache/hypr-deb/` (with a README) so the target can rebuild Hyprland
 or reinstall packages fully offline later.
