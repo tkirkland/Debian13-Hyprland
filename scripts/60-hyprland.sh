@@ -136,6 +136,7 @@ build_one() {
   info "Building ${name} ${HYPR_RESOLVED_TAG[${name}]}..."
   in_target "
     set -e
+    export CC='${HYPR_CC}' CXX='${HYPR_CXX}'
     cd '${HYPR_SRC_DIR}/${name}'
     if [[ -f CMakeLists.txt ]]; then
       cmake -B build -DCMAKE_BUILD_TYPE=Release \

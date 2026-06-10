@@ -34,6 +34,10 @@ out="$(bash -c 'source lib/00-config.sh
   echo all-mapped')"
 assert_eq "all-mapped" "${out}" "every build-order entry has a repo URL"
 
+out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_CC} ${HYPR_CXX}"')"
+assert_eq "gcc-15 g++-15" "${out}" \
+  "stack builds with GCC 15 (trixie's GCC 14 libstdc++ lacks append_range)"
+
 # uwsm is not in the Debian archive; it must never be in the apt lists.
 out="$(bash -c 'source lib/00-config.sh
   printf "%s\n" "${TARGET_BASE_PACKAGES[@]}" "${HYPR_BUILD_PACKAGES[@]}"')"

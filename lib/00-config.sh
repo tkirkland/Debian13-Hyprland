@@ -153,6 +153,12 @@ declare -A HYPR_MESON_ARGS=(
   ["wayland"]="-Ddocumentation=false -Dtests=false"
   ["xkbcommon"]="-Denable-docs=false"
 )
+
+# Compiler for the source-built stack. Trixie's default GCC 14 libstdc++
+# lacks C++23 container-ranges members (std::vector::append_range) that
+# current hyprwire/Hyprland use; GCC 15 ships in the archive alongside it.
+HYPR_CC="${HYPR_CC:-gcc-15}"
+HYPR_CXX="${HYPR_CXX:-g++-15}"
 # Filled by the hyprland phase: name -> resolved tag.
 declare -A HYPR_RESOLVED_TAG=()
 
@@ -167,7 +173,7 @@ HYPR_BUILD_PACKAGES=(
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
   libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
-  libffi-dev libexpat1-dev
+  libffi-dev libexpat1-dev gcc-15 g++-15
   libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
