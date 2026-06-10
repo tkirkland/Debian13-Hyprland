@@ -22,7 +22,7 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "xkbcommon wayland-protocols hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols aquamarine hyprland uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols aquamarine hyprland uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
 
 # Every build-order entry must map to a repo URL. Guards against assoc-array

@@ -103,13 +103,16 @@ KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
 # Build order satisfies the dependency graph; hyprland after its deps.
-# xkbcommon and wayland-protocols are built first because Debian 13's
-# packages are too old for current Hyprland (xkbcommon>=1.11,
-# wayland-protocols>=1.47). uwsm is independent of the hyprwm graph (and
-# not packaged in Debian), so it builds last.
+# wayland, wayland-protocols, and xkbcommon are built first because
+# Debian 13's packages are too old for current Hyprland (wayland-protocols
+# needs wayland-scanner>=1.25 vs trixie's 1.23; Hyprland needs
+# xkbcommon>=1.11 vs 1.7 and wayland-protocols>=1.47 vs 1.44). uwsm is
+# independent of the hyprwm graph (and not packaged in Debian), so it
+# builds last.
 HYPR_BUILD_ORDER=(
-  xkbcommon
+  wayland
   wayland-protocols
+  xkbcommon
   hyprwayland-scanner
   hyprutils
   hyprlang
@@ -123,6 +126,7 @@ HYPR_BUILD_ORDER=(
 # Source repository per component. Keys are quoted so formatters cannot
 # mangle the hyphenated names into invalid subscripts.
 declare -A HYPR_REPO_URL=(
+  ["wayland"]="https://gitlab.freedesktop.org/wayland/wayland"
   ["xkbcommon"]="https://github.com/xkbcommon/libxkbcommon"
   ["wayland-protocols"]="https://gitlab.freedesktop.org/wayland/wayland-protocols"
   ["hyprwayland-scanner"]="${HYPR_GIT_BASE}/hyprwayland-scanner"
@@ -144,6 +148,7 @@ declare -A HYPR_TAG_PATTERN=(
 )
 # Extra meson options per meson-built component.
 declare -A HYPR_MESON_ARGS=(
+  ["wayland"]="-Ddocumentation=false -Dtests=false"
   ["xkbcommon"]="-Denable-docs=false"
 )
 # Filled by the hyprland phase: name -> resolved tag.
@@ -160,6 +165,7 @@ HYPR_BUILD_PACKAGES=(
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
   libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
+  libffi-dev libexpat1-dev
   libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
