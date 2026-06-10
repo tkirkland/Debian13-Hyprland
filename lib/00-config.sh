@@ -2,8 +2,9 @@
 # shellcheck disable=SC2034  # globals defined here are consumed by the other
 # lib/ and scripts/ modules, which the orchestrator sources after this file.
 # Hypr-Deb installer configuration: defaults, fixed disk ids, derived values.
-# Every value can be overridden via environment before launch; flags in
-# lib/02-args.sh override both.
+# Most values can be overridden via environment variables before launching;
+# flags in lib/02-args.sh override both. Disk ids and target-side paths are
+# intentionally fixed.
 
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
@@ -33,7 +34,7 @@ TARGET="${TARGET:-/target}"
 
 # --- System identity ---------------------------------------------------------
 TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
-USERNAME="${USERNAME:-me}"
+TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}"   # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"   # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
@@ -110,6 +111,7 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
+FRESH="${FRESH:-0}"
 VERBOSE="${VERBOSE:-0}"
 OFFLINE="${OFFLINE:-0}"
 BUILD_ON_FIRSTBOOT="${BUILD_ON_FIRSTBOOT:-0}"

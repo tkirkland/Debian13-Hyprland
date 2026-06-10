@@ -342,7 +342,7 @@ TARGET="${TARGET:-/target}"
 
 # --- System identity ---------------------------------------------------------
 TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
-USERNAME="${USERNAME:-me}"
+TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}"   # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}"   # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
@@ -1590,7 +1590,7 @@ create_pool_and_datasets() {
   zfs create -o canmount=off -o mountpoint=none "${POOL_NAME}/ROOT"
   zfs create -o canmount=noauto -o mountpoint=/ "${ROOT_DATASET}"
   zfs create -u -o mountpoint=/home "${POOL_NAME}/home"
-  zfs create -u -o mountpoint="/home/${USERNAME}/Downloads" \
+  zfs create -u -o mountpoint="/home/${TARGET_USERNAME}/Downloads" \
     -o compression=off "${POOL_NAME}/home/Downloads"
   zfs create -u -o mountpoint=/srv "${POOL_NAME}/srv"
   zfs create -o canmount=off -o mountpoint=none "${POOL_NAME}/var"
@@ -1867,17 +1867,17 @@ install_base_packages() {
 create_user() {
   in_target "
     set -e
-    id '${USERNAME}' >/dev/null 2>&1 ||
-      adduser --disabled-password --gecos '' '${USERNAME}'
-    usermod -aG sudo '${USERNAME}'
+    id '${TARGET_USERNAME}' >/dev/null 2>&1 ||
+      adduser --disabled-password --gecos '' '${TARGET_USERNAME}'
+    usermod -aG sudo '${TARGET_USERNAME}'
   "
   if [[ -n "${USER_PASSWORD}" ]]; then
-    echo "${USERNAME}:${USER_PASSWORD}" | chroot "${TARGET}" chpasswd
+    echo "${TARGET_USERNAME}:${USER_PASSWORD}" | chroot "${TARGET}" chpasswd
   elif ((IS_INTERACTIVE)); then
-    info "Set a password for ${USERNAME}:"
-    chroot "${TARGET}" passwd "${USERNAME}"
+    info "Set a password for ${TARGET_USERNAME}:"
+    chroot "${TARGET}" passwd "${TARGET_USERNAME}"
   else
-    warn "No USER_PASSWORD and non-interactive: ${USERNAME} has no password."
+    warn "No USER_PASSWORD and non-interactive: ${TARGET_USERNAME} has no password."
   fi
   if [[ -n "${ROOT_PASSWORD}" ]]; then
     echo "root:${ROOT_PASSWORD}" | chroot "${TARGET}" chpasswd
@@ -2165,8 +2165,8 @@ command = "agreety --cmd 'uwsm start -- hyprland.desktop'"
 user = "_greetd"
 EOF
   # Minimal valid Hyprland config for the user.
-  mkdir -p "${TARGET}/home/${USERNAME}/.config/hypr"
-  cat >"${TARGET}/home/${USERNAME}/.config/hypr/hyprland.conf" <<'EOF'
+  mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/hypr"
+  cat >"${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.conf" <<'EOF'
 # Minimal Hypr-Deb starter config.
 monitor = ,preferred,auto,1
 $mod = SUPER
@@ -2176,7 +2176,7 @@ bind = $mod SHIFT, E, exit,
 EOF
   in_target "
     set -e
-    chown -R '${USERNAME}:${USERNAME}' '/home/${USERNAME}'
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
     systemctl enable greetd
     systemctl set-default graphical.target
   "
@@ -2589,7 +2589,7 @@ phase_verify() {
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "uwsm present" in_target "command -v uwsm"
   vcheck "user hyprland.conf exists" \
-    test -f "${TARGET}/home/${USERNAME}/.config/hypr/hyprland.conf"
+    test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.conf"
 
   vcheck "kernel on ZFS /boot" \
     bash -c "ls ${TARGET}/boot/vmlinuz-* >/dev/null 2>&1"

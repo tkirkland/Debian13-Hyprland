@@ -29,6 +29,6 @@ run_phase() {
     return 0
   fi
   info "=== Phase: ${name} ==="
-  "${func}"
+  "${func}" || fatal "Phase ${name} failed."
   mark_phase_done "${name}"
 }

@@ -34,7 +34,6 @@ EOF
 
 parse_args() {
   local arg=""
-  FRESH=0
   for arg in "$@"; do
     case "${arg}" in
       --bootloader=*)
@@ -78,7 +77,7 @@ require_bootloader_choice() {
   echo "  2) grub          GRUB (reads kernel copies from the ESP)"
   echo "  3) systemd-boot  systemd-boot (reads kernel copies from the ESP)"
   while true; do
-    read -r -p "Choice [1-3]: " choice
+    read -r -p "Choice [1-3]: " choice || fatal "No input (EOF) while selecting bootloader."
     case "${choice}" in
       1) BOOTLOADER="zbm" ;;
       2) BOOTLOADER="grub" ;;
@@ -104,6 +103,6 @@ confirm_destruction() {
     echo "VM (${VIRT_TYPE})")"
   echo ""
   local answer=""
-  read -r -p "Type 'destroy' to continue: " answer
+  read -r -p "Type 'destroy' to continue: " answer || fatal "No input (EOF) at confirmation."
   [[ "${answer}" == "destroy" ]] || fatal "Aborted by user."
 }

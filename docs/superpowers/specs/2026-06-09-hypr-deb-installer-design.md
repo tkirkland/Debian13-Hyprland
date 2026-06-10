@@ -230,7 +230,7 @@ cleanup     unmount binds, export pool
 Flags: `--bootloader=`, `--build-on-firstboot`, `--offline`, `--phase=`,
 `--yes`, `--verbose`, `--fresh`, `--keep-build-deps`, `--mirror=`,
 `--cache-dir=`, plus the
-reference env overrides (`POOL_NAME`, `TARGET_HOSTNAME`, `USERNAME`,
+reference env overrides (`POOL_NAME`, `TARGET_HOSTNAME`, `TARGET_USERNAME`,
 `TIMEZONE`, `LOCALE`, sizes, ...).
 
 Error handling: ERR trap reporting phase + failing command; EXIT trap always
