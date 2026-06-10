@@ -109,6 +109,8 @@ phase_verify() {
     "uuid=\$(grep -oP 'UUID=\K[^ ]+(?= /boot/efi)' '${TARGET}/etc/fstab');
      [[ -n \"\${uuid}\" ]] && blkid -U \"\${uuid}\""
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
+  vcheck "zfs-zed enabled (pool fault reporting)" in_target \
+    "systemctl is-enabled zfs-zed"
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
      grep -qx '${ROOT_DATASET}'"

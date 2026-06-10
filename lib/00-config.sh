@@ -235,8 +235,12 @@ UWSM_RUNTIME_PACKAGES=(
 # the target kernel, dkms silently skips the zfs module build and the
 # system drops to the initramfs shell at first boot. Image and headers
 # metapackages come from the same archive snapshot, so they match.
+# zfs-zed is pinned explicitly (normally only a Recommends of
+# zfsutils-linux): it is the daemon that reports device faults and scrub
+# results on the raidz1 pool.
 TARGET_BASE_PACKAGES=(
   linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
+  zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd kitty
   "${UWSM_RUNTIME_PACKAGES[@]}"
