@@ -42,25 +42,34 @@ out="$(cat "${tmp}/target/usr/local/sbin/hypr-deb-sync-esp")"
 assert_contains "${out}" "vmlinuz" "hook copies kernel"
 assert_contains "${out}" "initrd.img" "hook copies initrd"
 
-# ZBM fetch prefers the direct GitHub release asset for the latest tag.
+# ZBM fetch resolves the real asset URL via the GitHub API and must pick
+# the release variant, not recovery (whose URL also contains '/releases/').
 mkdir -p "${tmp}/bin"
 export FAKE_LOG="${tmp}/curl.log"
-make_fake "${tmp}/bin" git 'cat <<EOF
-sha	refs/tags/v2.9.0
-sha	refs/tags/v3.0.1
-EOF'
 # shellcheck disable=SC2016  # fake body must keep $*/${FAKE_LOG} literal until run
-make_fake "${tmp}/bin" curl 'echo "curl $*" >> "${FAKE_LOG}"; exit 0'
+make_fake "${tmp}/bin" curl 'echo "curl $*" >> "${FAKE_LOG}"
+case "$*" in
+  *api.github.com*)
+    echo "      \"browser_download_url\": \"https://github.com/zbm-dev/zfsbootmenu/releases/download/v3.1.0/zfsbootmenu-recovery-x86_64-v3.1.0.EFI\""
+    echo "      \"browser_download_url\": \"https://github.com/zbm-dev/zfsbootmenu/releases/download/v3.1.0/zfsbootmenu-release-x86_64-v3.1.0.EFI\""
+    ;;
+esac
+exit 0'
 PATH="${tmp}/bin:${PATH}" bash -c "
   source lib/00-config.sh
   source lib/01-log.sh
-  source scripts/60-hyprland.sh
   source scripts/50-boot.sh
   fetch_zbm_efi '${tmp}/zbm.EFI'
 " >/dev/null
 assert_contains "$(cat "${FAKE_LOG}")" \
-  "https://github.com/zbm-dev/zfsbootmenu/releases/download/v3.0.1/zfsbootmenu-release-x86_64-v3.0.1.EFI" \
-  "zbm fetch uses direct release asset for latest tag"
+  "-o ${tmp}/zbm.EFI https://github.com/zbm-dev/zfsbootmenu/releases/download/v3.1.0/zfsbootmenu-release-x86_64-v3.1.0.EFI" \
+  "zbm fetch downloads the API-resolved release asset"
+if grep -- "-o ${tmp}/zbm.EFI.*recovery" "${FAKE_LOG}" >/dev/null; then
+  echo "  FAIL: recovery asset must not be selected" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: recovery asset not selected"
+fi
 assert_contains "$(cat "${FAKE_LOG}")" "--retry 5" \
   "zbm fetch retries transient errors"
 

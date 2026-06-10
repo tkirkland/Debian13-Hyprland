@@ -83,22 +83,31 @@ create_nvram_entry() { # $1=label $2=loader-path (backslash form)
 
 # --- ZFSBootMenu -------------------------------------------------------------
 
-# Download the ZFSBootMenu release EFI to $1. Resolves the latest release
-# tag and fetches the GitHub asset directly (with retries — the
-# get.zfsbootmenu.org redirector intermittently returns 5xx); the
-# redirector remains as fallback. Also used by the cache phase.
+# Download the ZFSBootMenu release EFI to $1. Asset filenames vary between
+# releases, so the GitHub API supplies the real URL of the x86_64 release
+# EFI (the 'recovery' variant is excluded by the 'release' match); the
+# get.zfsbootmenu.org redirector is the fallback. Retries cover its
+# intermittent 5xx responses. Also used by the cache phase.
 fetch_zbm_efi() {
-  local dest="$1" tag="" url=""
-  if tag="$(resolve_latest_release_tag "${ZBM_REPO_URL}" 2>/dev/null)"; then
-    url="${ZBM_REPO_URL}/releases/download/${tag}/zfsbootmenu-release-x86_64-${tag}.EFI"
-    info "Fetching ZFSBootMenu ${tag}..."
+  local dest="$1" api="" url=""
+  api="${ZBM_REPO_URL/github.com/api.github.com\/repos}/releases/latest"
+  # The 'release' match must be confined to the filename: every asset URL
+  # contains '/releases/download/', which would also match the recovery
+  # variant.
+  url="$(curl -fsSL --retry 3 "${api}" 2>/dev/null |
+    grep -oE '"browser_download_url": *"[^"]+"' | cut -d'"' -f4 |
+    grep -E '/[^/]*release[^/]*x86_64[^/]*\.EFI$' | head -n1 || true)"
+  if [[ -n "${url}" ]]; then
+    info "Fetching ZFSBootMenu asset: ${url##*/}"
     if curl -fsSL --retry 5 --retry-all-errors -o "${dest}" "${url}"; then
       return 0
     fi
-    warn "Direct asset download failed (${url}); trying ${ZBM_EFI_URL}."
+    warn "Asset download failed (${url}); trying ${ZBM_EFI_URL}."
+  else
+    warn "Could not resolve a ZBM asset via the GitHub API; trying ${ZBM_EFI_URL}."
   fi
   curl -fsSL --retry 5 --retry-all-errors -o "${dest}" "${ZBM_EFI_URL}" ||
-    fatal "Could not download ZFSBootMenu (asset and redirector both failed)."
+    fatal "Could not download ZFSBootMenu (API asset and redirector both failed)."
 }
 
 install_zbm() {
