@@ -155,6 +155,21 @@ Source policy:
   builds, install to `/usr/local`, `ldconfig`. Remaining build deps
   (wayland, libinput, libdrm, mesa, etc.) come from Debian 13 packages.
 
+Build hygiene (clean install, lean target):
+
+- Builds run inside the target environment (chroot or firstboot) so binaries
+  link against exactly the userland that runs them; never in the live
+  overlay (tmpfs/RAM) and never copied in from a foreign userland.
+- Build trees and `DESTDIR` staging live under `/var/tmp` (own dataset,
+  snapshot-excluded) and are deleted after install.
+- The script records the exact build-dependency package set it installs;
+  after a successful build + verify it purges that set
+  (`apt-get purge` + `--autoremove`), leaving only Hyprland artifacts and
+  their runtime libraries. `--keep-build-deps` skips the purge for users
+  who intend to hack on Hyprland immediately.
+- The cached build-dep .debs remain in `/var/cache/hypr-deb`, so the
+  toolchain can be reinstalled offline whenever a rebuild is wanted.
+
 Build timing (`--build-on-firstboot`):
 
 - Default: build inside the target chroot during install; image boots ready.
@@ -213,7 +228,8 @@ cleanup     unmount binds, export pool
 ```
 
 Flags: `--bootloader=`, `--build-on-firstboot`, `--offline`, `--phase=`,
-`--yes`, `--verbose`, `--fresh`, `--mirror=`, `--cache-dir=`, plus the
+`--yes`, `--verbose`, `--fresh`, `--keep-build-deps`, `--mirror=`,
+`--cache-dir=`, plus the
 reference env overrides (`POOL_NAME`, `TARGET_HOSTNAME`, `USERNAME`,
 `TIMEZONE`, `LOCALE`, sizes, ...).
 
