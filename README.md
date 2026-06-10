@@ -70,7 +70,10 @@ Datasets follow the reference hierarchy: `PRECISION/ROOT/debian13`
 (bootfs), `home`, `home/Downloads`, `srv`, `var/cache`, `var/lib/docker`,
 `var/log`, `var/tmp`. Kernels live in `/boot` **on the root dataset** —
 there is no separate boot filesystem, so a snapshot captures kernel and
-modules atomically.
+modules atomically. The `PRECISION/var/lib/docker` dataset is created with
+`mountpoint=none` deliberately (for Docker's ZFS storage driver, which
+manages its own datasets); set a mountpoint manually if you want it as a
+plain directory.
 
 This **intentionally diverges** from `precision-zfs-dr.sh` layout parity:
 the separate `md/boot` array is removed (4 partitions become 3 on
@@ -117,7 +120,10 @@ A full run executes the phases in order; each phase stamps its completion
 under `/run/hypr-deb/state`, so a failed run resumes where it stopped
 (`--fresh` discards the stamps). `--phase=<name>` runs exactly one phase —
 preflight always runs first for safety, and single-phase runs skip stamps
-so a phase can be re-run explicitly. When resuming after a failure, the
+so a phase can be re-run explicitly. Because single-phase `--phase=<name>`
+runs do not write completion stamps, a later full run will re-execute
+those phases — for `storage` that is destructive (it re-wipes the disks).
+When resuming after a failure, the
 installer re-imports the ZFS pool and re-establishes the target mounts and
 chroot binds automatically.
 

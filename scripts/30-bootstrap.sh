@@ -5,6 +5,13 @@
 mount_target_tree() {
   info "Mounting target tree at ${TARGET}..."
   mkdir -p "${TARGET}"
+  # The pool may have been exported by the failure trap (or never imported
+  # in a standalone --phase=bootstrap re-run); import without mounting so
+  # the root dataset mounts first, below.
+  if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
+    zpool import -N -R "${TARGET}" "${POOL_NAME}" ||
+      fatal "Pool ${POOL_NAME} not imported and import failed."
+  fi
   zfs mount "${ROOT_DATASET}"
   zfs mount -a
   mkdir -p "${TARGET}${ESP_MOUNT}"
@@ -16,8 +23,10 @@ mount_target_tree() {
 # re-established before any later phase touches the target.
 ensure_target_ready() {
   phase_done bootstrap || return 0
+  # -N: never automount on import — canmount=on children mounting before
+  # the noauto root dataset would be shadowed by the root overlay-mount.
   if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
-    zpool import -R "${TARGET}" "${POOL_NAME}" ||
+    zpool import -N -R "${TARGET}" "${POOL_NAME}" ||
       fatal "Cannot import pool ${POOL_NAME} to resume."
   fi
   if ! mountpoint -q "${TARGET}"; then

@@ -54,9 +54,15 @@ main() {
   trap on_error ERR
   trap on_exit EXIT
 
+  # Preflight is never stamped/skipped: it sets per-run state
+  # (NETWORK_AVAILABLE, VIRT_TYPE, disk selection) that resumed runs need.
+  # It is idempotent by design.
   CURRENT_PHASE="preflight"
-  run_phase preflight phase_preflight
-  require_bootloader_choice
+  info "=== Phase: preflight ==="
+  phase_preflight
+  case "${RUN_PHASE}" in
+    full | boot | verify) require_bootloader_choice ;;
+  esac
 
   if [[ "${RUN_PHASE}" != "full" ]]; then
     CURRENT_PHASE="${RUN_PHASE}"

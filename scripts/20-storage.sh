@@ -161,6 +161,8 @@ create_pool_and_datasets() {
   zfs create -u -o mountpoint=/var/cache \
     -o com.sun:auto-snapshot=false "${POOL_NAME}/var/cache"
   zfs create -o canmount=off -o mountpoint=none "${POOL_NAME}/var/lib"
+  # mountpoint=none is deliberate: Docker's ZFS storage driver manages its
+  # own child datasets here; set a mountpoint manually for a plain directory.
   zfs create -o mountpoint=none "${POOL_NAME}/var/lib/docker"
   zfs create -u -o mountpoint=/var/log "${POOL_NAME}/var/log"
   zfs create -u -o mountpoint=/var/tmp \

@@ -105,7 +105,7 @@ TARGET_BASE_PACKAGES=(
 
 # Live-environment tools the preflight must be able to install offline.
 LIVE_TOOL_PACKAGES=(
-  debootstrap gdisk mdadm dosfstools zfsutils-linux zfs-dkms
+  debootstrap gdisk parted mdadm dosfstools zfsutils-linux zfs-dkms
   linux-headers-amd64 apt-utils git curl efibootmgr rsync
 )
 

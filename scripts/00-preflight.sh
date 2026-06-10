@@ -151,7 +151,7 @@ detect_live_environment() {
 bootstrap_live_tools() {
   local missing=() pkg=""
   local -A pkg_probe=(
-    [debootstrap]=debootstrap [gdisk]=sgdisk [mdadm]=mdadm
+    [debootstrap]=debootstrap [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
     [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool [apt-utils]=apt-ftparchive
     [git]=git [curl]=curl [efibootmgr]=efibootmgr [rsync]=rsync
   )

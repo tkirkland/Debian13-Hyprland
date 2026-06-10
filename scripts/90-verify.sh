@@ -35,6 +35,7 @@ phase_verify() {
       test -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
     vcheck "sources staged" \
       test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
+    vcheck "toolchain staged for firstboot" in_target "command -v cmake"
   else
     vcheck "Hyprland binary runs" in_target "/usr/local/bin/Hyprland --version"
     vcheck "Hyprland links resolve" in_target \
@@ -57,11 +58,16 @@ phase_verify() {
       vcheck "ZBM cmdline property" bash -c \
         "zfs get -H -o value org.zfsbootmenu:commandline '${ROOT_DATASET}' |
          grep -q rw"
+      vcheck "NVRAM entry (ZFSBootMenu)" bash -c \
+        "efibootmgr | grep -q 'ZFSBootMenu'"
       ;;
     grub)
       vcheck "GRUB EFI on ESP" test -f "${esp}/EFI/debian/grubx64.efi"
       vcheck "grub.cfg on ESP" test -f "${esp}/EFI/debian/grub/grub.cfg"
       vcheck "kernel copy on ESP" test -f "${esp}/EFI/debian/vmlinuz"
+      vcheck "initrd copy on ESP" test -f "${esp}/EFI/debian/initrd.img"
+      vcheck "NVRAM entry (debian)" bash -c \
+        "efibootmgr | grep -qE '^Boot[0-9A-F]{4}.* debian'"
       ;;
     systemd-boot)
       vcheck "sd-boot EFI on ESP" \
@@ -69,10 +75,11 @@ phase_verify() {
       vcheck "loader entry on ESP" \
         test -f "${esp}/loader/entries/debian.conf"
       vcheck "kernel copy on ESP" test -f "${esp}/EFI/debian/vmlinuz"
+      vcheck "initrd copy on ESP" test -f "${esp}/EFI/debian/initrd.img"
+      vcheck "NVRAM entry (Linux Boot Manager)" bash -c \
+        "efibootmgr | grep -q 'Linux Boot Manager'"
       ;;
   esac
-  vcheck "NVRAM entry exists" bash -c \
-    "efibootmgr | grep -qiE 'ZFSBootMenu|debian|Linux Boot Manager'"
 
   vcheck "fstab ESP UUID valid" bash -c \
     "uuid=\$(grep -oP 'UUID=\K[^ ]+(?= /boot/efi)' '${TARGET}/etc/fstab');
