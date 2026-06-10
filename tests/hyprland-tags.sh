@@ -26,6 +26,20 @@ out="$(PATH="${tmp}/bin:${PATH}" bash -c '
 assert_eq "v0.10.2" "${out}" \
   "picks semver-highest stable tag, skips rc and nightly"
 
+# Fake git serving only non-release tags: resolution must be fatal.
+mkdir -p "${tmp}/bin-nostable"
+make_fake "${tmp}/bin-nostable" git 'cat <<EOF
+sha	refs/tags/nightly
+EOF'
+resolve_nostable() {
+  PATH="${tmp}/bin-nostable:${PATH}" bash -c '
+    source lib/00-config.sh
+    source lib/01-log.sh
+    source scripts/60-hyprland.sh
+    resolve_latest_release_tag https://example.invalid/repo'
+}
+assert_fails "no stable tags is fatal" resolve_nostable
+
 # CMake minimum-version extraction.
 cat >"${tmp}/CMakeLists.txt" <<'EOF'
 pkg_check_modules(deps REQUIRED IMPORTED_TARGET
@@ -43,6 +57,21 @@ run_extract() {
 assert_eq "0.3.2" "$(run_extract hyprlang)" "pkg_check_modules minimum"
 assert_eq "0.3.10" "$(run_extract hyprwayland-scanner)" "find_package minimum"
 assert_eq "" "$(run_extract hyprcursor)" "absent dep yields empty"
+
+# Second fixture: spaced ">=" must match; prefix-similar names must not.
+cat >"${tmp}/CMakeLists2.txt" <<'EOF'
+pkg_check_modules(deps REQUIRED IMPORTED_TARGET
+  hyprutils >= 0.11.0
+  hyprlan>=9.9.9)
+EOF
+run_extract2() {
+  PATH="${tmp}/bin:${PATH}" bash -c "
+    source lib/00-config.sh; source lib/01-log.sh
+    source scripts/60-hyprland.sh
+    extract_min_version '${tmp}/CMakeLists2.txt' '$1'"
+}
+assert_eq "0.11.0" "$(run_extract2 hyprutils)" "spaced >= form matches"
+assert_eq "" "$(run_extract2 hyprlang)" "hyprlang does not match hyprlan>= line"
 
 # version_ge comparisons (no dpkg dependence in tests).
 vge() {

@@ -76,7 +76,10 @@ configure_zfs_boot_support() {
     systemctl enable NetworkManager
   "
   # Give the target the pool cachefile so it imports cleanly at boot.
-  zpool set cachefile="${TARGET}/etc/zfs/zpool.cache" "${POOL_NAME}"
+  # The property must hold the post-boot path, not the /target-prefixed one.
+  zpool set cachefile=/etc/zfs/zpool.cache "${POOL_NAME}"
+  mkdir -p "${TARGET}/etc/zfs"
+  cp /etc/zfs/zpool.cache "${TARGET}/etc/zfs/zpool.cache"
   in_target "update-initramfs -u -k all"
 }
 

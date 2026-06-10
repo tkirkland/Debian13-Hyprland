@@ -6,6 +6,19 @@ require_root() {
   [[ "$(id -u)" == "0" ]] || fatal "Must run as root."
 }
 
+# Identity settings are interpolated into root chroot command strings;
+# restrict them to safe character sets (injection surface).
+validate_identity_settings() {
+  [[ "${TARGET_USERNAME}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+    fatal "Invalid TARGET_USERNAME '${TARGET_USERNAME}'."
+  [[ "${TIMEZONE}" =~ ^[A-Za-z0-9_+/-]+$ ]] ||
+    fatal "Invalid TIMEZONE '${TIMEZONE}'."
+  [[ "${LOCALE}" =~ ^[A-Za-z0-9_.@-]+$ ]] ||
+    fatal "Invalid LOCALE '${LOCALE}'."
+  [[ "${TARGET_HOSTNAME}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ||
+    fatal "Invalid TARGET_HOSTNAME '${TARGET_HOSTNAME}'."
+}
+
 detect_virt() {
   if command -v systemd-detect-virt >/dev/null 2>&1; then
     VIRT_TYPE="$(systemd-detect-virt 2>/dev/null || true)"
@@ -175,6 +188,7 @@ sync_clock() {
 
 phase_preflight() {
   require_root
+  validate_identity_settings
   detect_virt
   detect_live_environment
   check_network

@@ -5,18 +5,23 @@
 # When staged standalone on the target (firstboot), there is no chroot:
 # provide an in-place in_target if lib/04-chroot-mounts.sh wasn't sourced.
 if ! declare -f in_target >/dev/null; then
-  in_target() { /usr/bin/env bash -c "$*"; }
+  in_target() {
+    (($# == 1)) || fatal "in_target expects exactly one command string"
+    /usr/bin/env bash -c "$1"
+  }
 fi
 
 HYPR_SRC_DIR="/var/tmp/hypr-deb-build"
 
 # Latest stable release tag (vX.Y.Z or X.Y.Z; rc/alpha/nightly excluded).
 resolve_latest_release_tag() {
-  local repo_url="$1" tag=""
-  tag="$(git ls-remote --tags --refs "${repo_url}" |
+  local repo_url="$1" raw="" tag=""
+  raw="$(git ls-remote --tags --refs "${repo_url}")" ||
+    fatal "git ls-remote failed for ${repo_url} (network/URL problem)."
+  tag="$(printf '%s\n' "${raw}" |
     awk -F/ '{print $NF}' |
     grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
-    sort -V | tail -n1)"
+    sort -V | tail -n1 || true)"
   [[ -n "${tag}" ]] || fatal "No release tag found for ${repo_url}"
   printf '%s\n' "${tag}"
 }
@@ -26,8 +31,8 @@ resolve_latest_release_tag() {
 # "find_package(dep X.Y.Z" forms.
 extract_min_version() {
   local cmake_file="$1" dep="$2" ver=""
-  ver="$(grep -hoE "${dep}*>= *[0-9.]+" "${cmake_file}" 2>/dev/null |
-    grep -oE '[0-9.]+$' | sort -V | tail -n1 || true)"
+  ver="$(grep -hoE "(^|[^A-Za-z0-9_-])${dep} *>= *[0-9.]+" "${cmake_file}" \
+    2>/dev/null | grep -oE '[0-9.]+$' | sort -V | tail -n1 || true)"
   if [[ -z "${ver}" ]]; then
     ver="$(grep -hoE "find_package\(${dep} +[0-9.]+" "${cmake_file}" \
       2>/dev/null | grep -oE '[0-9.]+$' | sort -V | tail -n1 || true)"
@@ -85,7 +90,10 @@ resolve_all_tags() {
 
 # Place source tree for $1 at ${TARGET}${HYPR_SRC_DIR}/$1. Cache-first.
 stage_source() {
-  local name="$1" tag="${HYPR_RESOLVED_TAG[$1]}" dest="" tarball=""
+  local name="$1"
+  [[ -n "${HYPR_RESOLVED_TAG[${name}]:-}" ]] ||
+    fatal "No resolved tag for '${name}' (resolve_all_tags not run or manifest incomplete)."
+  local tag="${HYPR_RESOLVED_TAG[${name}]}" dest="" tarball=""
   dest="${TARGET}${HYPR_SRC_DIR}/${name}"
   tarball="${CACHE_DIR}/sources/${name}-${tag}.tar.gz"
   mkdir -p "${dest}"
@@ -141,6 +149,15 @@ purge_build_deps() {
     info "--keep-build-deps: leaving toolchain installed."
     return 0
   fi
+  info "Pinning runtime libraries of built binaries..."
+  in_target "
+    set -e
+    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* 2>/dev/null |
+      grep -oE '/[^ ]+\.so[^ ]*' | sort -u |
+      xargs -r -n1 -- realpath 2>/dev/null | sort -u |
+      xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
+      xargs -r apt-mark manual
+  "
   info "Purging build dependencies (cached debs remain in ${TARGET_CACHE_DIR})..."
   in_target "
     set -e
@@ -148,7 +165,9 @@ purge_build_deps() {
     xargs -a '${HYPR_SRC_DIR}/.build-deps' apt-get purge -y
     apt-get autoremove --purge -y
   "
-  rm -rf "${TARGET:?}${HYPR_SRC_DIR}"
+  in_target "! ldd /usr/local/bin/Hyprland | grep -q 'not found'" ||
+    fatal "Purge removed libraries Hyprland needs (ldd reports 'not found')."
+  rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
 }
 
 configure_session() {
@@ -190,6 +209,14 @@ stage_firstboot() {
     stage_source "${name}"
   done
   install_build_deps  # toolchain present so firstboot works offline
+
+  # Authoritative manifest so the staged resolve_all_tags works offline.
+  local manifest="${TARGET}${TARGET_CACHE_DIR}/sources/MANIFEST"
+  mkdir -p "${TARGET}${TARGET_CACHE_DIR}/sources"
+  : >"${manifest}"
+  for name in "${HYPR_BUILD_ORDER[@]}"; do
+    echo "${name} ${HYPR_RESOLVED_TAG["${name}"]}" >>"${manifest}"
+  done
 
   cp lib/00-config.sh lib/01-log.sh scripts/60-hyprland.sh \
     "${TARGET}/usr/local/lib/hypr-deb/"

@@ -89,10 +89,10 @@ HYPR_BUILD_PACKAGES=(
   glslang-tools libudev-dev libseat-dev libdisplay-info-dev
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libhwdata-dev libzip-dev libtomlplusplus-dev
-  libpugixml-dev libre2-dev hwdata
+  libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
-  libxcb-xinput-dev xwayland
+  libxcb-xinput-dev
 )
 
 # Target base packages beyond debootstrap's minimal set.
@@ -100,7 +100,7 @@ TARGET_BASE_PACKAGES=(
   linux-image-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd uwsm kitty
-  intel-microcode amd64-microcode
+  intel-microcode amd64-microcode hwdata xwayland
 )
 
 # Live-environment tools the preflight must be able to install offline.
