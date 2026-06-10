@@ -45,3 +45,15 @@ in_target() {
   (($# == 1)) || fatal "in_target expects exactly one command string"
   chroot "${TARGET}" /usr/bin/env bash -c "$1"
 }
+
+# Kill anything still running out of the target tree (daemons started by
+# maintainer scripts, stray shells): a single surviving process holds the
+# mounts and breaks unmount/export at teardown. Best effort.
+kill_target_processes() {
+  command -v fuser >/dev/null 2>&1 || return 0
+  mountpoint -q "${TARGET}" 2>/dev/null || return 0
+  if fuser -k -M -m "${TARGET}" 2>/dev/null; then
+    warn "Killed processes still using ${TARGET} before teardown."
+    sleep 1
+  fi
+}

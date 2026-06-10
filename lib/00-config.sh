@@ -256,7 +256,7 @@ LIVE_KERNEL_HEADERS="linux-headers-$(uname -r)"
 # Live-environment tools the preflight must be able to install offline.
 LIVE_TOOL_PACKAGES=(
   debootstrap gdisk parted mdadm dosfstools zfsutils-linux zfs-dkms
-  "${LIVE_KERNEL_HEADERS}" apt-utils git curl efibootmgr rsync
+  "${LIVE_KERNEL_HEADERS}" apt-utils git curl efibootmgr rsync psmisc
 )
 
 # --- Behaviour ------------------------------------------------------------------

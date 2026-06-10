@@ -55,6 +55,31 @@ assert_contains "${sid_out}" "Suites: sid" "sid suite present"
 assert_contains "${sid_out}" "Pin: release a=unstable" "pin targets unstable"
 assert_contains "${sid_out}" "Pin-Priority: 100" \
   "pin priority 100 (no auto-upgrades)"
+
+# Chroot service guard: maintainer scripts must not start daemons inside
+# the chroot — surviving processes hold the mounts and break teardown.
+bash -c "
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/30-bootstrap.sh
+  TARGET='${tmp}/target'
+  install_policy_rc_d
+"
+prcd="${tmp}/target/usr/sbin/policy-rc.d"
+assert_eq "1" "$([[ -x "${prcd}" ]] && echo 1)" \
+  "policy-rc.d installed and executable"
+rc=0
+"${prcd}" || rc=$?
+assert_eq "101" "${rc}" "policy-rc.d forbids service starts (exit 101)"
+
+cleanup_body="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh
+  source scripts/99-cleanup.sh
+  declare -f phase_cleanup')"
+assert_contains "${cleanup_body}" "policy-rc.d" \
+  "cleanup removes the chroot service guard"
+assert_contains "${cleanup_body}" "kill_target_processes" \
+  "cleanup kills chroot-holding processes before teardown"
 if [[ "${out}" == *"deb.debian.org"* ]]; then
   echo "  FAIL: offline regen must remove the online debian.sources" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))

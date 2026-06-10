@@ -26,6 +26,9 @@ on_error() {
   warn "FAILED in phase '${CURRENT_PHASE:-startup}' (exit ${exit_code})."
   [[ -n "${LOG_FILE}" ]] && warn "Full log: ${LOG_FILE}"
   warn "Re-run hypr-deb.sh to resume; completed phases are skipped."
+  # policy-rc.d is intentionally NOT removed here: it must keep guarding
+  # apt runs on resumed installs. Only phase_cleanup removes it.
+  kill_target_processes
   teardown_chroot_binds
   if mountpoint -q "${TARGET}${ESP_MOUNT}" 2>/dev/null; then
     umount "${TARGET}${ESP_MOUNT}" 2>/dev/null || true

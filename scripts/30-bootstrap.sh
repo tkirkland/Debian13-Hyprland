@@ -112,9 +112,27 @@ EOF
   fi
 }
 
+# Forbid every service start inside the install chroot: maintainer
+# scripts otherwise launch daemons (zfs-zed, dbus, ...) whose processes
+# hold the target mounts and break unmount/export at teardown. The
+# canonical mechanism is /usr/sbin/policy-rc.d exiting 101, honored by
+# invoke-rc.d and deb-systemd-invoke. Removed by phase_cleanup; it stays
+# in place across resumes on purpose so every apt run is covered.
+install_policy_rc_d() {
+  install -d "${TARGET}/usr/sbin"
+  cat >"${TARGET}/usr/sbin/policy-rc.d" <<'EOF'
+#!/bin/sh
+# Managed by hypr-deb: forbid service starts inside the install chroot.
+# Removed by the installer's cleanup phase.
+exit 101
+EOF
+  chmod 755 "${TARGET}/usr/sbin/policy-rc.d"
+}
+
 phase_bootstrap() {
   mount_target_tree
   run_debootstrap
+  install_policy_rc_d
   embed_cache_in_target
   write_target_apt_sources
   mount_chroot_binds

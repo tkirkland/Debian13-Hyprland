@@ -202,6 +202,7 @@ bootstrap_live_tools() {
     [debootstrap]=debootstrap [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
     [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool [apt-utils]=apt-ftparchive
     [git]=git [curl]=curl [efibootmgr]=efibootmgr [rsync]=rsync
+    [psmisc]=fuser
   )
   for pkg in "${!pkg_probe[@]}"; do
     command -v "${pkg_probe[${pkg}]}" >/dev/null 2>&1 || missing+=("${pkg}")

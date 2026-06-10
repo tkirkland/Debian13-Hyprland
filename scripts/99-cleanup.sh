@@ -4,6 +4,12 @@
 
 phase_cleanup() {
   info "Cleaning up..."
+  # The installed system must start services normally; drop the chroot
+  # service guard before handing the disk over.
+  if mountpoint -q "${TARGET}" 2>/dev/null; then
+    rm -f "${TARGET}/usr/sbin/policy-rc.d"
+  fi
+  kill_target_processes
   teardown_chroot_binds
   if mountpoint -q "${TARGET}${ESP_MOUNT}" 2>/dev/null; then
     umount "${TARGET}${ESP_MOUNT}" || warn "ESP unmount failed"
