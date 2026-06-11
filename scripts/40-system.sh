@@ -119,10 +119,20 @@ install_zfs_from_source() {
         { echo \"required package not built: \${p}\" >&2; exit 1; }
     done
     debs=\"\$(ls /var/tmp/*.deb |
-      grep -Ev 'zfs-modules|test|dracut|dbg|-dev' || true)\"
+      grep -Ev 'zfs-modules|test|dracut|dbg|-dev|pam' || true)\"
     [[ -n \"\${debs}\" ]] ||
       { echo 'native-deb-utils produced no installable packages' >&2; exit 1; }
     echo \"\${debs}\" | xargs apt-get install -y
+    # pam_zfs_key (encrypted-home key sync) registers itself in
+    # common-password and makes chpasswd fail with 'Authentication token
+    # manipulation error' on systems without encrypted homes. Keep it out:
+    # never install it (deb filter above), purge it if a previous attempt
+    # installed it, and regenerate the PAM stack from clean profiles.
+    if dpkg-query -W 'openzfs*pam*' >/dev/null 2>&1; then
+      apt-get purge -y 'openzfs*pam*'
+    fi
+    rm -f /usr/share/pam-configs/*zfs*
+    pam-auth-update --package
   "
   in_target "zfs version" || true
   rm -rf "${TARGET}/var/tmp/openzfs"

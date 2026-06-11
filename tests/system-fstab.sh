@@ -63,6 +63,9 @@ else
 fi
 assert_contains "${zfs_body}" "openzfs-zfs-dkms" \
   "zfs build asserts the dkms package was produced"
+# pam_zfs_key in common-password breaks chpasswd without encrypted homes.
+assert_contains "${zfs_body}" "pam-auth-update" \
+  "zfs build purges pam_zfs_key and regenerates the PAM stack"
 
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.
