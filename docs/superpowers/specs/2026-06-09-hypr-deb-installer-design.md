@@ -10,7 +10,7 @@ function-specific modules — that installs Debian 13 (trixie) onto a
 fixed three-disk workstation, makes it bootable (UEFI), and builds Hyprland
 and its hyprwm dependencies from their latest release tags with verified
 version compatibility. The result is complete only when both the bootable
-Debian install and the Hyprland source build succeed and verify.
+Debian installation and the Hyprland source build succeed and verify.
 
 ## Run Environment
 
@@ -19,7 +19,7 @@ Debian install and the Hyprland source build succeed and verify.
   its own tool prerequisites (debootstrap, gdisk, mdadm, zfs-dkms/zfsutils,
   dosfstools, apt-ftparchive/apt-utils, git, build toolchain).
 - Network is preferred but optional. With network: debootstrap from
-  `MIRROR`, apt from network, git tags fetched live. Without network: all
+  `MIRROR`, apt from network, git tags fetched live. Without a network: all
   installation comes from a static local cache (see Cache). Offline
   live-preflight requires the cache to have been built against the same
   live-ISO kernel (zfs-dkms needs matching headers); this constraint is
@@ -82,7 +82,7 @@ with the reference dataset hierarchy: `ROOT/debian13` (bootfs), `home`,
 separate boot filesystem), so snapshots capture kernel + modules atomically.
 
 This intentionally diverges from `precision-zfs-dr.sh` layout parity
-(4 partitions -> 3 on DISK1/2); the divergence is called out in the README.
+(four partitions -> 3 on DISK1/2); the divergence is called out in the README.
 
 ## Debian Install
 
@@ -101,12 +101,12 @@ This intentionally diverges from `precision-zfs-dr.sh` layout parity
 - A `cache` phase (networked) populates `CACHE_DIR` with:
   - the full .deb closure for: live-preflight tools, debootstrap base,
     target base system, bootloader packages, Hyprland build dependencies,
-    greetd and uwsm's runtime deps — indexed with `apt-ftparchive` into a
+    greetd, and uwsm's runtime deps — indexed with `apt-ftparchive` into a
     valid local repo
     usable by both debootstrap and chroot apt via `file://`;
   - source archives of Hyprland and each hyprwm dependency at their
     resolved release tags;
-  - the ZFSBootMenu release EFI binary.
+  - the ZFSBootMenu releases EFI binary.
 - Offline runs validate the cache and fail with a precise list of anything
   missing.
 - The complete cache is always copied into the target at
@@ -127,47 +127,47 @@ choices; non-interactive/`--yes` runs fail fast requiring the flag.
 - **systemd-boot**: `systemd-boot` package, loader entries pointing at ESP
   kernel copies.
 - For grub/systemd-boot, a kernel postinst/initramfs hook syncs the current
-  kernel + initramfs from `/boot` (ZFS) to the ESP. Documented caveat: after
-  a root-dataset rollback the ESP copy is newer until the next hook run;
+  kernel + initramfs from `/boot` (ZFS) to the ESP. Documented issue: after
+  a root-dataset rollback, the ESP copy is newer until the next hook run;
   only ZBM boots true point-in-time snapshots.
 
 The storage layout is identical regardless of loader choice.
 
 ## Hyprland Stack — bare scope, source-built at release tags
 
-Scope: Debian base + compiled Hyprland + greetd + uwsm. No waybar, no
-NVIDIA, no extras. uwsm is not in the Debian archive, so it is built from
+Scope: Debian base + compiled Hyprland + greetd + uwsm. No Waybar, no
+NVIDIA, no extras. UWSM is not in the Debian archive, so it is built from
 source at its latest release tag (meson) alongside the hyprwm stack, with
 its runtime dependencies (python3, pyxdg, whiptail, dbus) from Debian
-packages. greetd config execs `uwsm start hyprland`; a minimal
+packages. Greetd config execs `uwsm start hyprland`; a minimal
 valid `hyprland.conf` is installed for the user; greetd service enabled,
 graphical target default.
 
 Source policy:
 
-- Resolve the **latest release tag** (semver-highest, not latest commit) of
-  Hyprland via `git ls-remote --tags`, excluding pre-releases.
+- Resolve the **latest release tag** (semver-highest, not the latest commit)
+  of Hyprland via `git ls-remote --tags`, excluding pre-releases.
 - Dependencies built from source, each at its own latest release tag:
   `hyprwayland-scanner`, `hyprutils`, `hyprlang`, `hyprcursor`,
   `hyprgraphics`, `hyprland-protocols`, `aquamarine`.
 - **Compatibility gate:** parse Hyprland's CMake version requirements
   (`find_package`/`pkg_check_modules` minimums) at the resolved tag and
   assert each dependency's latest tag satisfies them. On any mismatch,
-  abort with a full requirement-vs-resolved matrix. No silent downgrades.
+  abort with a full requirement-vs.-resolved matrix. No silent downgrades.
 - Build order: hyprwayland-scanner, hyprutils -> hyprlang, hyprcursor,
   hyprgraphics, hyprland-protocols, aquamarine -> Hyprland. CMake Release
   builds, install to `/usr/local`, `ldconfig`. Remaining build deps
   (wayland, libinput, libdrm, mesa, etc.) come from Debian 13 packages.
 
-Build hygiene (clean install, lean target):
+Build hygiene (clean install and lean target):
 
-- Builds run inside the target environment (chroot or firstboot) so binaries
+- Builds run inside the target environment (chroot or first boot), so binaries
   link against exactly the userland that runs them; never in the live
   overlay (tmpfs/RAM) and never copied in from a foreign userland.
 - Build trees and `DESTDIR` staging live under `/var/tmp` (own dataset,
-  snapshot-excluded) and are deleted after install.
+  snapshot-excluded) and are deleted after installation.
 - The script records the exact build-dependency package set it installs;
-  after a successful build + verify it purges that set
+  after a successful build + verifying it purges that set
   (`apt-get purge` + `--autoremove`), leaving only Hyprland artifacts and
   their runtime libraries. `--keep-build-deps` skips the purge for users
   who intend to hack on Hyprland immediately.
@@ -176,9 +176,10 @@ Build hygiene (clean install, lean target):
 
 Build timing (`--build-on-firstboot`):
 
-- Default: build inside the target chroot during install; image boots ready.
-- With the flag: stage sources + cached debs in the target and install a
-  one-shot systemd unit that runs the identical build logic on first boot,
+- Default: build inside the target chroot during installation; image boots
+  ready.
+- With the flag: stage sources and cached debs in the target and install a
+  one-shot systemd unit that runs the identical build logic on the first boot,
   disabling itself on success and leaving a clear failure log otherwise.
 
 ## Script Structure
@@ -237,9 +238,9 @@ Flags: `--bootloader=`, `--build-on-firstboot`, `--offline`, `--phase=`,
 reference env overrides (`POOL_NAME`, `TARGET_HOSTNAME`, `TARGET_USERNAME`,
 `TIMEZONE`, `LOCALE`, sizes, ...).
 
-Error handling: ERR trap reporting phase + failing command; EXIT trap always
-tears down chroot binds, stops nothing it didn't start, and exports the pool
-on failure paths; phases idempotent.
+Error handling: ERR trap reporting phase and failing command; an EXIT trap 
+always tears down chroot binds, stops nothing it didn't start, and exports
+the pool on failure paths; phases idempotent.
 
 ## Verification
 
@@ -247,12 +248,12 @@ In-chroot/target checks, all must pass for success:
 
 - `Hyprland --version` executes; `ldd` on Hyprland and built libs resolves.
 - greetd enabled; uwsm present; hyprland.conf parses (`hyprland --verify-config`
-  if available at the built version, else presence + ownership checks).
+  if available at the built version, else presence and ownership checks).
 - Chosen bootloader EFI binary present on ESP; NVRAM entry exists; kernel +
   initramfs present (pool `/boot`, plus ESP copies for grub/systemd-boot).
 - fstab/mdadm.conf reference existing UUIDs; pool bootfs set; cache repo
   index in `/var/cache/hypr-deb` validates.
-- First-boot mode: unit enabled, sources + debs staged and complete.
+- First-boot mode: unit enabled, sources and debs staged and complete.
 
 Final report printed; nonzero exit on any failure.
 
@@ -269,9 +270,9 @@ Final report printed; nonzero exit on any failure.
 - The `verify` phase is the runtime test.
 - Recommended smoke test: QEMU/OVMF VM with three blank virtio disks
   (>=16G each) booted from a Debian live ISO; VM test mode auto-detects the
-  disks, the full install runs end to end, then reboot into the chosen
-  bootloader and confirm greetd login. Bare-metal validation is the
-  post-install reboot on the real machine.
+  disks, the full installation runs end to end, then reboots into the chosen
+  bootloader, and confirms greetd login. Bare-metal validation is the
+  post-installation reboot on the real machine.
 - Development: shellcheck + bash -n as above; optional focused unit checks
   in `tests/` following the reference project's fake-chroot pattern where
   practical (tag resolution, compatibility gate, cache validation are pure

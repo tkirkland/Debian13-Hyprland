@@ -246,7 +246,7 @@ module, add at the top of the function file (with this justification):
 # shellcheck disable=SC2154  # VERBOSE/LOG_FILE are owned by lib/00-config.sh
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run a test to verify it passes**
 
 Run: `bash tests/log.sh`
 Expected: `PASS`
@@ -304,7 +304,7 @@ finish_test
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bash tests/config.sh`
-Expected: FAIL (file missing)
+Expected: FAIL (a file missing)
 
 - [ ] **Step 3: Write `lib/00-config.sh`**
 
@@ -337,14 +337,14 @@ ROOT_DATASET="${POOL_NAME}/ROOT/${ROOT_DISTRO}"
 # --- Debian ------------------------------------------------------------------
 SUITE="${SUITE:-trixie}"
 ARCH="${ARCH:-amd64}"
-MIRROR="${MIRROR:-http://deb.debian.org/debian}"
+MIRROR="${MIRROR:-https://deb.debian.org/debian}"
 TARGET="${TARGET:-/target}"
 
 # --- System identity ---------------------------------------------------------
 TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
-USER_PASSWORD="${USER_PASSWORD:-}"   # empty = interactive adduser prompt
-ROOT_PASSWORD="${ROOT_PASSWORD:-}"   # empty = root stays locked
+USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
+ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
 
@@ -375,12 +375,12 @@ HYPR_BUILD_ORDER=(
 )
 # Repo name on github (differs in case for Hyprland itself).
 declare -A HYPR_REPO_NAME=(
-  [hyprwayland-scanner]="hyprwayland-scanner"
+  [hyprwayland - scanner]="hyprwayland-scanner"
   [hyprutils]="hyprutils"
   [hyprlang]="hyprlang"
   [hyprcursor]="hyprcursor"
   [hyprgraphics]="hyprgraphics"
-  [hyprland-protocols]="hyprland-protocols"
+  [hyprland - protocols]="hyprland-protocols"
   [aquamarine]="aquamarine"
   [hyprland]="Hyprland"
 )
@@ -391,30 +391,83 @@ declare -A HYPR_RESOLVED_TAG=()
 # unless --keep-build-deps). Runtime libs are pulled automatically as
 # dependencies and are NOT in this list.
 HYPR_BUILD_PACKAGES=(
-  build-essential cmake meson ninja-build pkg-config git
-  wayland-protocols libwayland-dev libxkbcommon-dev libinput-dev
-  libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev
-  glslang-tools libudev-dev libseat-dev libdisplay-info-dev
-  libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
-  libmagic-dev libhwdata-dev libzip-dev libtomlplusplus-dev
-  libpugixml-dev libre2-dev hwdata
-  libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
-  libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
-  libxcb-xinput-dev xwayland
+  build-essential
+  cmake
+  meson
+  ninja-build
+  pkg-config
+  git
+  wayland-protocols
+  libwayland-dev
+  libxkbcommon-dev
+  libinput-dev
+  libdrm-dev
+  libgbm-dev
+  libegl-dev
+  libgles2-mesa-dev
+  libvulkan-dev
+  glslang-tools
+  libudev-dev
+  libseat-dev
+  libdisplay-info-dev
+  libliftoff-dev
+  libcairo2-dev
+  libpango1.0-dev
+  librsvg2-dev
+  libmagic-dev
+  libhwdata-dev
+  libzip-dev
+  libtomlplusplus-dev
+  libpugixml-dev
+  libre2-dev
+  hwdata
+  libxcb-composite0-dev
+  libxcb-errors-dev
+  libxcb-ewmh-dev
+  libxcb-icccm4-dev
+  libxcb-render-util0-dev
+  libxcb-res0-dev
+  libxcb-xinput-dev
+  xwayland
 )
 
 # Target base packages beyond debootstrap's minimal set.
 TARGET_BASE_PACKAGES=(
-  linux-image-amd64 zfs-initramfs zfs-dkms zfsutils-linux
-  mdadm dosfstools efibootmgr network-manager sudo locales
-  console-setup ca-certificates curl greetd uwsm kitty
-  intel-microcode amd64-microcode
+  linux-image-amd64
+  zfs-initramfs
+  zfs-dkms
+  zfsutils-linux
+  mdadm
+  dosfstools
+  efibootmgr
+  network-manager
+  sudo
+  locales
+  console-setup
+  ca-certificates
+  curl
+  greetd
+  uwsm
+  kitty
+  intel-microcode
+  amd64-microcode
+  wget
 )
 
 # Live-environment tools the preflight must be able to install offline.
 LIVE_TOOL_PACKAGES=(
-  debootstrap gdisk mdadm dosfstools zfsutils-linux zfs-dkms
-  linux-headers-amd64 apt-utils git curl efibootmgr rsync
+  debootstrap
+  gdisk
+  mdadm
+  dosfstools
+  zfsutils-linux
+  zfs-dkms
+  linux-headers-amd64
+  apt-utils
+  git
+  curl
+  efibootmgr
+  rsync
 )
 
 # --- Behaviour ------------------------------------------------------------------
@@ -423,12 +476,13 @@ VERBOSE="${VERBOSE:-0}"
 OFFLINE="${OFFLINE:-0}"
 BUILD_ON_FIRSTBOOT="${BUILD_ON_FIRSTBOOT:-0}"
 KEEP_BUILD_DEPS="${KEEP_BUILD_DEPS:-0}"
-NETWORK_AVAILABLE=""   # set by preflight: 1 or 0
+NETWORK_AVAILABLE="" # set by preflight: 1 or 0
 STATE_DIR="${STATE_DIR:-/run/hypr-deb/state}"
 LOG_DIR="${LOG_DIR:-/tmp/hypr-deb-logs}"
 LOG_FILE=""
 IS_INTERACTIVE=0
-[[ -t 0 && -t 1 ]] && IS_INTERACTIVE=1
+[[ -t 0 && -t 1 ]]
+        && IS_INTERACTIVE=1
 ```
 
 - [ ] **Step 4: Run test, then gate, then commit**
@@ -496,7 +550,7 @@ finish_test
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bash tests/args.sh` — Expected: FAIL (file missing)
+Run: `bash tests/args.sh` — Expected: FAIL (a file missing)
 
 - [ ] **Step 3: Write `lib/02-args.sh`**
 
@@ -508,7 +562,7 @@ VALID_PHASES="full preflight cache storage bootstrap system boot hyprland verify
 RUN_PHASE="full"
 
 usage() {
-  cat <<'EOF'
+  cat << 'EOF'
 Usage: hypr-deb.sh [options]
 
 Installs Debian 13 (trixie) onto the fixed three-disk ZFS/mdadm layout and
@@ -524,7 +578,7 @@ Options:
                         preflight cache storage bootstrap system boot
                         hyprland verify cleanup
   --keep-build-deps     Do not purge build dependencies after success
-  --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
+  --mirror=<url>        Debian mirror (default https://deb.debian.org/debian)
   --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
   --yes                 Skip the destructive confirmation prompt
@@ -549,8 +603,9 @@ parse_args() {
       --offline) OFFLINE=1 ;;
       --phase=*)
         RUN_PHASE="${arg#*=}"
-        [[ " ${VALID_PHASES} " == *" ${RUN_PHASE} "* ]] ||
-          fatal "Unknown phase '${RUN_PHASE}'. Valid: ${VALID_PHASES}"
+        [[ " ${VALID_PHASES} " == *" ${RUN_PHASE} "* ]]
+                ||
+                fatal "Unknown phase '${RUN_PHASE}'. Valid: ${VALID_PHASES}"
         ;;
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
@@ -569,8 +624,10 @@ parse_args() {
 
 # Ensure BOOTLOADER is set: prompt when interactive, fail fast otherwise.
 require_bootloader_choice() {
-  [[ -n "${BOOTLOADER}" ]] && return 0
-  if ((!IS_INTERACTIVE)) || ((ASSUME_YES)); then
+  [[ -n "${BOOTLOADER}" ]]
+          && return 0
+  if ((!IS_INTERACTIVE))
+          || ((ASSUME_YES)); then
     fatal "--bootloader=<zbm|grub|systemd-boot> is required in non-interactive runs"
   fi
   local choice=""
@@ -593,20 +650,25 @@ require_bootloader_choice() {
 
 # Destructive gate. Lists the disks about to be destroyed.
 confirm_destruction() {
-  ((ASSUME_YES)) && return 0
-  ((IS_INTERACTIVE)) ||
-    fatal "Refusing destructive run without --yes in a non-interactive session"
+  ((ASSUME_YES))
+          && return 0
+  ((IS_INTERACTIVE))
+          ||
+          fatal "Refusing destructive run without --yes in a non-interactive session"
   echo ""
   echo "  *** ALL DATA on these disks will be DESTROYED ***"
   echo "      DISK1=${DISK1}"
   echo "      DISK2=${DISK2}"
   echo "      DISK3=${DISK3}"
-  echo "      Mode: $([[ "${VIRT_TYPE}" == "none" ]] && echo "BARE METAL" ||
-    echo "VM (${VIRT_TYPE})")"
+  echo "      Mode: $(
+    [[ "${VIRT_TYPE}" == "none" ]] && echo "BARE METAL" ||
+            echo "VM (${VIRT_TYPE})"
+  )"
   echo ""
   local answer=""
   read -r -p "Type 'destroy' to continue: " answer
-  [[ "${answer}" == "destroy" ]] || fatal "Aborted by user."
+  [[ "${answer}" == "destroy" ]]
+          || fatal "Aborted by user."
 }
 ```
 
@@ -1660,14 +1722,14 @@ gen() { # $1=NETWORK_AVAILABLE
 
 out="$(gen 1)"
 assert_contains "${out}" \
-  "deb http://deb.debian.org/debian trixie main contrib non-free-firmware" \
-  "network sources include contrib (ZFS) and firmware"
+        "deb https://deb.debian.org/debian trixie main contrib non-free-firmware" \
+        "network sources include contrib (ZFS) and firmware"
 assert_contains "${out}" "trixie-security" "security suite present online"
 
 out="$(gen 0)"
 assert_contains "${out}" \
-  "deb [trusted=yes] file:///var/cache/hypr-deb/repo trixie main" \
-  "offline sources point at the embedded cache repo"
+        "deb [trusted=yes] file:///var/cache/hypr-deb/repo trixie main" \
+        "offline sources point at the embedded cache repo"
 
 finish_test
 ```
@@ -1704,21 +1766,22 @@ run_debootstrap() {
     cache_validate
     info "debootstrap ${SUITE} from offline cache..."
     debootstrap --no-check-gpg --arch="${ARCH}" "${SUITE}" "${TARGET}" \
-      "file://${CACHE_DIR}/repo"
+            "file://${CACHE_DIR}/repo"
   fi
 }
 
 # The complete cache is always embedded so the installed system can rebuild
 # or reinstall fully offline (spec: Cache section).
 embed_cache_in_target() {
-  [[ -d "${CACHE_DIR}/repo" ]] || {
+  [[ -d "${CACHE_DIR}/repo" ]]
+          || {
     warn "No cache at ${CACHE_DIR}; target will not carry an offline cache."
     return 0
   }
   info "Embedding cache into ${TARGET}${TARGET_CACHE_DIR}..."
   mkdir -p "${TARGET}${TARGET_CACHE_DIR}"
   rsync -a "${CACHE_DIR}/" "${TARGET}${TARGET_CACHE_DIR}/"
-  cat >"${TARGET}${TARGET_CACHE_DIR}/README" <<EOF
+  cat > "${TARGET}${TARGET_CACHE_DIR}/README" << EOF
 Hypr-Deb offline cache.
 repo/     local apt repository (deb [trusted=yes] file://${TARGET_CACHE_DIR}/repo ${SUITE} main)
 sources/  hyprwm source tag archives + MANIFEST of resolved release tags
@@ -1728,13 +1791,13 @@ EOF
 
 write_target_apt_sources() {
   if ((NETWORK_AVAILABLE)); then
-    cat >"${TARGET}/etc/apt/sources.list" <<EOF
+    cat > "${TARGET}/etc/apt/sources.list" << EOF
 deb ${MIRROR} ${SUITE} main contrib non-free-firmware
 deb ${MIRROR} ${SUITE}-updates main contrib non-free-firmware
-deb http://security.debian.org/debian-security ${SUITE}-security main contrib non-free-firmware
+deb https://security.debian.org/debian-security ${SUITE}-security main contrib non-free-firmware
 EOF
   else
-    cat >"${TARGET}/etc/apt/sources.list" <<EOF
+    cat > "${TARGET}/etc/apt/sources.list" << EOF
 deb [trusted=yes] file://${TARGET_CACHE_DIR}/repo ${SUITE} main
 EOF
   fi
@@ -2277,7 +2340,7 @@ git commit -m "Add hyprland phase: tag resolution, compat gate, builds, session"
 
 ---
 
-### Task 12: `scripts/50-boot.sh` — bootloader install + kernel sync hook
+### Task 12: `scripts/50-boot.sh` — bootloader install and kernel sync hook
 
 **Files:**
 - Create: `scripts/50-boot.sh`
@@ -2814,7 +2877,7 @@ exit "${status}"
 
 - [ ] **Step 2: Write `README.md`**
 
-Cover (in this order, plain prose + code blocks):
+Cover (in this order, plain prose and code blocks):
 - What it is: Debian 13 + Hyprland-from-release-tags installer for the fixed
   three-disk layout; **destroys the listed disks**; the exact three by-id
   paths in a code block.
@@ -2834,11 +2897,11 @@ qemu-system-x86_64 -enable-kvm -m 8G -smp 4 \
 
 - Storage layout block (the amended one) + note on intentional divergence
   from `precision-zfs-dr.sh` parity (no md/boot; EFI grown to 2G).
-- Usage: `sudo ./hypr-deb.sh` (prompts for bootloader + destruction),
-  common flags, phases list, offline workflow (run `--phase=cache` on a
+- Usage: `sudo ./hypr-deb.sh` (prompts for bootloader and destruction),
+  common flags, phase list, offline workflow (run `--phase=cache` on a
   networked machine with `--cache-dir` on real storage, carry it, run
   installer `--offline`).
-- Bootloader choice semantics + the rollback caveat for grub/systemd-boot
+- Bootloader choice semantics and the rollback warning for grub/systemd-boot
   ESP kernel copies; ZBM boots snapshots directly.
 - Hyprland: bare scope, greetd+uwsm, release-tag policy, compat gate,
   build-dep purge, `--keep-build-deps`, `--build-on-firstboot`.
@@ -2853,8 +2916,8 @@ Expected: OK + every test `PASS`.
 
 Open the spec and confirm each section maps to shipped code: run
 environment (preflight), target disks (preflight), storage (20-storage),
-Debian install (30/40), cache (10-cache + embed), bootloader (50-boot +
-args prompt), Hyprland + hygiene (60-hyprland), structure (orchestrator +
+Debian install (30/40), cache (10-cache and embed), bootloader (50-boot and
+args prompt), Hyprland + hygiene (60-hyprland), structure (orchestrator and
 modules), verification (90-verify), quality gates (tools/check.sh). Fix any
 gap found before the final commit.
 
