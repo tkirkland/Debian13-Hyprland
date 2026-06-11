@@ -293,7 +293,9 @@ configure_session() {
     local greeter=""
     greeter="$(in_target "command -v tuigreet")" ||
       fatal "tuigreet not found in target (TARGET_BASE_PACKAGES should install it)."
-    session_command="${greeter} --remember --cmd '/usr/local/bin/uwsm start -- hyprland.desktop'"
+    # --asterisks: tuigreet's default password field echoes NOTHING,
+    # which reads as broken input on a console with redraw jitter.
+    session_command="${greeter} --remember --asterisks --cmd '/usr/local/bin/uwsm start -- hyprland.desktop'"
     session_user="_greetd"
   fi
   mkdir -p "${TARGET}/etc/greetd"
@@ -356,7 +358,7 @@ stage_firstboot() {
 
   cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<EOF
 #!/usr/bin/env bash
-# One-shot first-boot Hyprland build (staged by hypr-deb.sh).
+# One-shot first-boot Hyprland build (staged by hypr_deb.sh).
 set -euo pipefail
 source /usr/local/lib/hypr-deb/00-config.sh
 source /usr/local/lib/hypr-deb/01-log.sh
