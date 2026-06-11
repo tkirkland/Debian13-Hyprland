@@ -279,17 +279,17 @@ TARGET_BASE_PACKAGES=(
 )
 
 # --- Addons -------------------------------------------------------------------
-# User drop-in package lists: every addons/*.pkgs file is read (one Debian
+# User drop-in package lists: every addons/*.list file is read (one Debian
 # package per line; blank lines and # comments ignored) and appended to
 # TARGET_BASE_PACKAGES, so users add packages without editing the repo.
 # Paths are relative to the repo root (the orchestrator cd's there).
 ADDON_PACKAGES=()
-if compgen -G "addons/*.pkgs" >/dev/null; then
+if compgen -G "addons/*.list" >/dev/null; then
   while IFS= read -r _addon_line; do
     _addon_line="${_addon_line%%#*}"
     _addon_line="${_addon_line//[[:space:]]/}"
     [[ -n "${_addon_line}" ]] && ADDON_PACKAGES+=("${_addon_line}")
-  done < <(cat addons/*.pkgs)
+  done < <(cat addons/*.list)
   TARGET_BASE_PACKAGES+=("${ADDON_PACKAGES[@]}")
 fi
 unset _addon_line

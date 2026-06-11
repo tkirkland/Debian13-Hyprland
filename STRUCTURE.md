@@ -42,7 +42,7 @@ docs/superpowers/           original design spec and implementation plan.
 
 **Add a package to the installed system**
 : `TARGET_BASE_PACKAGES` in `lib/00-config.sh` — or, without touching the
-  repo at all, an `addons/*.pkgs` file (see below).
+  repo at all, an `addons/*.list` file (see below).
 
 **Add a build-only dependency** (purged after the stack builds)
 : `HYPR_BUILD_PACKAGES` in `lib/00-config.sh`.
@@ -87,14 +87,14 @@ docs/superpowers/           original design spec and implementation plan.
 
 ## addons/ — user packages without forking
 
-Any file matching `addons/*.pkgs` is read at startup: one Debian package
+Any file matching `addons/*.list` is read at startup: one Debian package
 name per line, blank lines and `#` comments ignored. Everything found is
 appended to `TARGET_BASE_PACKAGES` and installed during the system phase,
 subject to the same `DEBIAN_FRONTEND=noninteractive` apt run and the
 chroot service-start guard as everything else.
 
 ```bash
-# addons/my-tools.pkgs
+# addons/my-tools.list
 htop
 ncdu
 firefox-esr   # comes from the same trixie sources the installer enables
@@ -104,5 +104,5 @@ Notes:
 - Packages must exist in the enabled apt sources (trixie main/contrib/
   non-free-firmware by default). Typos fail the system phase loudly.
 - Preflight logs how many addon packages were picked up.
-- `addons/example.pkgs.sample` ships as a template; only the `.pkgs`
+- `addons/example.list.sample` ships as a template; only the `.list`
   suffix is loaded, so the sample is inert until renamed.
