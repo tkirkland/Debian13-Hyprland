@@ -30,7 +30,7 @@ verify_report() {
 }
 
 phase_verify() {
-  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f=""
+  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f="" greeter_bin=""
   for f in "${TARGET}"/boot/vmlinuz-*; do
     [[ -e "${f}" ]] || continue
     vers+="${f##*/vmlinuz-}"$'\n'
@@ -62,10 +62,12 @@ phase_verify() {
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "uwsm present" in_target "command -v uwsm"
-  # greetd spawns the greeter with no PATH (PAM env only), so the config
-  # must reference binaries that exist at the absolute paths it names.
-  vcheck "greeter binary at /usr/bin/agreety" \
-    test -x "${TARGET}/usr/bin/agreety"
+  # greetd spawns the greeter with no PATH (PAM env only): the binary the
+  # config names must exist at exactly that absolute path.
+  greeter_bin="$(grep -oP '^command = "\K[^ "]+' \
+    "${TARGET}/etc/greetd/config.toml" 2>/dev/null || true)"
+  vcheck "configured greeter exists (${greeter_bin:-none})" bash -c \
+    "[[ -n '${greeter_bin}' && -x '${TARGET}${greeter_bin}' ]]"
   vcheck "session launcher at /usr/local/bin/uwsm" \
     test -x "${TARGET}/usr/local/bin/uwsm"
   vcheck "user hyprland.conf exists" \
