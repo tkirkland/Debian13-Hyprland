@@ -312,6 +312,9 @@ EOF
     set -e
     chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
     systemctl enable greetd
+    # greetd owns VT1; an unmasked getty@tty1 (or logind's autovt@tty1)
+    # attaches to the same terminal and fights the greeter for keystrokes.
+    systemctl mask getty@tty1.service
     systemctl set-default graphical.target
   "
 }
