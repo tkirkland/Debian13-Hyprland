@@ -47,6 +47,12 @@ configure_locale_tz() {
 
 install_base_packages() {
   local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
+  # VMware guest integration (display resize, clipboard, time sync,
+  # clean shutdown). open-vm-tools-desktop layers desktop features on the
+  # base daemon; both are pointless on bare metal, so VIRT_TYPE gates them.
+  if [[ "${VIRT_TYPE}" == "vmware" ]]; then
+    pkgs+=(open-vm-tools open-vm-tools-desktop)
+  fi
   if ((ZFS_FROM_SOURCE)); then
     # The upstream openzfs-* packages replace these; installing Debian's
     # first would only churn (and dkms-build) packages we remove again.

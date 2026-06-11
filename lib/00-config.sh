@@ -125,6 +125,8 @@ HYPR_BUILD_ORDER=(
   hyprwire
   aquamarine
   hyprland
+  hyprtoolkit
+  hyprland-guiutils
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -145,6 +147,10 @@ declare -A HYPR_REPO_URL=(
   ["hyprwire"]="${HYPR_GIT_BASE}/hyprwire"
   ["aquamarine"]="${HYPR_GIT_BASE}/aquamarine"
   ["hyprland"]="${HYPR_GIT_BASE}/Hyprland"
+  # hyprland-guiutils (dialogs/update screens Hyprland expects at runtime)
+  # is the qtutils successor, built on hyprwm's native hyprtoolkit.
+  ["hyprtoolkit"]="${HYPR_GIT_BASE}/hyprtoolkit"
+  ["hyprland-guiutils"]="${HYPR_GIT_BASE}/hyprland-guiutils"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Release-tag pattern per component when it differs from the default
