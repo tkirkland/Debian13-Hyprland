@@ -47,6 +47,11 @@ assert_eq "" "${out}" "ensure_target_ready no-op when no pool exists"
 assert_contains "$(cat hypr-deb.sh)" "no USER_PASSWORD and no --autologin" \
   "non-interactive password guard present"
 
+# --yes promises unattended: it must fail fast when USER_PASSWORD is
+# unset rather than block at the password prompt mid-install.
+assert_contains "$(cat hypr-deb.sh)" "requires USER_PASSWORD" \
+  "--yes fails fast without USER_PASSWORD"
+
 # Success must clear resume state so an immediate re-run is a fresh
 # install (behind the destroy gate), not an all-phases-skipped no-op.
 # shellcheck disable=SC2016  # the needle is a literal source-code snippet

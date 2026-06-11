@@ -82,6 +82,20 @@ main() {
   case "${RUN_PHASE}" in
     full | boot | verify) require_bootloader_choice ;;
   esac
+
+  # --yes promises an unattended run, but create_user would still block on
+  # an interactive password prompt deep in the system phase (and skipping
+  # the password is no fallback: a passwordless user cannot sudo). Fail
+  # fast while it is still cheap — unless system is already stamped done.
+  if ((ASSUME_YES)) && [[ -z "${USER_PASSWORD}" ]]; then
+    case "${RUN_PHASE}" in
+      full | system)
+        phase_done system ||
+          fatal "--yes requires USER_PASSWORD to be set (the password" \
+            "prompt would block an unattended run, and sudo needs one)."
+        ;;
+    esac
+  fi
   if ((!IS_INTERACTIVE)) && ((!HYPR_AUTOLOGIN)) &&
     [[ -z "${USER_PASSWORD}" ]] &&
     [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "system" ]]; then

@@ -37,7 +37,9 @@ Options:
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
   --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
-  --yes                 Skip the destructive confirmation prompt
+  --yes                 Unattended mode: skips the destructive confirmation
+                        and refuses to reach any later prompt — requires
+                        --bootloader and the USER_PASSWORD env var
   --verbose             Detailed logging
   --help                This text
 EOF
