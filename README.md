@@ -174,7 +174,7 @@ cleanup     unmount binds and target tree, export the pool
 The installer prefers the network but can run fully offline:
 
 1. On a networked machine, run `sudo ./hypr_deb.sh --phase=cache
-   --cache-dir=/path/on/real/storage`. This downloads the complete .deb
+--cache-dir=/path/on/real/storage`. This downloads the complete .deb
    closure (live tools, debootstrap base, target base, bootloaders,
    Hyprland build deps, greetd and uwsm's runtime deps) indexed with
    `apt-ftparchive` as a `file://` repo, the source archives of Hyprland,

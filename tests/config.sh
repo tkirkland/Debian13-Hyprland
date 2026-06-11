@@ -51,9 +51,9 @@ out="$(bash -c 'source lib/00-config.sh
 assert_contains "${out}" "linux-headers-amd64" \
   "target gets kernel headers so dkms can build the zfs module"
 
-# addons/*.pkgs files are appended to the target package set (comments
+# addons/*.list files are appended to the target package set (comments
 # and whitespace stripped); the .sample template must NOT load.
-addon_file="addons/zz-config-test.pkgs"
+addon_file="addons/zz-config-test.list"
 printf '%s\n' "# comment line" "" "zz-fake-addon-pkg  # trailing" \
   >"${addon_file}"
 out="$(bash -c 'source lib/00-config.sh
@@ -64,7 +64,7 @@ if printf '%s\n' "${out}" | grep -q "example"; then
   echo "  FAIL: .sample template must not load" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
-  echo "  ok: .pkgs.sample template stays inert"
+  echo "  ok: .list.sample template stays inert"
 fi
 
 # uwsm is not in the Debian archive; it must never be in the apt lists.
