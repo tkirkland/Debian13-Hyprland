@@ -2316,7 +2316,7 @@ phase_hyprland() {
 }
 ```
 
-Note on `build_one` inside the firstboot script: with `TARGET=""`,
+Note on `build_one` inside the first boot script: with `TARGET=""`,
 `in_target` (which the staged copy does not have) is not used — `build_one`
 uses `in_target`, so the staged module needs it. Add this guard at the top
 of `scripts/60-hyprland.sh` so the module is self-sufficient when staged:

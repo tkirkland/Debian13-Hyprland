@@ -1,5 +1,7 @@
+# bashsupport disable=BP5007
 # shellcheck shell=bash
-# shellcheck disable=SC2034  # globals defined here are consumed by the other
+# shellcheck disable=SC2034
+# globals defined here are consumed by the other
 # lib/ and scripts/ modules, which the orchestrator sources after this file.
 # Hypr-Deb installer configuration: defaults, fixed disk ids, derived values.
 # Most values can be overridden via environment variables before launching;
