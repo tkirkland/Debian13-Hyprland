@@ -86,7 +86,7 @@ systemd-boot.
 From a Debian 13 live session (or an installed Debian system), as root:
 
 ```bash
-sudo ./hypr-deb.sh
+sudo ./hypr_deb.sh
 ```
 
 With no flags it prompts for the bootloader and then for the destructive
@@ -143,7 +143,7 @@ cleanup     unmount binds and target tree, export the pool
 
 The installer prefers the network but can run fully offline:
 
-1. On a networked machine, run `sudo ./hypr-deb.sh --phase=cache
+1. On a networked machine, run `sudo ./hypr_deb.sh --phase=cache
    --cache-dir=/path/on/real/storage`. This downloads the complete .deb
    closure (live tools, debootstrap base, target base, bootloaders,
    Hyprland build deps, greetd and uwsm's runtime deps) indexed with
@@ -152,7 +152,7 @@ The installer prefers the network but can run fully offline:
    the ZFSBootMenu EFI binary.
 2. Carry the cache directory to the target machine (it must be on real
    storage, not the live overlay).
-3. Run `sudo ./hypr-deb.sh --offline --cache-dir=/path/to/cache ...`.
+3. Run `sudo ./hypr_deb.sh --offline --cache-dir=/path/to/cache ...`.
    Offline runs validate the cache first and fail with a precise list of
    anything missing.
 

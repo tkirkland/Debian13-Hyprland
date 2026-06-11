@@ -30,7 +30,7 @@ write_esp_sync_hook() {
   cat >"${TARGET}/usr/local/sbin/hypr-deb-sync-esp" <<'EOF'
 #!/usr/bin/env bash
 # Copy the newest kernel + initrd from /boot (ZFS) to the ESP so FAT-bound
-# bootloaders (grub, systemd-boot) can read them. Installed by hypr-deb.sh.
+# bootloaders (grub, systemd-boot) can read them. Installed by hypr_deb.sh.
 set -euo pipefail
 mountpoint -q /boot/efi || { echo "ESP not mounted at /boot/efi" >&2; exit 1; }
 esp="/boot/efi/EFI/debian"
@@ -132,7 +132,7 @@ write_grub_cfg() {
   # (ESP)/EFI/debian/grub/, so the cfg must live in that grub/ subdirectory.
   mkdir -p "${TARGET}${ESP_MOUNT}/EFI/debian/grub"
   cat >"${TARGET}${ESP_MOUNT}/EFI/debian/grub/grub.cfg" <<EOF
-# Static config written by hypr-deb.sh; kernel copies are refreshed by
+# Static config written by hypr_deb.sh; kernel copies are refreshed by
 # hypr-deb-sync-esp.
 # GRUB reads kernel copies from the ESP and never reads the ZFS pool.
 set timeout=3

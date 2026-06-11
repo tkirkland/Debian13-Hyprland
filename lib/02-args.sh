@@ -8,7 +8,7 @@ RUN_PHASE="full"
 
 usage() {
   cat <<'EOF'
-Usage: hypr-deb.sh [options]
+Usage: hypr_deb.sh [options]
 
 Installs Debian 13 (trixie) onto the fixed three-disk ZFS/mdadm layout and
 builds Hyprland from latest release tags. DESTROYS the target disks.
