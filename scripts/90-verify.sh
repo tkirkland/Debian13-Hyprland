@@ -62,6 +62,12 @@ phase_verify() {
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "uwsm present" in_target "command -v uwsm"
+  # greetd spawns the greeter with no PATH (PAM env only), so the config
+  # must reference binaries that exist at the absolute paths it names.
+  vcheck "greeter binary at /usr/bin/agreety" \
+    test -x "${TARGET}/usr/bin/agreety"
+  vcheck "session launcher at /usr/local/bin/uwsm" \
+    test -x "${TARGET}/usr/local/bin/uwsm"
   vcheck "user hyprland.conf exists" \
     test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.conf"
 

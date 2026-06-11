@@ -286,7 +286,9 @@ configure_session() {
 vt = 1
 
 [default_session]
-command = "agreety --cmd 'uwsm start -- hyprland.desktop'"
+# Absolute paths are required: greetd builds the session environment from
+# PAM, and Debian's default stack provides no PATH for it.
+command = "/usr/bin/agreety --cmd '/usr/local/bin/uwsm start -- hyprland.desktop'"
 user = "_greetd"
 EOF
   # Minimal valid Hyprland config for the user.
