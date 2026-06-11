@@ -45,6 +45,25 @@ assert_contains "${user_body}" "chown -R" \
 assert_contains "${user_body}" "canmount=on" \
   "create_user enables the Downloads dataset only after adduser"
 
+# The zfs source build must produce ONLY the utils/dkms package set:
+# native-deb-kmod compiles modules for the RUNNING (live) kernel and drags
+# that kernel image into the target as a dependency.
+zfs_body="$(bash -c '
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f install_zfs_from_source')"
+assert_contains "${zfs_body}" "native-deb-utils" \
+  "zfs build uses native-deb-utils"
+if printf '%s\n' "${zfs_body}" | grep -qE 'native-deb(-kmod)?[" ]*$'; then
+  echo "  FAIL: zfs build must not invoke native-deb or native-deb-kmod" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: zfs build avoids native-deb-kmod"
+fi
+assert_contains "${zfs_body}" "openzfs-zfs-dkms" \
+  "zfs build asserts the dkms package was produced"
+
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.
 first_step="$(bash -c '

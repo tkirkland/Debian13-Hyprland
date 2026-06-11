@@ -246,6 +246,7 @@ ZFS_BUILD_PACKAGES=(
   uuid-dev libblkid-dev libelf-dev libudev-dev libssl-dev zlib1g-dev
   libaio-dev libattr1-dev libffi-dev libcurl4-openssl-dev libpam0g-dev
   libtirpc-dev python3-dev python3-setuptools python3-cffi python3-packaging
+  python3-all-dev python3-sphinx
 )
 
 # uwsm is not in the Debian archive — it is built from source with the

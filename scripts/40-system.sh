@@ -74,33 +74,54 @@ install_base_packages() {
   fi
 }
 
-# Build upstream OpenZFS at its latest release tag as native Debian
-# packages inside the target and install them (dkms module included; the
-# kernel headers from TARGET_BASE_PACKAGES are already in place, so the
-# postinst builds for the target kernel). Test/dev/debug packages are
-# excluded from the install.
+# Build upstream OpenZFS at its latest release as native Debian packages
+# inside the target and install them. ONLY native-deb-utils is built: that
+# set includes openzfs-zfs-dkms (whose postinst builds the module for the
+# TARGET's kernels — headers are already installed). native-deb-kmod is
+# deliberately avoided: it compiles modules for the RUNNING (live) kernel
+# and its package dependency drags that kernel image into the target.
+# Upstream's deb recipes swallow dpkg-buildpackage failures (the lock-file
+# rm masks the exit code), so the required packages are asserted by name.
 install_zfs_from_source() {
   ((NETWORK_AVAILABLE)) ||
     fatal "--zfs-from-source requires network (zfs is not in the offline cache yet)."
   local tag="" jobs="${HYPR_BUILD_JOBS:-}"
   [[ -n "${jobs}" ]] || jobs="\$(nproc)"
-  tag="$(resolve_latest_release_tag "${ZFS_REPO_URL}" "${ZFS_TAG_PATTERN}")"
+  # Tags include dev-cycle markers (zfs-X.Y.99) that outrank real releases
+  # in a version sort; the GitHub API names the actual latest release.
+  # ls-remote with the tag pattern remains the fallback.
+  tag="$(curl -fsSL --retry 3 \
+    "https://api.github.com/repos/openzfs/zfs/releases/latest" 2>/dev/null |
+    grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
+  [[ -n "${tag}" ]] ||
+    tag="$(resolve_latest_release_tag "${ZFS_REPO_URL}" "${ZFS_TAG_PATTERN}")"
   info "Building OpenZFS ${tag} from source (replaces Debian's zfs-*)..."
   rm -rf "${TARGET}/var/tmp/openzfs"
+  rm -f "${TARGET}"/var/tmp/*.deb "${TARGET}"/var/tmp/*.changes \
+    "${TARGET}"/var/tmp/*.buildinfo
   git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
     "${ZFS_REPO_URL}" "${TARGET}/var/tmp/openzfs"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
+    # Drop any live-kernel modules package from an earlier failed attempt.
+    if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
+      apt-get purge -y 'openzfs-zfs-modules-*'
+    fi
     apt-get install -y ${ZFS_BUILD_PACKAGES[*]}
     cd /var/tmp/openzfs
     ./autogen.sh
     ./configure
-    make -j\"${jobs}\" native-deb
-    debs=\"\$(ls /var/tmp/*.deb /var/tmp/openzfs/*.deb 2>/dev/null |
-      grep -Ev 'test|dracut|dbg|-dev' || true)\"
+    make -j\"${jobs}\" native-deb-utils
+    for p in openzfs-zfs-dkms openzfs-zfsutils openzfs-zfs-initramfs \
+      openzfs-zfs-zed; do
+      ls /var/tmp/\${p}_*.deb >/dev/null 2>&1 ||
+        { echo \"required package not built: \${p}\" >&2; exit 1; }
+    done
+    debs=\"\$(ls /var/tmp/*.deb |
+      grep -Ev 'zfs-modules|test|dracut|dbg|-dev' || true)\"
     [[ -n \"\${debs}\" ]] ||
-      { echo 'native-deb produced no installable packages' >&2; exit 1; }
+      { echo 'native-deb-utils produced no installable packages' >&2; exit 1; }
     echo \"\${debs}\" | xargs apt-get install -y
   "
   in_target "zfs version" || true
