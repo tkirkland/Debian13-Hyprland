@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
+# bashsupport disable=BP5007
 # Hypr-Deb: Debian 13 + Hyprland (release tags) installer for the fixed
 # three-disk ZFS/mdadm layout. See README.md and docs/superpowers/specs/.
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
 
 source lib/00-config.sh
 source lib/01-log.sh
@@ -21,18 +19,19 @@ source scripts/60-hyprland.sh
 source scripts/90-verify.sh
 source scripts/99-cleanup.sh
 
+# Triggers when error fires
 on_error() {
   local exit_code=$?
-  warn "FAILED in phase '${CURRENT_PHASE:-startup}' (exit ${exit_code})."
+  warn "FAILED in phase '${current_phase:-startup}' (exit ${exit_code})."
   [[ -n "${LOG_FILE}" ]] && warn "Full log: ${LOG_FILE}"
   warn "Re-run hypr-deb.sh to resume; completed phases are skipped."
-  # Storage failures are almost always "something holds the disk" — trace
+  # Storage failures are "something almost always holds the disk" — trace
   # the holders into the log before the teardown hides the evidence.
-  if [[ "${CURRENT_PHASE:-}" == "storage" ]]; then
+  if [[ "${current_phase:-}" == "storage" ]]; then
     report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
   fi
   # policy-rc.d is intentionally NOT removed here: it must keep guarding
-  # apt runs on resumed installs. Only phase_cleanup removes it.
+  # apt runs on resumed installations. Only phase_cleanup removes it.
   kill_target_processes
   teardown_chroot_binds
   if mountpoint -q "${TARGET}${ESP_MOUNT}" 2>/dev/null; then
@@ -57,7 +56,11 @@ on_exit() {
   fi
 }
 
+# Main loop
 main() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cd "${script_dir}"
   parse_args "$@"
   state_init "${FRESH}"
   setup_logging "${LOG_DIR}"
@@ -67,9 +70,9 @@ main() {
 
   # --phase=cleanup must work on a half-torn-down system: skip preflight
   # entirely (its VM disk detection would refuse disks that still carry
-  # mounts — clearing those is exactly cleanup's job).
+  # mounts — clearing this is exactly cleanup's job).
   if [[ "${RUN_PHASE}" == "cleanup" ]]; then
-    CURRENT_PHASE="cleanup"
+    current_phase="cleanup"
     require_root
     phase_cleanup
     return 0
@@ -86,7 +89,8 @@ main() {
   # --yes promises an unattended run, but create_user would still block on
   # an interactive password prompt deep in the system phase (and skipping
   # the password is no fallback: a passwordless user cannot sudo). Fail
-  # fast while it is still cheap — unless system is already stamped done.
+  # fast while it is still inexpensive — unless the system is already
+  # stamped done.
   if ((ASSUME_YES)) && [[ -z "${USER_PASSWORD}" ]]; then
     case "${RUN_PHASE}" in
       full | system)
@@ -100,19 +104,19 @@ main() {
     [[ -z "${USER_PASSWORD}" ]] &&
     [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "system" ]]; then
     fatal "Non-interactive run with no USER_PASSWORD and no --autologin:" \
-      "the installed console would be unloginable. Set USER_PASSWORD=... " \
+      "the installed console would not support a login. Set USER_PASSWORD=... " \
       "or pass --autologin."
   fi
 
-  # Preflight is never stamped/skipped: it sets per-run state
+  # Preflight is never stamped/skipped: it sets a per-run state
   # (NETWORK_AVAILABLE, VIRT_TYPE, disk selection) that resumed runs need.
   # It is idempotent by design.
-  CURRENT_PHASE="preflight"
+  current_phase="preflight"
   info "=== Phase: preflight ==="
   phase_preflight
 
   if [[ "${RUN_PHASE}" != "full" ]]; then
-    CURRENT_PHASE="${RUN_PHASE}"
+    current_phase="${RUN_PHASE}"
     case "${RUN_PHASE}" in
       system | boot | hyprland | verify) ensure_target_ready ;;
     esac
@@ -127,14 +131,14 @@ main() {
       info "Skipping cache phase (--skip-cache); no offline cache."
       continue
     fi
-    CURRENT_PHASE="${name}"
+    current_phase="${name}"
     run_phase "${name}" "phase_${name}"
   done
-  CURRENT_PHASE="cleanup"
+  current_phase="cleanup"
   phase_cleanup
-  # A completed install has no resume state worth keeping: clearing the
+  # A completed installation has no resume state worth keeping: clearing the
   # stamps (and saved disk selection) makes an immediate re-run a genuine
-  # fresh install — still behind the destructive confirmation gate —
+  # fresh installation — still behind the destructive confirmation gate —
   # instead of a confusing all-phases-skipped no-op.
   rm -rf "${STATE_DIR}"
   info "Installation complete. Reboot into '${BOOTLOADER}'."
