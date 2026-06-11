@@ -42,6 +42,11 @@ out="$(STATE_DIR="$(mktemp -d)" bash -c '
   ensure_target_ready')"
 assert_eq "" "${out}" "ensure_target_ready no-op when no pool exists"
 
+# Non-interactive full runs must fail fast (pre-preflight) when the
+# installed console would be unloginable.
+assert_contains "$(cat hypr-deb.sh)" "no USER_PASSWORD and no --autologin" \
+  "non-interactive password guard present"
+
 # Success must clear resume state so an immediate re-run is a fresh
 # install (behind the destroy gate), not an all-phases-skipped no-op.
 # shellcheck disable=SC2016  # the needle is a literal source-code snippet

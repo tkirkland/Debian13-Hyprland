@@ -75,15 +75,27 @@ main() {
     return 0
   fi
 
+  # Collect every decision a prompt would gather BEFORE preflight spends
+  # minutes installing tools — non-interactive runs fail fast here instead
+  # of mid-run.
+  require_root
+  case "${RUN_PHASE}" in
+    full | boot | verify) require_bootloader_choice ;;
+  esac
+  if ((!IS_INTERACTIVE)) && ((!HYPR_AUTOLOGIN)) &&
+    [[ -z "${USER_PASSWORD}" ]] &&
+    [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "system" ]]; then
+    fatal "Non-interactive run with no USER_PASSWORD and no --autologin:" \
+      "the installed console would be unloginable. Set USER_PASSWORD=... " \
+      "or pass --autologin."
+  fi
+
   # Preflight is never stamped/skipped: it sets per-run state
   # (NETWORK_AVAILABLE, VIRT_TYPE, disk selection) that resumed runs need.
   # It is idempotent by design.
   CURRENT_PHASE="preflight"
   info "=== Phase: preflight ==="
   phase_preflight
-  case "${RUN_PHASE}" in
-    full | boot | verify) require_bootloader_choice ;;
-  esac
 
   if [[ "${RUN_PHASE}" != "full" ]]; then
     CURRENT_PHASE="${RUN_PHASE}"
