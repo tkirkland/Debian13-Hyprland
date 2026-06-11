@@ -111,6 +111,10 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
+  if ((ZFS_FROM_SOURCE)); then
+    vcheck "openzfs built from source installed" in_target \
+      "dpkg -s openzfs-zfsutils >/dev/null"
+  fi
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
      grep -qx '${ROOT_DATASET}'"

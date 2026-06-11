@@ -46,11 +46,59 @@ configure_locale_tz() {
 }
 
 install_base_packages() {
+  local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
+  if ((ZFS_FROM_SOURCE)); then
+    # The upstream openzfs-* packages replace these; installing Debian's
+    # first would only churn (and dkms-build) packages we remove again.
+    for p in "${pkgs[@]}"; do
+      case " ${ZFS_DEBIAN_PACKAGES[*]} " in
+        *" ${p} "*) continue ;;
+      esac
+      filtered+=("${p}")
+    done
+    pkgs=("${filtered[@]}")
+  fi
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y ${TARGET_BASE_PACKAGES[*]}
+    apt-get install -y ${pkgs[*]}
   "
+  if ((ZFS_FROM_SOURCE)); then
+    install_zfs_from_source
+  fi
+}
+
+# Build upstream OpenZFS at its latest release tag as native Debian
+# packages inside the target and install them (dkms module included; the
+# kernel headers from TARGET_BASE_PACKAGES are already in place, so the
+# postinst builds for the target kernel). Test/dev/debug packages are
+# excluded from the install.
+install_zfs_from_source() {
+  ((NETWORK_AVAILABLE)) ||
+    fatal "--zfs-from-source requires network (zfs is not in the offline cache yet)."
+  local tag="" jobs="${HYPR_BUILD_JOBS:-}"
+  [[ -n "${jobs}" ]] || jobs="\$(nproc)"
+  tag="$(resolve_latest_release_tag "${ZFS_REPO_URL}" "${ZFS_TAG_PATTERN}")"
+  info "Building OpenZFS ${tag} from source (replaces Debian's zfs-*)..."
+  rm -rf "${TARGET}/var/tmp/openzfs"
+  git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
+    "${ZFS_REPO_URL}" "${TARGET}/var/tmp/openzfs"
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${ZFS_BUILD_PACKAGES[*]}
+    cd /var/tmp/openzfs
+    ./autogen.sh
+    ./configure
+    make -j\"${jobs}\" native-deb
+    debs=\"\$(ls /var/tmp/*.deb /var/tmp/openzfs/*.deb 2>/dev/null |
+      grep -Ev 'test|dracut|dbg|-dev' || true)\"
+    [[ -n \"\${debs}\" ]] ||
+      { echo 'native-deb produced no installable packages' >&2; exit 1; }
+    echo \"\${debs}\" | xargs apt-get install -y
+  "
+  in_target "zfs version" || true
+  rm -rf "${TARGET}/var/tmp/openzfs"
 }
 
 create_user() {

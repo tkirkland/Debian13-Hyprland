@@ -221,6 +221,27 @@ HYPR_BUILD_PACKAGES=(
   libxcb-xinput-dev
 )
 
+# --zfs-from-source: replace trixie's OpenZFS 2.3.x with upstream's latest
+# release tag, built as upstream's native Debian packages (openzfs-*-dkms,
+# -zfsutils, -zfs-initramfs, -zfs-zed) inside the target. The live
+# environment keeps the distro 2.3.x, so the pool is created with the
+# conservative feature set; enable newer features deliberately with
+# `zpool upgrade` from the booted system. Network-only for now (the
+# offline cache does not yet carry the zfs source tree).
+ZFS_FROM_SOURCE="${ZFS_FROM_SOURCE:-0}"
+ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
+ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
+# Debian packages replaced by the upstream build when the flag is on.
+ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
+# Upstream's documented Debian build dependencies (native-deb targets).
+ZFS_BUILD_PACKAGES=(
+  build-essential autoconf automake libtool gawk alien fakeroot dkms
+  debhelper dh-python dh-dkms po-debconf
+  uuid-dev libblkid-dev libelf-dev libudev-dev libssl-dev zlib1g-dev
+  libaio-dev libattr1-dev libffi-dev libcurl4-openssl-dev libpam0g-dev
+  libtirpc-dev python3-dev python3-setuptools python3-cffi python3-packaging
+)
+
 # uwsm is not in the Debian archive — it is built from source with the
 # hyprwm stack. Its Python runtime deps double as meson configure-time
 # probes, so the hyprland phase re-ensures them (the system phase that

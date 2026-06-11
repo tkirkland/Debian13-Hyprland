@@ -40,9 +40,9 @@ assert_eq "systemd-boot|0|0|0|full|0" "${out}" "systemd-boot accepted"
 
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
-  parse_args --skip-cache --jobs=4
-  echo "${SKIP_CACHE}|${HYPR_BUILD_JOBS}"')"
-assert_eq "1|4" "${out}" "--skip-cache and --jobs parsed"
+  parse_args --skip-cache --jobs=4 --zfs-from-source
+  echo "${SKIP_CACHE}|${HYPR_BUILD_JOBS}|${ZFS_FROM_SOURCE}"')"
+assert_eq "1|4|1" "${out}" "--skip-cache, --jobs, --zfs-from-source parsed"
 
 assert_fails "--jobs rejects non-numeric values" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh

@@ -97,13 +97,16 @@ assert_contains "${out}" "hyprutils" "matrix names failing dep"
 assert_contains "${out}" "0.11.0" "matrix shows required minimum"
 assert_fails "compat gate aborts on mismatch" gate
 
-# Per-repo tag patterns: xkbcommon-X.Y.Z and plain X.YY schemes.
+# Per-repo tag patterns: xkbcommon-X.Y.Z, plain X.YY, and zfs-X.Y.Z.
 make_fake "${tmp}/bin" git 'cat <<EOF
 sha	refs/tags/xkbcommon-1.10.0
 sha	refs/tags/xkbcommon-1.11.0
 sha	refs/tags/1.44
 sha	refs/tags/1.47
 sha	refs/tags/v0.5.0
+sha	refs/tags/zfs-2.3.2
+sha	refs/tags/zfs-2.4.2
+sha	refs/tags/zfs-2.4.99-rc1
 EOF'
 resolve_with() {
   PATH="${tmp}/bin:${PATH}" bash -c "
@@ -116,6 +119,9 @@ assert_eq "xkbcommon-1.11.0" \
   "xkbcommon tag pattern picks newest prefixed tag"
 assert_eq "1.47" "$(resolve_with '^[0-9]+\.[0-9]+$')" \
   "wayland-protocols two-part tag pattern"
+assert_eq "zfs-2.4.2" \
+  "$(resolve_with '^zfs-[0-9]+\.[0-9]+\.[0-9]+$')" \
+  "zfs tag pattern picks newest stable, skips rc"
 
 # Compat gate strips non-numeric tag prefixes before comparing.
 cat >"${tmp}/CMakeLists3.txt" <<'EOF'
