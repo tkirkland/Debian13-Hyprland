@@ -40,19 +40,50 @@ docs/superpowers/           original design spec and implementation plan.
 
 ## Where do I…
 
-| Task | Where |
-|---|---|
-| Add a package to the installed system | `TARGET_BASE_PACKAGES` in `lib/00-config.sh` — or, without touching the repo, an `addons/*.pkgs` file (see below) |
-| Add a build-only dependency (purged after the stack builds) | `HYPR_BUILD_PACKAGES` in `lib/00-config.sh` |
-| Add a runtime dep that the purge must never remove | `UWSM_RUNTIME_PACKAGES` (or a new array wired into `install_build_deps`) — runtime Python/QML-style deps are invisible to the post-purge `ldd` gate |
-| Add a tool the live ISO session needs | `LIVE_TOOL_PACKAGES` in `lib/00-config.sh` **and** the `pkg_probe` map in `scripts/00-preflight.sh` |
-| Add a source-built component | `HYPR_BUILD_ORDER` (dependency position matters) + `HYPR_REPO_URL` in `lib/00-config.sh`; add `HYPR_TAG_PATTERN[...]` if its tags aren't `vX.Y.Z`, `HYPR_MESON_ARGS[...]` for meson options, or a `build_custom_<name>()` in `scripts/60-hyprland.sh` for exotic build systems (see lua) |
-| Add a ZFS build dependency | `ZFS_BUILD_PACKAGES` in `lib/00-config.sh` |
-| Change partition sizes / datasets | `EFI_SIZE`/`SWAP_SIZE` in config; dataset hierarchy in `create_pool_and_datasets` (`scripts/20-storage.sh`) — update `tests/storage-plan.sh` in the same commit |
-| Change the greeter / session command | `configure_session` in `scripts/60-hyprland.sh` (absolute paths only — greetd provides no PATH) |
-| Add a CLI flag | parse + usage in `lib/02-args.sh`, default in `lib/00-config.sh`, assertion in `tests/args.sh` |
-| Add a success check | a `vcheck` line in `phase_verify` (`scripts/90-verify.sh`) |
-| Change bootloader behavior | `scripts/50-boot.sh` (+ `tests/boot-config.sh`) |
+**Add a package to the installed system**
+: `TARGET_BASE_PACKAGES` in `lib/00-config.sh` — or, without touching the
+  repo at all, an `addons/*.pkgs` file (see below).
+
+**Add a build-only dependency** (purged after the stack builds)
+: `HYPR_BUILD_PACKAGES` in `lib/00-config.sh`.
+
+**Add a runtime dep the purge must never remove**
+: `UWSM_RUNTIME_PACKAGES` (or a new array wired into `install_build_deps`).
+  Runtime Python/plugin-style deps are invisible to the post-purge `ldd`
+  gate, so they cannot ride in `HYPR_BUILD_PACKAGES`.
+
+**Add a tool the live ISO session needs**
+: `LIVE_TOOL_PACKAGES` in `lib/00-config.sh` **and** the `pkg_probe` map
+  in `scripts/00-preflight.sh`.
+
+**Add a source-built component**
+: `HYPR_BUILD_ORDER` (dependency position matters) plus `HYPR_REPO_URL`,
+  both in `lib/00-config.sh`. Add `HYPR_TAG_PATTERN[name]` if its tags
+  are not `vX.Y.Z`, `HYPR_MESON_ARGS[name]` for meson options, or a
+  `build_custom_<name>()` function in `scripts/60-hyprland.sh` for exotic
+  build systems (see lua).
+
+**Add an OpenZFS build dependency**
+: `ZFS_BUILD_PACKAGES` in `lib/00-config.sh`.
+
+**Change partition sizes or datasets**
+: `EFI_SIZE`/`SWAP_SIZE` in `lib/00-config.sh`; dataset hierarchy in
+  `create_pool_and_datasets` (`scripts/20-storage.sh`). Update
+  `tests/storage-plan.sh` in the same commit.
+
+**Change the greeter or session command**
+: `configure_session` in `scripts/60-hyprland.sh`. Absolute paths only —
+  greetd provides no PATH to its children.
+
+**Add a CLI flag**
+: parse + usage in `lib/02-args.sh`, default in `lib/00-config.sh`,
+  assertion in `tests/args.sh`.
+
+**Add a success check**
+: a `vcheck` line in `phase_verify` (`scripts/90-verify.sh`).
+
+**Change bootloader behavior**
+: `scripts/50-boot.sh`, with `tests/boot-config.sh` updated alongside.
 
 ## addons/ — user packages without forking
 
