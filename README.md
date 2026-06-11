@@ -55,6 +55,36 @@ Boot the live ISO, get root, run the installer; VM mode picks up the three
 blank virtio disks. After the install, reboot into the chosen bootloader
 and confirm the greetd login.
 
+### VMware setup (Workstation/Player)
+
+The installer is battle-tested under VMware (`systemd-detect-virt` reports
+`vmware`; the open-vm-tools guest packages are installed automatically in
+this mode). Configure the VM as follows:
+
+- **Firmware:** UEFI (VM Settings -> Options -> Advanced -> Firmware type
+  -> UEFI). Legacy BIOS will not boot the result.
+- **Disks:** exactly THREE blank virtual disks, 32 GB+ each (NVMe or SCSI
+  controller — names like `nvme0n1..` or `sda..` are both detected). Do
+  not attach extra data disks; the exactly-three rule is a hard gate. A
+  disk that is mounted (e.g. a fourth disk you formatted for caching) is
+  excluded from candidacy and therefore safe.
+- **Memory/CPU:** 8 GB+ RAM and 4+ vCPUs recommended. The live overlay is
+  RAM-backed — use `--skip-cache` and `--jobs=2` on small VMs.
+- **Display:** enable "Accelerate 3D graphics" with 1 GB+ graphics memory
+  BEFORE the first boot of the installed system. Without it, vmwgfx
+  reports shader model "Legacy" and Hyprland's renderer cannot start.
+- **Boot medium:** attach the current Debian 13 live ISO as a CD/DVD
+  drive. Use the latest point-release ISO: zfs-dkms in the live session
+  needs kernel headers matching the RUNNING live kernel, and mirrors drop
+  superseded kernel packages (preflight fails early with a clear message
+  if the ISO is stale).
+- After installation completes, disconnect the ISO and reboot; the NVRAM
+  entry created by the installer boots the chosen loader directly.
+
+tuigreet note: the password field shows asterisks as you type (installer
+passes `--asterisks`); without that flag tuigreet echoes nothing, which is
+easy to mistake for broken input on a console.
+
 ## Storage layout
 
 ```
