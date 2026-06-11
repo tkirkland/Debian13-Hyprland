@@ -66,7 +66,7 @@ phase_verify() {
   # config names must exist at exactly that absolute path.
   greeter_bin="$(grep -oP '^command = "\K[^ "]+' \
     "${TARGET}/etc/greetd/config.toml" 2>/dev/null || true)"
-  vcheck "configured greeter exists (${greeter_bin:-none})" bash -c \
+  vcheck "greetd session command binary exists (${greeter_bin:-none})" bash -c \
     "[[ -n '${greeter_bin}' && -x '${TARGET}${greeter_bin}' ]]"
   vcheck "session launcher at /usr/local/bin/uwsm" \
     test -x "${TARGET}/usr/local/bin/uwsm"

@@ -30,6 +30,8 @@ Options:
                         Debian packages instead of trixie's zfs-* (network
                         required; live env still creates the pool with the
                         distro version's feature set)
+  --autologin           Boot straight into the Hyprland session as the
+                        target user (no tuigreet console login)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
@@ -62,6 +64,7 @@ parse_args() {
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
       --skip-cache) SKIP_CACHE=1 ;;
       --zfs-from-source) ZFS_FROM_SOURCE=1 ;;
+      --autologin) HYPR_AUTOLOGIN=1 ;;
       --jobs=*)
         HYPR_BUILD_JOBS="${arg#*=}"
         [[ "${HYPR_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] ||

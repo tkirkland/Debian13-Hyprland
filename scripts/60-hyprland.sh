@@ -280,13 +280,22 @@ purge_build_deps() {
 
 configure_session() {
   info "Configuring greetd + uwsm session..."
-  # Debian ships the greetd daemon WITHOUT any greeter binary (agreety is
-  # not packaged despite its manpage); tuigreet provides the login prompt.
-  # Resolve its real path at install time — greetd spawns the greeter with
-  # no PATH (PAM env only), so the config must use absolute paths.
-  local greeter=""
-  greeter="$(in_target "command -v tuigreet")" ||
-    fatal "tuigreet not found in target (TARGET_BASE_PACKAGES should install it)."
+  local session_command="" session_user=""
+  if ((HYPR_AUTOLOGIN)); then
+    # No greeter: greetd starts the session directly as the target user.
+    session_command="/usr/local/bin/uwsm start -- hyprland.desktop"
+    session_user="${TARGET_USERNAME}"
+  else
+    # Debian ships the greetd daemon WITHOUT any greeter binary (agreety
+    # is not packaged despite its manpage); tuigreet provides the login
+    # prompt. Resolve its real path at install time — greetd spawns the
+    # greeter with no PATH (PAM env only), so absolute paths are required.
+    local greeter=""
+    greeter="$(in_target "command -v tuigreet")" ||
+      fatal "tuigreet not found in target (TARGET_BASE_PACKAGES should install it)."
+    session_command="${greeter} --remember --cmd '/usr/local/bin/uwsm start -- hyprland.desktop'"
+    session_user="_greetd"
+  fi
   mkdir -p "${TARGET}/etc/greetd"
   cat >"${TARGET}/etc/greetd/config.toml" <<EOF
 [terminal]
@@ -295,8 +304,8 @@ vt = 1
 [default_session]
 # Absolute paths are required: greetd builds the session environment from
 # PAM, and Debian's default stack provides no PATH for it.
-command = "${greeter} --remember --cmd '/usr/local/bin/uwsm start -- hyprland.desktop'"
-user = "_greetd"
+command = "${session_command}"
+user = "${session_user}"
 EOF
   # Minimal valid Hyprland config for the user.
   mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/hypr"

@@ -270,6 +270,7 @@ TARGET_BASE_PACKAGES=(
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd tuigreet kitty openssh-server
+  psmisc
   "${UWSM_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
@@ -291,6 +292,10 @@ ASSUME_YES="${ASSUME_YES:-0}"
 # --skip-cache: no offline cache is populated or embedded (saves several
 # GB — important in live sessions where CACHE_DIR is RAM-backed).
 SKIP_CACHE="${SKIP_CACHE:-0}"
+# --autologin: greetd starts the Hyprland session directly as
+# TARGET_USERNAME on VT1 (no greeter, no console password). Default is the
+# tuigreet login prompt; ssh/sudo remain the authenticated paths either way.
+HYPR_AUTOLOGIN="${HYPR_AUTOLOGIN:-0}"
 # --jobs=N caps build parallelism (empty = one job per CPU). Lower this
 # when compiles exhaust RAM in small VMs.
 HYPR_BUILD_JOBS="${HYPR_BUILD_JOBS:-}"
