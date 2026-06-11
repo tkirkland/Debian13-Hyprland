@@ -1,6 +1,6 @@
-# Hypr-Deb
+# Debian13-Hyprland
 
-A bash installer that puts Debian 13 (trixie) onto one specific three-disk
+A bash installer that puts Debian 13 (Trixie) onto one specific three-disk
 workstation — ZFS root on a raidz1 pool, mdadm RAID for the ESP and swap —
 makes it bootable (UEFI, one user-chosen bootloader), and builds Hyprland
 and its hyprwm dependencies from their **latest release tags** with a
@@ -108,7 +108,7 @@ plain directory.
 This **intentionally diverges** from `precision-zfs-dr.sh` layout parity:
 the separate `md/boot` array is removed (4 partitions become 3 on
 DISK1/DISK2) and the ESP grows to 2G so that any of the three supported
-bootloaders fits, including kernel/initramfs copies for grub and
+bootloaders fit, including kernel/initramfs copies for grub and
 systemd-boot.
 
 ## Usage
@@ -261,7 +261,7 @@ only the Hyprland artifacts and their runtime libraries. Use
 `--keep-build-deps` to keep the toolchain installed; either way the cached
 build-dep .debs stay in `/var/cache/hypr-deb` for offline reinstallation.
 
-`--build-on-firstboot` stages the sources and cached debs in the target and
+`--build-on-firstboot` stages the sources and cached DEBs in the target and
 installs a one-shot systemd unit (`hypr-deb-firstboot.service`) that runs
 the identical build logic on first boot, disables itself on success, and
 leaves a clear failure log otherwise.
