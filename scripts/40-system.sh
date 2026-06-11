@@ -109,7 +109,11 @@ create_user() {
     set -e
     id '${TARGET_USERNAME}' >/dev/null 2>&1 ||
       adduser --disabled-password --gecos '' '${TARGET_USERNAME}'
-    usermod -aG sudo '${TARGET_USERNAME}'
+    # adm + systemd-journal: the workstation owner reads logs without sudo.
+    usermod -aG sudo,adm,systemd-journal '${TARGET_USERNAME}'
+    # Persistent journal (journald Storage=auto): without this directory,
+    # per-user journals are volatile and unreadable by their own user.
+    install -d -m 2755 -g systemd-journal /var/log/journal
   "
   # Now that the user owns its parent, enable and mount the dataset; from
   # here on (resumes and the booted system) it auto-mounts normally.
