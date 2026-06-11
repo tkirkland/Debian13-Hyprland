@@ -278,6 +278,22 @@ TARGET_BASE_PACKAGES=(
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
+# --- Addons -------------------------------------------------------------------
+# User drop-in package lists: every addons/*.pkgs file is read (one Debian
+# package per line; blank lines and # comments ignored) and appended to
+# TARGET_BASE_PACKAGES, so users add packages without editing the repo.
+# Paths are relative to the repo root (the orchestrator cd's there).
+ADDON_PACKAGES=()
+if compgen -G "addons/*.pkgs" >/dev/null; then
+  while IFS= read -r _addon_line; do
+    _addon_line="${_addon_line%%#*}"
+    _addon_line="${_addon_line//[[:space:]]/}"
+    [[ -n "${_addon_line}" ]] && ADDON_PACKAGES+=("${_addon_line}")
+  done < <(cat addons/*.pkgs)
+  TARGET_BASE_PACKAGES+=("${ADDON_PACKAGES[@]}")
+fi
+unset _addon_line
+
 # zfs-dkms must build against the RUNNING kernel's headers. The
 # linux-headers-amd64 metapackage tracks the archive's NEWEST kernel, which
 # is often newer than a live ISO's running kernel — DKMS would then build

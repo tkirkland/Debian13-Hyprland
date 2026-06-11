@@ -257,6 +257,8 @@ sync_clock() {
 phase_preflight() {
   require_root
   validate_identity_settings
+  ((${#ADDON_PACKAGES[@]} == 0)) ||
+    info "Addons: ${#ADDON_PACKAGES[@]} extra package(s) from addons/*.pkgs"
   detect_virt
   detect_live_environment
   check_network

@@ -1,0 +1,7 @@
+# Copy this file to <name>.pkgs to activate it (only *.pkgs files load).
+# One Debian package per line; blank lines and # comments are ignored.
+
+# htop
+# ncdu
+# tmux
+# firefox-esr
