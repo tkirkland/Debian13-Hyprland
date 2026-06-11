@@ -220,7 +220,7 @@ HYPR_BUILD_PACKAGES=(
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
   libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
-  libffi-dev libexpat1-dev
+  libffi-dev libexpat1-dev libiniparser-dev
   libpugixml-dev libre2-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
