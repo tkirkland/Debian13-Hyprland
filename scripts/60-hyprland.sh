@@ -320,6 +320,10 @@ EOF
   in_target "
     set -e
     chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
+    # tuigreet --remember writes its cache as _greetd; the Debian package
+    # does not create the directory, and a greeter that cannot write it
+    # can crash-loop (repaint storm, swallowed keystrokes on VT1).
+    install -d -o _greetd -g _greetd /var/cache/tuigreet
     systemctl enable greetd
     # greetd owns VT1; an unmasked getty@tty1 (or logind's autovt@tty1)
     # attaches to the same terminal and fights the greeter for keystrokes.
