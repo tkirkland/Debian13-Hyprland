@@ -132,10 +132,14 @@ Common flags (see `--help` for the full list):
 --offline                              install only from the local cache
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
+--skip-cache                           omit the embedded offline cache
+--zfs-from-source                      build the latest stable OpenZFS packages
+--autologin                            start Hyprland without the login prompt
+--jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
 --cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
 --fresh                                discard phase state and start over
---yes                                  skip the destructive confirmation
+--yes                                  unattended mode; requires USER_PASSWORD
 --verbose                              detailed logging
 ```
 
@@ -143,6 +147,25 @@ Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
 `TIMEZONE`, `LOCALE`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and more — see
 `lib/00-config.sh`.
+
+### Add-ons
+
+Drop optional installation inputs into `addons/` before starting:
+
+- `addons/*.list` appends Debian package names to the target package set.
+  Use one package per line; blank lines and `#` comments are allowed.
+- `addons/*.deb` installs vendor packages during the system phase with
+  `apt`, so dependencies resolve from the configured Debian sources.
+- `addons/*.sh` runs as root inside the target chroot, in lexical order,
+  after the base packages and add-on `.deb` files. Any failure stops the
+  phase.
+- `addons/*.run` is copied executable to `/opt/addons/` for manual use
+  after the first boot. The installer does not run vendor installers in
+  the chroot.
+
+For offline installs, dependencies required by add-on `.deb` files must
+already exist in the cache. See `addons/README.md` for examples and the
+execution environment available to add-on scripts.
 
 ### Phases
 
@@ -162,7 +185,7 @@ preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
 cache       populate or validate the offline cache (network needed to populate)
 storage     destroy/wipe/partition/mdadm/ZFS (the destructive gate lives here)
 bootstrap   mount target, debootstrap, bind mounts, apt sources, embed cache
-system      fstab, mdadm.conf, hostname, locale, timezone, user, initramfs
+system      identity, packages, add-ons, user, ZFS boot support, initramfs
 boot        chosen bootloader install + NVRAM entry + ESP kernel-sync hook
 hyprland    tag resolution, compatibility gate, builds (or firstboot staging)
 verify      full verification suite (nonzero exit on any failure)
@@ -173,13 +196,19 @@ cleanup     unmount binds and target tree, export the pool
 
 The installer prefers the network but can run fully offline:
 
-1. On a networked machine, run `sudo ./installer.sh --phase=cache
---cache-dir=/path/on/real/storage`. This downloads the complete .deb
+1. On a networked machine, run:
+
+   ```bash
+   sudo ./installer.sh --phase=cache \
+     --cache-dir=/path/on/real/storage
+   ```
+
+   This downloads the complete .deb
    closure (live tools, debootstrap base, target base, bootloaders,
    Hyprland build deps, greetd and uwsm's runtime deps) indexed with
-   `apt-ftparchive` as a `file://` repo, the source archives of Hyprland,
-   every hyprwm dependency, and uwsm at their resolved release tags, and
-   the ZFSBootMenu EFI binary.
+   `apt-ftparchive` as a `file://` repo, source archives for every
+   source-built component at its resolved release tag, and the
+   ZFSBootMenu EFI binary.
 2. Carry the cache directory to the target machine (it must be on real
    storage, not the live overlay).
 3. Run `sudo ./installer.sh --offline --cache-dir=/path/to/cache ...`.
@@ -235,25 +264,30 @@ Scope is deliberately bare: Debian base + compiled Hyprland + greetd +
 uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. uwsm is not
 packaged in Debian, so it is built from source (meson) at its latest
 release tag, like the hyprwm stack; its runtime dependencies (python3,
-python3-xdg, whiptail, dbus-user-session) come from Debian. greetd runs
-`agreety --cmd 'uwsm start -- hyprland.desktop'`; a minimal valid
-`hyprland.lua` is installed for the user; the greetd service is enabled and the graphical target is default.
+python3-xdg, whiptail, dbus-user-session) come from Debian. By default,
+greetd runs `tuigreet --remember --asterisks`, which launches
+`uwsm start -- hyprland.desktop` after login. `--autologin` makes greetd
+start that session directly as the target user. The installer writes a
+minimal `hyprland.lua`, enables greetd, masks the competing VT1 getty, and
+sets `graphical.target` as the default.
 
 Source policy:
 
 - The **latest release tag** (semver-highest, pre-releases excluded — not
   the latest commit) of Hyprland is resolved via `git ls-remote --tags`.
-- Dependencies are built from source, each at its own latest release tag:
+- Components are built from source in dependency order, each at its own
+  latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
-  hyprland-protocols, aquamarine — then Hyprland last.
+  hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
+  hyprland-guiutils, then uwsm.
 - **Compatibility gate:** Hyprland's CMake version requirements at the
   resolved tag are parsed and every dependency's resolved tag must satisfy
   them. On any mismatch the run aborts with a requirement-vs-resolved
   matrix. No silent downgrades.
 - Builds run **inside the target** (chroot, or on first boot) so binaries
-  link against exactly the userland that runs them. CMake Release builds
-  installed to `/usr/local`, build trees under `/var/tmp`, deleted after
-  install.
+  link against exactly the userland that runs them. The build uses GCC 15
+  from a pinned sid source where required. Artifacts install to
+  `/usr/local`; build trees under `/var/tmp` are deleted after install.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
 a successful build + verify, purged (`apt-get purge --autoremove`), leaving
