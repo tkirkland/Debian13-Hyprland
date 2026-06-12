@@ -129,6 +129,15 @@ sign_loader() { # $1=source path (target-side), $2=ESP subdirectory under EFI/
 # the real machine later.
 stage_mok_enrollment() {
   local rc=0
+  # mokutil --import hard-rejects passwords outside PASSWORD_MIN/MAX
+  # (8-16 chars); don't even attempt the import with one.
+  if [[ -n "${USER_PASSWORD}" ]] &&
+    ((${#USER_PASSWORD} < 8 || ${#USER_PASSWORD} > 16)); then
+    warn "user password is ${#USER_PASSWORD} chars; mokutil needs 8-16 —" \
+      "MOK enrollment not staged; run 'mokutil --import ${MOK_CRT}' on the" \
+      "installed system with a 8-16 char password."
+    return 0
+  fi
   if [[ -n "${USER_PASSWORD}" ]]; then
     printf '%s\n%s\n' "${USER_PASSWORD}" "${USER_PASSWORD}" |
       chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
