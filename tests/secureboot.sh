@@ -140,4 +140,45 @@ assert_contains "${ver_body}" "mokutil --list-new" \
   "verify reports enrollment staging (warn-only)"
 assert_contains "${ver_body}" "Enroll MOK" "success notice explains first boot"
 
+# --- Final integration review fixes -----------------------------------------
+
+# Fix 1: the in-chroot Hyprland build-dep purge must spare the toolchain
+# the staged firstboot ZFS build needs.
+purge_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/60-hyprland.sh; declare -f purge_build_deps' 2>/dev/null || true)"
+assert_contains "${purge_body}" "ZFS_BUILD_PACKAGES" \
+  "purge_build_deps spares the staged ZFS toolchain"
+zfs_stage_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f stage_zfs_upgrade_job' 2>/dev/null || true)"
+assert_contains "${zfs_stage_body}" "apt-mark manual" \
+  "ZFS build deps marked manual (autoremove-proof)"
+stagefb_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/60-hyprland.sh; declare -f stage_firstboot' 2>/dev/null || true)"
+# shellcheck disable=SC2016 # the unexpanded text is exactly what we assert
+assert_contains "${stagefb_body}" 'ZFS_FROM_SOURCE=${ZFS_FROM_SOURCE}' \
+  "50-hyprland-build job preserves ZFS_FROM_SOURCE at firstboot"
+
+# Fix 2: phase 50 installs grub-efi-amd64-signed; the offline cache must
+# carry it (shim-signed already rides in via TARGET_BASE_PACKAGES).
+cache_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/10-cache.sh
+  declare -f cache_populate_debs' 2>/dev/null || true)"
+assert_contains "${cache_body}" "grub-efi-amd64-signed" \
+  "offline cache carries the signed grub image"
+
+# Fix 4: the firstboot runner enable must run even when a resumed run
+# finds the runner binary already written (enable is idempotent).
+runner_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/60-hyprland.sh
+  declare -f stage_firstboot_runner' 2>/dev/null || true)"
+if printf '%s\n' "${runner_body}" | grep -q 'return 0'; then
+  echo "  FAIL: stage_firstboot_runner must not early-return before enable" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: stage_firstboot_runner always reaches systemctl enable"
+fi
+assert_contains "${runner_body}" "systemctl enable hypr-deb-firstboot.service" \
+  "runner staging enables the unit"
+
 finish_test
