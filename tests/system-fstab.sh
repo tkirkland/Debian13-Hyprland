@@ -67,6 +67,20 @@ assert_contains "${zfs_body}" "openzfs-zfs-dkms" \
 assert_contains "${zfs_body}" "pam-auth-update" \
   "zfs build purges pam_zfs_key and regenerates the PAM stack"
 
+# Addon artifacts: debs install via apt (dependency resolution); runfiles
+# are staged at /opt/addons, never executed in the chroot.
+addon_body="$(bash -c '
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f install_addon_artifacts phase_system')"
+assert_contains "${addon_body}" "apt-get install -y /var/tmp/addon-debs" \
+  "addon debs installed through apt"
+assert_contains "${addon_body}" "/opt/addons" \
+  "runfiles staged into the target"
+assert_contains "${addon_body}" "install_addon_artifacts" \
+  "phase_system runs the addon artifact step"
+
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.
 first_step="$(bash -c '
