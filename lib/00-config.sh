@@ -239,17 +239,21 @@ HYPR_BUILD_PACKAGES=(
   libxcb-xinput-dev
 )
 
-# --zfs-from-source (hybrid): the install keeps trixie's OpenZFS 2.3.x
-# (dkms-signed in the chroot; it mounts the ZFS root on boot #1); the
-# upstream release tag is staged and built at FIRST BOOT as upstream's
-# native Debian packages (openzfs-*) by firstboot job 30-zfs-upgrade.sh,
-# after the MOK key is enrolled. The pool is created with the conservative
-# 2.3.x feature set; enable newer features deliberately with
-# `zpool upgrade` from the booted system. Network-only for now (the
-# offline cache does not yet carry the zfs source tree).
-ZFS_FROM_SOURCE="${ZFS_FROM_SOURCE:-0}"
+# Upstream OpenZFS, FORCED on networked installs: trixie's 2.3.x is
+# replaced by upstream's latest release tag, built as upstream's native
+# Debian packages (openzfs-*) inside the chroot during the system phase.
+# dkms signs the modules with the MOK keypair (generated before packages
+# land), so secure boot works the moment the key is enrolled at the
+# first-boot MokManager screen — no build is ever deferred. Offline
+# installs keep distro 2.3.x with a warning (the cache does not carry the
+# zfs source tree). The live environment uses distro 2.3.x either way, so
+# the pool is created with the conservative feature set; enable newer
+# features deliberately with `zpool upgrade` from the booted system.
 ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
 ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
+# Debian packages the upstream build replaces (skipped on networked
+# installs so we never dkms-build modules we immediately remove).
+ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
 # Upstream's documented Debian build dependencies (native-deb targets).
 ZFS_BUILD_PACKAGES=(
   build-essential autoconf automake libtool gawk alien fakeroot dkms

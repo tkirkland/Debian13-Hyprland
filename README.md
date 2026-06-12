@@ -133,7 +133,6 @@ Common flags (see `--help` for the full list):
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
 --skip-cache                           omit the embedded offline cache
---zfs-from-source                      stage upstream OpenZFS to build at first boot; install keeps repo zfs; one extra reboot
 --autologin                            start Hyprland without the login prompt
 --jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
@@ -318,6 +317,12 @@ Source policy:
   link against exactly the userland that runs them. The build uses GCC 15
   from a pinned sid source where required. Artifacts install to
   `/usr/local`; build trees under `/var/tmp` are deleted after install.
+- **OpenZFS comes from upstream, not trixie**, on every networked install:
+  the latest release builds in the chroot as native `openzfs-*` packages
+  replacing Debian's 2.3.x, with modules dkms-signed by the machine's MOK
+  key. Offline installs keep repo 2.3.x (the cache carries no zfs source).
+  The pool itself is created by the live session's 2.3.x, so its feature
+  set stays conservative until you `zpool upgrade` deliberately.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
 a successful build + verify, purged (`apt-get purge --autoremove`), leaving
