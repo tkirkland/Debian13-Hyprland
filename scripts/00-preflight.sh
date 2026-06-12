@@ -283,10 +283,38 @@ bootstrap_live_tools() {
   fi
 }
 
+# Debian 13 apt verifies archive signatures with sqv, which HARD-FAILS
+# outside the signature's validity window ("Not live until ..."), so a
+# skewed clock (VM RTC drift, hardware clock on local time) kills
+# debootstrap/apt mid-install. NTP enablement alone is fire-and-forget —
+# timesyncd may be absent or still converging — so when the clock
+# disagrees with the mirror's HTTP Date header by more than 5 minutes,
+# set it from that header directly and persist to the hardware clock.
 sync_clock() {
   ((NETWORK_AVAILABLE)) || return 0
   if command -v timedatectl >/dev/null 2>&1; then
     timedatectl set-ntp true 2>/dev/null || true
+  fi
+  local header="" remote_epoch=0 local_epoch=0 skew=0
+  header="$(curl -fsI --max-time 10 "${MIRROR}/dists/${SUITE}/Release" \
+    2>/dev/null | grep -i '^[Dd]ate:' | head -n1 | sed 's/^[Dd]ate: *//' |
+    tr -d '\r' || true)"
+  [[ -n "${header}" ]] || return 0
+  remote_epoch="$(date -d "${header}" +%s 2>/dev/null || echo 0)"
+  ((remote_epoch > 0)) || return 0
+  local_epoch="$(date +%s)"
+  skew=$((remote_epoch - local_epoch))
+  ((skew < 0)) && skew=$((-skew))
+  ((skew <= 300)) && return 0
+  warn "System clock is off by ${skew}s vs the mirror — setting it from" \
+    "the mirror's Date header (sqv rejects skewed signatures)."
+  if date -u -s "@${remote_epoch}" >/dev/null 2>&1; then
+    if command -v hwclock >/dev/null 2>&1; then
+      hwclock --systohc 2>/dev/null || true
+    fi
+  else
+    warn "Could not set the clock; apt signature verification may fail" \
+      "('Not live until ...'). Set it manually and re-run."
   fi
 }
 
