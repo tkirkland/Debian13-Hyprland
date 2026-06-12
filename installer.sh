@@ -24,7 +24,7 @@ on_error() {
   local exit_code=$?
   warn "FAILED in phase '${current_phase:-startup}' (exit ${exit_code})."
   [[ -n "${LOG_FILE}" ]] && warn "Full log: ${LOG_FILE}"
-  warn "Re-run hypr-deb.sh to resume; completed phases are skipped."
+  warn "Re-run installer.sh to resume; completed phases are skipped."
   # Storage failures are "something almost always holds the disk" — trace
   # the holders into the log before the teardown hides the evidence.
   if [[ "${current_phase:-}" == "storage" ]]; then
@@ -64,7 +64,6 @@ main() {
   parse_args "$@"
   state_init "${FRESH}"
   setup_logging "${LOG_DIR}"
-  write_debian_sources
   trap on_error ERR
   trap on_exit EXIT
 
@@ -82,6 +81,7 @@ main() {
   # minutes installing tools — non-interactive runs fail fast here instead
   # of mid-run.
   require_root
+  write_debian_sources
   case "${RUN_PHASE}" in
     full | boot | verify) require_bootloader_choice ;;
   esac

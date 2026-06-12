@@ -82,7 +82,7 @@ out="$(bash -c '
   report_disk_holders /dev/vda /dev/vdb' 2>&1)"
 assert_contains "${out}" "Storage diagnostics" "holder diagnostics run"
 assert_contains "${out}" "Imported pools" "diagnostics cover pools"
-assert_contains "$(cat hypr_deb.sh)" "report_disk_holders" \
+assert_contains "$(cat installer.sh)" "report_disk_holders" \
   "failure trap traces disk holders"
 
 finish_test
