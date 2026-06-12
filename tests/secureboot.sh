@@ -62,8 +62,10 @@ hypr_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   declare -f stage_firstboot_runner stage_firstboot' 2>/dev/null || true)"
 assert_contains "${hypr_body}" "firstboot.d" \
   "runner executes a per-job directory"
+# shellcheck disable=SC2016  # literal needles: the runner expands these at boot
 assert_contains "${hypr_body}" '${job%.sh}.done' \
   "successful jobs renamed .done"
+# shellcheck disable=SC2016
 assert_contains "${hypr_body}" '${job%.sh}.failed' \
   "failed jobs renamed .failed (boot continues)"
 assert_contains "${hypr_body}" "hypr-deb-reboot-required" \
