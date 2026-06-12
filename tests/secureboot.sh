@@ -18,4 +18,23 @@ assert_contains "${cfg}" \
 live="$(bash -c 'source lib/00-config.sh; echo "${LIVE_TOOL_PACKAGES[*]}"')"
 assert_contains "${live}" "openssl" "openssl available in the live env (key gen)"
 
+pre_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/00-preflight.sh
+  declare -f check_secureboot_disabled phase_preflight || true')"
+assert_contains "${pre_body}" "mokutil --sb-state" \
+  "preflight probes secure boot state via mokutil"
+assert_contains "${pre_body}" "SecureBoot-8be4df61" \
+  "preflight falls back to the SecureBoot efivar"
+assert_contains "${pre_body}" "DISABLE secure boot" \
+  "preflight failure explains the remedy"
+assert_contains "${pre_body}" "check_secureboot_disabled" \
+  "phase_preflight calls the secure boot check"
+assert_contains "${pre_body}" "Enroll MOK" \
+  "remedy explains MokManager enrollment"
+
+boot_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/00-preflight.sh
+  declare -f bootstrap_live_tools || true')"
+assert_contains "${boot_body}" "openssl" "openssl probed by live bootstrap"
+
 finish_test
