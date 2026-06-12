@@ -78,6 +78,12 @@ cleanup_body="$(bash -c '
   declare -f phase_cleanup')"
 assert_contains "${cleanup_body}" "policy-rc.d" \
   "cleanup removes the chroot service guard"
+assert_contains "${cleanup_body}" \
+  "etc/apt/sources.list.d/sid-toolchain.sources" \
+  "cleanup removes the sid toolchain source"
+assert_contains "${cleanup_body}" \
+  "etc/apt/preferences.d/sid-toolchain" \
+  "cleanup removes the sid toolchain pin"
 assert_contains "${cleanup_body}" "kill_target_processes" \
   "cleanup kills chroot-holding processes before teardown"
 if [[ "${out}" == *"deb.debian.org"* ]]; then
