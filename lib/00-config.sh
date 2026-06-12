@@ -104,6 +104,16 @@ ZBM_EFI_URL="${ZBM_EFI_URL:-https://get.zfsbootmenu.org/efi}"
 ESP_MOUNT="/boot/efi"
 KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"
 
+# --- Secure boot ---------------------------------------------------------------
+# Always on. The dkms MOK keypair signs everything self-built: dkms signs
+# kernel modules with it automatically; the boot phase signs loader EFI
+# binaries (zbm / systemd-boot) with the same key. GRUB needs no self-
+# signing (Debian ships signed shim + GRUB). Paths are target-side and
+# fixed: they are what Debian's dkms uses.
+MOK_KEY="/var/lib/dkms/mok.key" # PEM private key, passphrase-less
+MOK_CRT="/var/lib/dkms/mok.pub" # DER certificate (dkms + mokutil format)
+MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
+
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
 # Build order satisfies the dependency graph; hyprland after its deps.
@@ -274,6 +284,7 @@ TARGET_BASE_PACKAGES=(
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd tuigreet kitty openssh-server
   psmisc
+  shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
@@ -304,6 +315,7 @@ LIVE_KERNEL_HEADERS="linux-headers-$(uname -r)"
 LIVE_TOOL_PACKAGES=(
   debootstrap gdisk parted mdadm dosfstools zfsutils-linux zfs-dkms
   "${LIVE_KERNEL_HEADERS}" apt-utils git curl efibootmgr rsync psmisc
+  openssl
 )
 
 # --- Behaviour ------------------------------------------------------------------
