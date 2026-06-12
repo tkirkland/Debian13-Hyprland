@@ -125,8 +125,11 @@ phase_verify() {
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
   if ((ZFS_FROM_SOURCE)); then
-    vcheck "openzfs built from source installed" in_target \
-      "dpkg -s openzfs-zfsutils >/dev/null"
+    vcheck "zfs upgrade firstboot job staged" test -x \
+      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/30-zfs-upgrade.sh"
+    vcheck "zfs source tree staged" test -d "${TARGET}/var/tmp/openzfs"
+    vcheck "firstboot unit enabled (zfs upgrade)" in_target \
+      "systemctl is-enabled hypr-deb-firstboot.service"
   fi
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |

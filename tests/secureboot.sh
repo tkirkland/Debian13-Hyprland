@@ -73,4 +73,25 @@ assert_contains "${hypr_body}" "50-hyprland-build.sh" \
 assert_contains "${hypr_body}" "Before=greetd.service" \
   "firstboot unit runs pre-login"
 
+zfs_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f install_base_packages stage_zfs_upgrade_job write_zfs_upgrade_job' \
+  2>/dev/null || true)"
+assert_contains "${zfs_body}" "30-zfs-upgrade.sh" \
+  "zfs upgrade staged as firstboot job"
+assert_contains "${zfs_body}" "stage_firstboot_runner" \
+  "zfs staging installs the shared runner"
+assert_contains "${zfs_body}" "native-deb-utils" \
+  "job builds upstream native debs"
+assert_contains "${zfs_body}" "update-initramfs" \
+  "job rebuilds the initramfs after the swap"
+assert_contains "${zfs_body}" "hypr-deb-reboot-required" \
+  "job requests a reboot"
+if printf '%s' "${zfs_body}" | grep -q 'ZFS_DEBIAN_PACKAGES'; then
+  echo "  FAIL: install_base_packages must no longer filter zfs packages" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: repo zfs always installs (no install-time replacement)"
+fi
+
 finish_test
