@@ -72,13 +72,14 @@ nothing; everything still boots normally.
   the ZFS root on first boot. Pool features stay 2.3-compatible (the live
   environment created the pool with 2.3.x), so the later 2.4.x module imports
   it cleanly.
-- Stage a **firstboot OpenZFS upgrade job** through the existing firstboot
-  runner: pre-login, no GUI, it fetches/uses the cached OpenZFS source tag
-  (phase 10 already caches source archives for offline installs), builds the
-  target release (e.g. 2.4.2) via dkms — which signs it with the
-  already-enrolled MOK key — rebuilds the initramfs, and reboots. Boot #2
-  runs the self-built release. On build failure: log loudly, keep running
-  repo 2.3.x (system stays bootable), leave the job re-runnable.
+- Stage a **firstboot OpenZFS upgrade job** through the firstboot runner:
+  pre-login, no GUI. The source tree and build deps are staged at install
+  time (network required — `--zfs-from-source` stays network-only, matching
+  its prior behavior); the job builds the target release (e.g. 2.4.2) via
+  dkms — which signs it with the already-enrolled MOK key — rebuilds the
+  initramfs, and reboots. Boot #2 runs the self-built release. On build
+  failure: log loudly, keep running repo 2.3.x (system stays bootable),
+  leave the job re-runnable.
 
 ### 4. Boot phase (scripts/50-boot.sh)
 
@@ -100,9 +101,10 @@ New `setup_secureboot()` runs after the chosen loader lands on the ESP:
   do not abort — system still boots with SB off and enrollment can be done
   manually later. Print the manual command in the warning.
 - Extend the `hypr-deb-sync-esp` hook: after syncing kernel/initrd, re-sign
-  the loader binary (zbm/systemd-boot) if its hash changed, so loader updates
-  never break the chain. Kernels/initrds are Debian-signed already; the hook
-  does not sign them.
+  the systemd-boot binary when the package updates it, so loader updates
+  never break the chain. ZBM is not package-managed — a manual ZBM update
+  needs a manual re-sign (command documented in the README). Kernels/initrds
+  are Debian-signed already; the hook does not sign them.
 
 ### 5. Kernel / module chain (no new work, documented behavior)
 
