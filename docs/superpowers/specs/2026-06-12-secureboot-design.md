@@ -34,6 +34,12 @@ nothing; everything still boots normally.
   to build the pool, which a lockdown kernel refuses. Fail loudly with an
   explanation telling the user to disable secure boot, install, then re-enable
   it after first boot (MokManager enrollment makes it safe to do so).
+- **Hybrid ZFS delivery:** the install itself uses Debian repo `zfs-dkms`
+  (2.3.x — fast, no source build, dkms-signed in chroot); the newer OpenZFS
+  release (e.g. 2.4.2) is compiled, signed, and activated at **first boot**
+  via the existing firstboot runner, after MOK enrollment has already
+  happened at the MokManager screen. The slow build leaves the install path,
+  and signing works because the key is enrolled by build time.
 
 ## Components
 
@@ -55,12 +61,24 @@ nothing; everything still boots normally.
   (paths inside the target).
 - Phase-10 offline cache picks these packages up like any others.
 
-### 3. Key creation (scripts/40-system.sh)
+### 3. Key creation + hybrid ZFS (scripts/40-system.sh)
 
 - Ensure the dkms MOK keypair exists in the target **before** ZFS module
   builds, so dkms signs modules with it. Debian's dkms generates the pair on
   demand; if absent, generate explicitly (openssl, same parameters dkms uses)
   so EFI signing in phase 50 can rely on it.
+- **Replace the install-time OpenZFS source build with repo `zfs-dkms`**
+  (Debian 13 ships 2.3.x). dkms builds and signs it in the chroot; it mounts
+  the ZFS root on first boot. Pool features stay 2.3-compatible (the live
+  environment created the pool with 2.3.x), so the later 2.4.x module imports
+  it cleanly.
+- Stage a **firstboot OpenZFS upgrade job** through the existing firstboot
+  runner: pre-login, no GUI, it fetches/uses the cached OpenZFS source tag
+  (phase 10 already caches source archives for offline installs), builds the
+  target release (e.g. 2.4.2) via dkms — which signs it with the
+  already-enrolled MOK key — rebuilds the initramfs, and reboots. Boot #2
+  runs the self-built release. On build failure: log loudly, keep running
+  repo 2.3.x (system stays bootable), leave the job re-runnable.
 
 ### 4. Boot phase (scripts/50-boot.sh)
 
@@ -107,7 +125,9 @@ New vchecks:
 
 Print a short notice: secure boot is ready; on next boot MokManager (blue
 screen) will prompt — choose **Enroll MOK**, enter the user account password;
-after that, secure boot may be enabled in firmware at any time.
+after that, secure boot may be enabled in firmware at any time. Mention that
+the first boot also compiles the newer OpenZFS release in the background
+(pre-login) and reboots once when done.
 
 ## Testing (tests/secureboot.sh)
 
@@ -122,6 +142,9 @@ function bodies):
 - verify body contains the new vcheck labels.
 - config: packages present in `TARGET_BASE_PACKAGES`; `MOK_KEY`/`MOK_CRT`
   defined.
+- phase 40: repo `zfs-dkms` install replaces the source build; firstboot
+  upgrade job staged with build, initramfs rebuild, reboot, and
+  fail-safe-keep-2.3.x behavior.
 
 ## Out of scope
 
