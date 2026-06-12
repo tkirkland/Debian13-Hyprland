@@ -60,6 +60,10 @@ phase_verify() {
     "
     vcheck "Hyprland links resolve" in_target \
       "! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
+    # guiutils builds every util from its root CMakeLists; if a future tag
+    # drops or renames the welcome util, fail loudly here (issue #11).
+    vcheck "welcome app installed" \
+      test -x "${TARGET}/usr/local/bin/hyprland-welcome"
   fi
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
