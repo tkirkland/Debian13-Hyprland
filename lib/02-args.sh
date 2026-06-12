@@ -26,8 +26,6 @@ Options:
   --skip-cache          Do not populate or embed the offline cache (saves
                         several GB; the installed system loses offline
                         rebuild capability)
-  --zfs-from-source     Stage upstream OpenZFS to build at first boot
-                        (install keeps repo zfs; one extra reboot)
   --autologin           Boot straight into the Hyprland session as the
                         target user (no tuigreet console login)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
@@ -63,7 +61,6 @@ parse_args() {
         ;;
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
       --skip-cache) SKIP_CACHE=1 ;;
-      --zfs-from-source) ZFS_FROM_SOURCE=1 ;;
       --autologin) HYPR_AUTOLOGIN=1 ;;
       --jobs=*)
         HYPR_BUILD_JOBS="${arg#*=}"
