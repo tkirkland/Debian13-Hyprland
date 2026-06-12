@@ -237,7 +237,7 @@ packaged in Debian, so it is built from source (meson) at its latest
 release tag, like the hyprwm stack; its runtime dependencies (python3,
 python3-xdg, whiptail, dbus-user-session) come from Debian. greetd runs
 `agreety --cmd 'uwsm start -- hyprland.desktop'`; a minimal valid
-`hyprland.conf` is installed for the user; the greetd service is enabled and the graphical target is default.
+`hyprland.lua` is installed for the user; the greetd service is enabled and the graphical target is default.
 
 Source policy:
 
