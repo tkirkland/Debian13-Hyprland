@@ -41,6 +41,12 @@ if [[ -f "${lua_config}" ]]; then
   assert_contains "${config}" \
     'hl.bind(main_mod .. " + SHIFT + E", hl.dsp.exit())' \
     "Lua config exits Hyprland"
+  assert_contains "${config}" "hyprland-welcome" \
+    "Lua config launches the welcome app"
+  assert_contains "${config}" ".welcome-shown" \
+    "welcome launch is gated by the first-login marker"
+  assert_contains "${config}" "/usr/local/bin/hyprland-welcome" \
+    "welcome app referenced by absolute path"
 else
   echo "  FAIL: user hyprland.lua does not exist" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
