@@ -59,4 +59,10 @@ else
   echo "  ok: legacy hyprland.conf is not generated"
 fi
 
+ver_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/90-verify.sh
+  declare -f phase_verify' 2>/dev/null || true)"
+assert_contains "${ver_body}" "welcome app installed" \
+  "verify checks the welcome binary exists"
+
 finish_test
