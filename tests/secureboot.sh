@@ -94,4 +94,38 @@ else
   echo "  ok: repo zfs always installs (no install-time replacement)"
 fi
 
+boot_sb="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/50-boot.sh
+  declare -f install_shim sign_loader stage_mok_enrollment ensure_mok_pem \
+    install_zbm install_grub install_sdboot phase_boot write_esp_sync_hook \
+    write_grub_cfg' 2>/dev/null || true)"
+assert_contains "${boot_sb}" "shimx64.efi.signed" "shim copied from shim-signed"
+assert_contains "${boot_sb}" "mmx64.efi.signed" "MokManager copied to ESP"
+assert_contains "${boot_sb}" "sbsign --key" "self-built loaders MOK-signed"
+assert_contains "${boot_sb}" "mokutil --import" "MOK enrollment staged"
+assert_contains "${boot_sb}" 'EFI\zbm\shimx64.efi' \
+  "zbm NVRAM entry points at shim"
+assert_contains "${boot_sb}" 'EFI\debian\shimx64.efi' \
+  "grub NVRAM entry points at shim"
+assert_contains "${boot_sb}" 'EFI\systemd\shimx64.efi' \
+  "systemd-boot NVRAM entry points at shim"
+assert_contains "${boot_sb}" "grub-efi-amd64-signed" \
+  "grub uses Debian's signed packages"
+assert_contains "${boot_sb}" "--uefi-secure-boot" \
+  "grub-install installs the signed chain"
+assert_contains "${boot_sb}" "stage_mok_enrollment" \
+  "phase_boot stages enrollment for every loader"
+enroll_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/50-boot.sh; declare -f stage_mok_enrollment' 2>/dev/null || true)"
+if printf '%s' "${enroll_body}" | grep -q 'fatal'; then
+  echo "  FAIL: stage_mok_enrollment must never be fatal" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: enrollment failure is warn-only"
+fi
+hook_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/50-boot.sh; declare -f write_esp_sync_hook' 2>/dev/null || true)"
+assert_contains "${hook_body}" "systemd-bootx64.efi" \
+  "sync hook re-signs updated systemd-boot"
+
 finish_test
