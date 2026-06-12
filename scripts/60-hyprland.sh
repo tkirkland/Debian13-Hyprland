@@ -267,20 +267,17 @@ purge_build_deps() {
       xargs -r apt-mark manual
   "
   info "Purging build dependencies (cached debs remain in ${TARGET_CACHE_DIR})..."
-  # --zfs-from-source stages firstboot job 30-zfs-upgrade.sh with
-  # ZFS_BUILD_PACKAGES preinstalled so it can build offline. Several of
-  # them overlap the Hyprland build deps (build-essential, libffi-dev,
-  # libudev-dev, ...), so spare the whole ZFS set here — the zfs job does
-  # not purge them either (--keep-build-deps spirit for the zfs set), and
-  # stage_zfs_upgrade_job apt-marked them manual against the autoremove.
+  # dkms rebuilds (and re-signs) the zfs module on every kernel update, so
+  # ZFS_BUILD_PACKAGES must stay installed for the system's lifetime.
+  # Several of them overlap the Hyprland build deps (build-essential,
+  # libffi-dev, libudev-dev, ...), so spare the whole ZFS set here —
+  # install_zfs_from_source apt-marked them manual against the autoremove.
   local dep="" purge_list=()
   while IFS= read -r dep; do
     [[ -n "${dep}" ]] || continue
-    if ((ZFS_FROM_SOURCE)); then
-      case " ${ZFS_BUILD_PACKAGES[*]} " in
-      *" ${dep} "*) continue ;;
-      esac
-    fi
+    case " ${ZFS_BUILD_PACKAGES[*]} " in
+    *" ${dep} "*) continue ;;
+    esac
     purge_list+=("${dep}")
   done <"${TARGET}${HYPR_SRC_DIR}/.build-deps"
   if ((${#purge_list[@]} > 0)); then
@@ -463,9 +460,6 @@ TARGET=""           # build on the running system
 NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
 CACHE_DIR="${TARGET_CACHE_DIR}"
 KEEP_BUILD_DEPS=${KEEP_BUILD_DEPS}
-# Stage-time value: env-derived, so it would default to 0 at firstboot and
-# purge_build_deps would strip the toolchain the zfs job needs.
-ZFS_FROM_SOURCE=${ZFS_FROM_SOURCE}
 resolve_all_tags
 check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"
 for name in "\${HYPR_BUILD_ORDER[@]}"; do

@@ -77,23 +77,21 @@ assert_contains "${hypr_body}" "Before=greetd.service" \
 
 zfs_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f install_base_packages stage_zfs_upgrade_job write_zfs_upgrade_job' \
+  declare -f install_base_packages install_zfs_from_source' \
   2>/dev/null || true)"
-assert_contains "${zfs_body}" "30-zfs-upgrade.sh" \
-  "zfs upgrade staged as firstboot job"
-assert_contains "${zfs_body}" "stage_firstboot_runner" \
-  "zfs staging installs the shared runner"
+assert_contains "${zfs_body}" "install_zfs_from_source" \
+  "networked installs build upstream openzfs in the chroot"
 assert_contains "${zfs_body}" "native-deb-utils" \
-  "job builds upstream native debs"
-assert_contains "${zfs_body}" "update-initramfs" \
-  "job rebuilds the initramfs after the swap"
-assert_contains "${zfs_body}" "hypr-deb-reboot-required" \
-  "job requests a reboot"
-if printf '%s' "${zfs_body}" | grep -q 'ZFS_DEBIAN_PACKAGES'; then
-  echo "  FAIL: install_base_packages must no longer filter zfs packages" >&2
+  "build produces upstream native debs"
+assert_contains "${zfs_body}" "NETWORK_AVAILABLE" \
+  "upstream build gated on network availability only"
+assert_contains "${zfs_body}" "ZFS_DEBIAN_PACKAGES" \
+  "repo zfs filtered out when upstream replaces it"
+if printf '%s' "${zfs_body}" | grep -q 'ZFS_FROM_SOURCE'; then
+  echo "  FAIL: the upstream build is forced — no flag gate allowed" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
-  echo "  ok: repo zfs always installs (no install-time replacement)"
+  echo "  ok: upstream build is forced (no flag gate)"
 fi
 
 boot_sb="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
@@ -142,22 +140,17 @@ assert_contains "${ver_body}" "Enroll MOK" "success notice explains first boot"
 
 # --- Final integration review fixes -----------------------------------------
 
-# Fix 1: the in-chroot Hyprland build-dep purge must spare the toolchain
-# the staged firstboot ZFS build needs.
+# Fix 1: the in-chroot Hyprland build-dep purge must spare the ZFS
+# toolchain — dkms rebuilds (and re-signs) the module on kernel updates.
 purge_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/60-hyprland.sh; declare -f purge_build_deps' 2>/dev/null || true)"
 assert_contains "${purge_body}" "ZFS_BUILD_PACKAGES" \
-  "purge_build_deps spares the staged ZFS toolchain"
-zfs_stage_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  "purge_build_deps spares the ZFS toolchain"
+zfs_build_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f stage_zfs_upgrade_job' 2>/dev/null || true)"
-assert_contains "${zfs_stage_body}" "apt-mark manual" \
+  declare -f install_zfs_from_source' 2>/dev/null || true)"
+assert_contains "${zfs_build_body}" "apt-mark manual" \
   "ZFS build deps marked manual (autoremove-proof)"
-stagefb_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
-  source scripts/60-hyprland.sh; declare -f stage_firstboot' 2>/dev/null || true)"
-# shellcheck disable=SC2016 # the unexpanded text is exactly what we assert
-assert_contains "${stagefb_body}" 'ZFS_FROM_SOURCE=${ZFS_FROM_SOURCE}' \
-  "50-hyprland-build job preserves ZFS_FROM_SOURCE at firstboot"
 
 # Fix 2: phase 50 installs grub-efi-amd64-signed; the offline cache must
 # carry it (shim-signed already rides in via TARGET_BASE_PACKAGES).

@@ -40,10 +40,16 @@ assert_eq "systemd-boot|0|0|0|full|0" "${out}" "systemd-boot accepted"
 
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
-  parse_args --skip-cache --jobs=4 --zfs-from-source --autologin
-  echo "${SKIP_CACHE}|${HYPR_BUILD_JOBS}|${ZFS_FROM_SOURCE}|${HYPR_AUTOLOGIN}"')"
-assert_eq "1|4|1|1" "${out}" \
-  "--skip-cache, --jobs, --zfs-from-source, --autologin parsed"
+  parse_args --skip-cache --jobs=4 --autologin
+  echo "${SKIP_CACHE}|${HYPR_BUILD_JOBS}|${HYPR_AUTOLOGIN}"')"
+assert_eq "1|4|1" "${out}" \
+  "--skip-cache, --jobs, --autologin parsed"
+
+# The upstream OpenZFS build is forced on networked installs; the old
+# opt-in flag must be gone (unknown flags are usage errors).
+assert_fails "--zfs-from-source flag removed" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args --zfs-from-source'
 
 assert_fails "--jobs rejects non-numeric values" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
