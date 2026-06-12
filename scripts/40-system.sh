@@ -142,6 +142,10 @@ install_zfs_from_source() {
 #   *.deb  installed via apt from the local file (dependencies resolved
 #          from the enabled sources; the chroot policy-rc.d guard blocks
 #          service starts like for every other package).
+#   *.sh   user-authored customization hooks, EXECUTED inside the target
+#          chroot as root, in lexical order, after packages and addon
+#          debs (live-build hook semantics). A failing script fails the
+#          phase by name.
 #   *.run  staged executable at /opt/addons in the target and NOT
 #          executed: vendor runfiles (VMware etc.) compile kernel modules
 #          and start services against the RUNNING system, so they must be
@@ -159,6 +163,17 @@ install_addon_artifacts() {
       apt-get install -y /var/tmp/addon-debs/*.deb
     "
     rm -rf "${TARGET}/var/tmp/addon-debs"
+  fi
+  if compgen -G "addons/*.sh" >/dev/null; then
+    rm -rf "${TARGET}/var/tmp/addon-scripts"
+    install -d "${TARGET}/var/tmp/addon-scripts"
+    cp addons/*.sh "${TARGET}/var/tmp/addon-scripts/"
+    for f in addons/*.sh; do
+      info "Running addon script ${f##*/} in the target..."
+      in_target "bash '/var/tmp/addon-scripts/${f##*/}'" ||
+        fatal "Addon script failed: ${f##*/}"
+    done
+    rm -rf "${TARGET}/var/tmp/addon-scripts"
   fi
   if compgen -G "addons/*.run" >/dev/null; then
     install -d "${TARGET}/opt/addons"
