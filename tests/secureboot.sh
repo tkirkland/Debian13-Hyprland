@@ -167,6 +167,13 @@ cache_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
 assert_contains "${cache_body}" "grub-efi-amd64-signed" \
   "offline cache carries the signed grub image"
 
+# Fix 3: mokutil rejects passwords outside 8-16 chars; validate the length
+# before piping USER_PASSWORD instead of letting the import fail.
+assert_contains "${enroll_body}" '#USER_PASSWORD' \
+  "stage_mok_enrollment checks the password length"
+assert_contains "${enroll_body}" "8-16" \
+  "stage_mok_enrollment explains mokutil's 8-16 char bounds"
+
 # Fix 4: the firstboot runner enable must run even when a resumed run
 # finds the runner binary already written (enable is idempotent).
 runner_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
