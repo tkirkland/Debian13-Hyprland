@@ -5,7 +5,7 @@ What lives where, and — more importantly — where to go to change things.
 ## Layout
 
 ```
-hypr_deb.sh                 Orchestrator: sources modules, parses args,
+installer.sh                Orchestrator: sources modules, parses args,
                             dispatches phases, owns the failure traps.
 lib/00-config.sh            ALL cross-module globals and defaults (env-
                             overridable), package arrays, repo/tag maps,
