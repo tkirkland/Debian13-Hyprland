@@ -30,7 +30,7 @@ verify_report() {
 }
 
 phase_verify() {
-  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f="" greeter_bin=""
+  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f="" greeter_bin="" sb_dir=""
   for f in "${TARGET}"/boot/vmlinuz-*; do
     [[ -e "${f}" ]] || continue
     vers+="${f##*/vmlinuz-}"$'\n'
@@ -118,6 +118,28 @@ phase_verify() {
       ;;
   esac
 
+  # Secure boot chain: shim + MokManager beside the loader; self-shipped
+  # loaders (zbm, systemd-boot) verify against the MOK cert. GRUB's
+  # grubx64.efi is Debian-signed, so presence (checked above) suffices.
+  case "${BOOTLOADER}" in
+    zbm) sb_dir="zbm" ;;
+    grub) sb_dir="debian" ;;
+    systemd-boot) sb_dir="systemd" ;;
+  esac
+  vcheck "shim on ESP" test -f "${esp}/EFI/${sb_dir}/shimx64.efi"
+  vcheck "MokManager on ESP" test -f "${esp}/EFI/${sb_dir}/mmx64.efi"
+  vcheck "chain-loaded loader on ESP" \
+    test -f "${esp}/EFI/${sb_dir}/grubx64.efi"
+  if [[ "${BOOTLOADER}" != "grub" ]]; then
+    vcheck "loader MOK signature valid" in_target \
+      "sbverify --cert '${MOK_PEM}' '${ESP_MOUNT}/EFI/${sb_dir}/grubx64.efi'"
+  fi
+  # Warn-only: VMs without efivars cannot stage the import.
+  if ! in_target "mokutil --list-new 2>/dev/null | grep -q ."; then
+    warn "MOK enrollment not staged (no efivars?). On the installed" \
+      "system run: mokutil --import ${MOK_CRT}"
+  fi
+
   vcheck "fstab ESP UUID valid" bash -c \
     "uuid=\$(grep -oP 'UUID=\K[^ ]+(?= /boot/efi)' '${TARGET}/etc/fstab');
      [[ -n \"\${uuid}\" ]] && blkid -U \"\${uuid}\""
@@ -143,4 +165,11 @@ phase_verify() {
 
   verify_report || fatal "Verification failed — installation is NOT complete."
   info "SUCCESS: bootable Debian + Hyprland conditions both met."
+  info "Secure boot: ready. First boot shows the blue MokManager screen —"
+  info "choose 'Enroll MOK' and enter your user password. After that you"
+  info "may enable secure boot in firmware at any time."
+  if ((ZFS_FROM_SOURCE)); then
+    info "First boot also builds the staged OpenZFS upgrade pre-login and"
+    info "reboots once when it finishes."
+  fi
 }
