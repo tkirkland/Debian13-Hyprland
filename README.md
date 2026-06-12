@@ -3,8 +3,8 @@
 A bash installer that puts Debian 13 (Trixie) onto one specific three-disk
 workstation — ZFS root on a raidz1 pool, mdadm RAID for the ESP and swap —
 makes it bootable (UEFI, one user-chosen bootloader), and builds Hyprland
-and its hyprwm dependencies from their **latest release tags** with a
-version-compatibility gate. The install is complete only when both the
+and its hyprwm dependencies from their **latest release tags** with a check
+for version compatibility. The installation is complete only when both the
 bootable Debian system and the Hyprland build pass the verification suite.
 
 **This installer DESTROYS the target disks.** On bare metal the targets are
@@ -17,7 +17,7 @@ DISK3=/dev/disk/by-id/nvme-eui.002538433140819d
 ```
 
 Each path must exist and resolve to an internal whole disk (not removable,
-not USB). If you are not installing onto that machine, run it in a VM.
+not USB). If you are not installing onto that machine, run it on a VM.
 
 ## VM test mode
 
@@ -52,7 +52,7 @@ qemu-system-x86_64 -enable-kvm -m 8G -smp 4 \
 ```
 
 Boot the live ISO, get root, run the installer; VM mode picks up the three
-blank virtio disks. After the install, reboot into the chosen bootloader
+blank virtio disks. After the installation, reboot into the chosen bootloader
 and confirm the greetd login.
 
 ### VMware setup (Workstation/Player)
@@ -61,12 +61,12 @@ The installer is battle-tested under VMware (`systemd-detect-virt` reports
 `vmware`; the open-vm-tools guest packages are installed automatically in
 this mode). Configure the VM as follows:
 
-- **Firmware:** UEFI (VM Settings -> Options -> Advanced -> Firmware type
-  -> UEFI). Legacy BIOS will not boot the result.
+- **Firmware:** UEFI (VM Settings → Options → Advanced → Firmware type
+  → UEFI). Legacy BIOS will not boot the result.
 - **Disks:** exactly THREE blank virtual disks, 32 GB+ each (NVMe or SCSI
   controller — names like `nvme0n1..` or `sda..` are both detected). Do
   not attach extra data disks; the exactly-three rule is a hard gate. A
-  disk that is mounted (e.g. a fourth disk you formatted for caching) is
+  disk that is mounted (e.g., a fourth disk you formatted for caching) is
   excluded from candidacy and therefore safe.
 - **Memory/CPU:** 8 GB+ RAM and 4+ vCPUs recommended. The live overlay is
   RAM-backed — use `--skip-cache` and `--jobs=2` on small VMs.
@@ -162,7 +162,7 @@ Drop optional installation inputs into `addons/` before starting:
   after the first boot. The installer does not run vendor installers in
   the chroot.
 
-For offline installs, dependencies required by add-on `.deb` files must
+For offline installations, dependencies required by add-on `.deb` files must
 already exist in the cache. See `addons/README.md` for examples and the
 execution environment available to add-on scripts.
 
@@ -176,7 +176,7 @@ so a phase can be re-run explicitly. Because single-phase `--phase=<name>`
 runs do not write completion stamps, a later full run will re-execute
 those phases — for `storage` that is destructive (it re-wipes the disks).
 When resuming after a failure, the
-installer re-imports the ZFS pool and re-establishes the target mounts and
+installer re-imports the ZFS pool and re-establishes the target mounts, and
 chroot binds automatically.
 
 ```
@@ -204,7 +204,7 @@ The installer prefers the network but can run fully offline:
 
    This downloads the complete .deb
    closure (live tools, debootstrap base, target base, bootloaders,
-   Hyprland build deps, greetd and uwsm's runtime deps) indexed with
+   Hyprland build deps, greetd, and uwsm's runtime deps) indexed with
    `apt-ftparchive` as a `file://` repo, source archives for every
    source-built component at its resolved release tag, and the
    ZFSBootMenu EFI binary.
@@ -214,7 +214,7 @@ The installer prefers the network but can run fully offline:
    Offline runs validate the cache first and fail with a precise list of
    anything missing.
 
-Caveat: offline live-session preflight installs zfs-dkms against the
+Warning: offline live-session preflight installs zfs-dkms against the
 running live kernel, so the cache must have been built against the same
 live-ISO kernel version (matching `linux-headers`). This is checked.
 
@@ -252,7 +252,7 @@ current kernel + initramfs from `/boot` (on ZFS) to the ESP on every kernel
 or initramfs update.
 
 **Rollback caveat:** with grub or systemd-boot, after rolling back the root
-dataset the ESP still carries the newer kernel copy until the hook next
+ dataset, the ESP still carries the newer kernel copy until the hook next
 runs — the system boots the new kernel on the old root. Only ZBM boots true
 point-in-time snapshots (kernel and userland together). If snapshot boot is
 why you run ZFS, choose `zbm`.
@@ -265,17 +265,17 @@ Every bootloader path uses shim (Microsoft-signed) as the EFI entry point.
 GRUB's chain (`EFI/debian/shimx64.efi → grubx64.efi`) is fully Debian-signed,
 so no additional key enrollment is required for that path. ZFSBootMenu and
 systemd-boot binaries (`grubx64.efi` in their respective ESP directories) are
-signed at install time with the machine's dkms MOK key — the same key dkms
+signed at installation time with the machine's dkms MOK key — the same key dkms
 uses to sign ZFS (and any future) kernel modules.
 
 **Enrollment:** the installer stages `mokutil --import` so the key is queued
-for enrollment. On first boot the blue MokManager screen appears — choose
-**Enroll MOK** and enter your user account password. After enrollment you can
+for enrollment. On the first boot the blue MokManager screen appears — choose
+**Enroll MOK** and enter your user account password. After enrollment, you can
 enable secure boot in firmware settings at any time.
 
 **Installing requires secure boot DISABLED** in firmware. The live session
-must load its own unsigned ZFS kernel module; preflight aborts if secure boot
-is active. Enable it after the first-boot MOK enrollment.
+must load its own unsigned ZFS kernel module; preflight aborts if the secure
+boot is active. Enable it after the first-boot MOK enrollment.
 
 **Manual ZBM updates** need re-signing after replacing the binary:
 
@@ -290,12 +290,12 @@ installer. GRUB needs nothing — its binary is Debian-signed.
 ## Hyprland stack
 
 Scope is deliberately bare: Debian base + compiled Hyprland + greetd +
-uwsm + a terminal (kitty). No waybar, no NVIDIA, no extras. uwsm is not
+UWSM + a terminal (kitty). No waybar, no NVIDIA, no extras. UWSM is not
 packaged in Debian, so it is built from source (meson) at its latest
 release tag, like the hyprwm stack; its runtime dependencies (python3,
 python3-xdg, whiptail, dbus-user-session) come from Debian. By default,
 greetd runs `tuigreet --remember --asterisks`, which launches
-`uwsm start -- hyprland.desktop` after login. `--autologin` makes greetd
+``uwsm start -- hyprland.desktop` after login. `--autologin` makes greetd
 start that session directly as the target user. The installer writes a
 minimal `hyprland.lua`, enables greetd, masks the competing VT1 getty, and
 sets `graphical.target` as the default.
@@ -308,16 +308,16 @@ Source policy:
   latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
   hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
-  hyprland-guiutils, then uwsm.
+  hyprland-guiutils, then UWSM.
 - **Compatibility gate:** Hyprland's CMake version requirements at the
-  resolved tag are parsed and every dependency's resolved tag must satisfy
-  them. On any mismatch the run aborts with a requirement-vs-resolved
+  resolved tag are parsed, and every dependency's resolved tag must satisfy
+  them. On any mismatch the run aborts with a requirement-vs.-resolved
   matrix. No silent downgrades.
-- Builds run **inside the target** (chroot, or on first boot) so binaries
+- Builds run **inside the target** (chroot, or on first boot), so binaries
   link against exactly the userland that runs them. The build uses GCC 15
   from a pinned sid source where required. Artifacts install to
-  `/usr/local`; build trees under `/var/tmp` are deleted after install.
-- **OpenZFS comes from upstream, not trixie**, on every networked install:
+  `/usr/local`; build trees under `/var/tmp` are deleted after installation.
+- **OpenZFS comes from upstream, not trixie**, on every networked installation:
   the latest release builds in the chroot as native `openzfs-*` packages
   replacing Debian's 2.3.x, with modules dkms-signed by the machine's MOK
   key. Offline installs keep repo 2.3.x (the cache carries no zfs source).
@@ -325,7 +325,7 @@ Source policy:
   set stays conservative until you `zpool upgrade` deliberately.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
-a successful build + verify, purged (`apt-get purge --autoremove`), leaving
+a successful build and verify, purged (`apt-get purge --autoremove`), leaving
 only the Hyprland artifacts and their runtime libraries. Use
 `--keep-build-deps` to keep the toolchain installed; either way the cached
 build-dep .debs stay in `/var/cache/hypr-deb` for offline reinstallation.
