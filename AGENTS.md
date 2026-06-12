@@ -23,7 +23,7 @@ bash tests/run-all.sh    # the full fake-driven test suite
 
 ## Architecture invariants
 
-- `hypr_deb.sh` is a thin orchestrator. All real work lives in `lib/`
+- `installer.sh` is a thin orchestrator. All real work lives in `lib/`
   (shared helpers) and `scripts/` (one module per phase). Modules are
   **sourced, never executed**: they start with `# shellcheck shell=bash`,
   contain only functions, and have no shebang.

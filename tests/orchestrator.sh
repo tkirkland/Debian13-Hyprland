@@ -8,16 +8,19 @@ echo "test: orchestrator wiring"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
-out="$(bash hypr_deb.sh --help)"
-assert_contains "${out}" "Usage: hypr_deb.sh" "--help prints usage"
+out="$(bash installer.sh --help)"
+assert_contains "${out}" "Usage: installer.sh" "--help prints usage"
 assert_contains "${out}" "--bootloader" "--help lists bootloader flag"
 
-assert_fails "unknown flag fails" bash hypr_deb.sh --bogus
+assert_fails "unknown flag fails" bash installer.sh --bogus
+
+assert_contains "$(cat installer.sh)" "Re-run installer.sh to resume" \
+  "failure message names the installer"
 
 # Non-root full run must fail in preflight, not crash on sourcing.
 # STATE_DIR/LOG_DIR point into tmp so the dev machine stays clean.
 out="$(STATE_DIR="${tmp}/state" LOG_DIR="${tmp}/logs" \
-  bash hypr_deb.sh --yes --bootloader=grub 2>&1 || true)"
+  bash installer.sh --yes --bootloader=grub 2>&1 || true)"
 assert_contains "${out}" "Must run as root" "root check reached"
 
 # Every phase function referenced by the dispatcher must exist.
@@ -44,18 +47,18 @@ assert_eq "" "${out}" "ensure_target_ready no-op when no pool exists"
 
 # Non-interactive full runs must fail fast (pre-preflight) when the
 # installed console would be unloginable.
-assert_contains "$(cat hypr_deb.sh)" "no USER_PASSWORD and no --autologin" \
+assert_contains "$(cat installer.sh)" "no USER_PASSWORD and no --autologin" \
   "non-interactive password guard present"
 
 # --yes promises unattended: it must fail fast when USER_PASSWORD is
 # unset rather than block at the password prompt mid-install.
-assert_contains "$(cat hypr_deb.sh)" "requires USER_PASSWORD" \
+assert_contains "$(cat installer.sh)" "requires USER_PASSWORD" \
   "--yes fails fast without USER_PASSWORD"
 
 # Success must clear resume state so an immediate re-run is a fresh
 # install (behind the destroy gate), not an all-phases-skipped no-op.
 # shellcheck disable=SC2016  # the needle is a literal source-code snippet
-assert_contains "$(cat hypr_deb.sh)" 'rm -rf "${STATE_DIR}"' \
+assert_contains "$(cat installer.sh)" 'rm -rf "${STATE_DIR}"' \
   "completed install clears phase state"
 
 finish_test

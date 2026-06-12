@@ -367,7 +367,7 @@ stage_firstboot() {
 
   cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<EOF
 #!/usr/bin/env bash
-# One-shot first-boot Hyprland build (staged by hypr_deb.sh).
+# One-shot first-boot Hyprland build (staged by installer.sh).
 set -euo pipefail
 source /usr/local/lib/hypr-deb/00-config.sh
 source /usr/local/lib/hypr-deb/01-log.sh

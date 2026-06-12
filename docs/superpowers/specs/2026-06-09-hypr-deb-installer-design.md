@@ -5,7 +5,7 @@ Status: Approved pending user review
 
 ## Goal
 
-A bash installer — a thin orchestrator `hypr-deb.sh` plus compartmentalized
+A bash installer — a thin orchestrator `installer.sh` plus compartmentalized
 function-specific modules — that installs Debian 13 (trixie) onto a
 fixed three-disk workstation, makes it bootable (UEFI), and builds Hyprland
 and its hyprwm dependencies from their latest release tags with verified
@@ -184,13 +184,13 @@ Build timing (`--build-on-firstboot`):
 
 ## Script Structure
 
-`hypr-deb.sh` is a thin orchestrator: it sources the lib and phase modules,
+`installer.sh` is a thin orchestrator: it sources the lib and phase modules,
 parses arguments, and dispatches phases. All real work lives in
 compartmentalized, function-specific modules, mirroring the reference
 project's layout:
 
 ```
-hypr-deb.sh                  orchestrator: source modules, parse args,
+installer.sh                 orchestrator: source modules, parse args,
                              dispatch phases, top-level traps
 lib/00-config.sh             defaults, fixed disk ids, derived values
 lib/01-log.sh                info/verbose/fatal logging, tee'd log setup
