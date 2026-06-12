@@ -24,9 +24,11 @@ scripts/30-bootstrap.sh     pool/ESP mounts, debootstrap, policy-rc.d
 scripts/40-system.sh        base packages, locale/tz, fstab/mdadm.conf,
                             user creation, OpenZFS-from-source build,
                             ZFS boot support (hostid, cachefile,
-                            initramfs).
+                            initramfs); MOK keypair generation;
+                            ZFS firstboot upgrade staging (firstboot.d/).
 scripts/50-boot.sh          one bootloader (zbm|grub|systemd-boot) on the
-                            RAID1 ESP, NVRAM entries, kernel-sync hook.
+                            RAID1 ESP, NVRAM entries, kernel-sync hook;
+                            shim/MOK signing and enrollment staging.
 scripts/60-hyprland.sh      release-tag resolution, compatibility gate,
                             source builds, build-dep purge, greetd/uwsm
                             session, firstboot staging.

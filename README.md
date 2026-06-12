@@ -133,7 +133,7 @@ Common flags (see `--help` for the full list):
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
 --skip-cache                           omit the embedded offline cache
---zfs-from-source                      build the latest stable OpenZFS packages
+--zfs-from-source                      stage upstream OpenZFS to build at first boot; install keeps repo zfs; one extra reboot
 --autologin                            start Hyprland without the login prompt
 --jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
@@ -257,6 +257,36 @@ dataset the ESP still carries the newer kernel copy until the hook next
 runs — the system boots the new kernel on the old root. Only ZBM boots true
 point-in-time snapshots (kernel and userland together). If snapshot boot is
 why you run ZFS, choose `zbm`.
+
+## Secure boot
+
+Secure boot support is always on — there is no flag to disable it.
+
+Every bootloader path uses shim (Microsoft-signed) as the EFI entry point.
+GRUB's chain (`EFI/debian/shimx64.efi → grubx64.efi`) is fully Debian-signed,
+so no additional key enrollment is required for that path. ZFSBootMenu and
+systemd-boot binaries (`grubx64.efi` in their respective ESP directories) are
+signed at install time with the machine's dkms MOK key — the same key dkms
+uses to sign ZFS (and any future) kernel modules.
+
+**Enrollment:** the installer stages `mokutil --import` so the key is queued
+for enrolment. On first boot the blue MokManager screen appears — choose
+**Enroll MOK** and enter your user account password. After enrolment you can
+enable secure boot in firmware settings at any time.
+
+**Installing requires secure boot DISABLED** in firmware. The live session
+must load its own unsigned ZFS kernel module; preflight aborts if secure boot
+is active. Enable it after the first-boot MOK enrolment.
+
+**Manual ZBM updates** need re-signing after replacing the binary:
+
+```bash
+sbsign --key /var/lib/dkms/mok.key --cert /var/lib/dkms/mok.pem \
+  --output /boot/efi/EFI/zbm/grubx64.efi <new>.EFI
+```
+
+systemd-boot re-signs automatically via the kernel-sync hook installed by the
+installer. GRUB needs nothing — its binary is Debian-signed.
 
 ## Hyprland stack
 

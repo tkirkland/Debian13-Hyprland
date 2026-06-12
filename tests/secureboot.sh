@@ -128,4 +128,14 @@ hook_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
 assert_contains "${hook_body}" "systemd-bootx64.efi" \
   "sync hook re-signs updated systemd-boot"
 
+ver_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/90-verify.sh
+  declare -f phase_verify' 2>/dev/null || true)"
+assert_contains "${ver_body}" "shim on ESP" "verify checks shim presence"
+assert_contains "${ver_body}" "MokManager on ESP" "verify checks MokManager"
+assert_contains "${ver_body}" "sbverify" "verify validates loader signature"
+assert_contains "${ver_body}" "mokutil --list-new" \
+  "verify reports enrollment staging (warn-only)"
+assert_contains "${ver_body}" "Enroll MOK" "success notice explains first boot"
+
 finish_test
