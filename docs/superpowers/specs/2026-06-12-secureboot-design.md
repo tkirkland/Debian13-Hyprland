@@ -146,8 +146,18 @@ function bodies):
   upgrade job staged with build, initramfs rebuild, reboot, and
   fail-safe-keep-2.3.x behavior.
 
+## Forward compatibility
+
+The firstboot upgrade job must be structured as one job among possible many
+(per-job scripts under the firstboot runner, not a monolith): issue
+[#4](https://github.com/tkirkland/Debian13-Hyprland/issues/4) (NVIDIA
+auto-detect/install) will add a sibling job using the same dkms-build →
+MOK-sign → initramfs → reboot machinery this spec establishes.
+
 ## Out of scope
 
 - Custom platform-key ownership (sbctl-style PK/KEK replacement).
 - Signing kernels/initrds ourselves (Debian's signatures suffice).
+- NVIDIA driver detection/install itself (issue #4 — enabled by, but not
+  part of, this work).
 - Secure-boot-capable live/installer media.
