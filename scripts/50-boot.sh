@@ -41,6 +41,14 @@ done | sort -V | tail -n1)"
 mkdir -p "${esp}"
 cp "/boot/vmlinuz-${kver}" "${esp}/vmlinuz"
 cp "/boot/initrd.img-${kver}" "${esp}/initrd.img"
+# Keep the MOK-signed systemd-boot copy fresh: package updates rewrite the
+# canonical binary; shim chain-loads our signed copy on the ESP.
+sd_src="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+sd_dst="/boot/efi/EFI/systemd/grubx64.efi"
+if [[ -f "${sd_src}" && -f "${sd_dst}" && "${sd_src}" -nt "${sd_dst}" ]]; then
+  sbsign --key /var/lib/dkms/mok.key --cert /var/lib/dkms/mok.pem \
+    --output "${sd_dst}" "${sd_src}"
+fi
 sync
 EOF
   chmod +x "${TARGET}/usr/local/sbin/hypr-deb-sync-esp"
@@ -79,6 +87,74 @@ create_nvram_entry() { # $1=label $2=loader-path (backslash form)
       --label "${label}" --loader "${loader}" ||
       fatal "efibootmgr entry creation failed (spec: NVRAM entry required)."
   done
+}
+
+# --- Secure boot ---------------------------------------------------------------
+# Model: shim (Microsoft-signed) is the NVRAM entry and chain-loads the
+# real loader from the 'grubx64.efi' name in its own directory. Debian
+# signs grub; zbm and systemd-boot are self-shipped binaries, so they are
+# MOK-signed like every other self-built artifact. The same dkms key signs
+# kernel modules — one MokManager enrollment covers the whole system.
+
+# sbsign/sbverify need the certificate in PEM; dkms keeps it in DER.
+ensure_mok_pem() {
+  in_target "
+    set -e
+    test -f '${MOK_PEM}' ||
+      openssl x509 -inform DER -in '${MOK_CRT}' -out '${MOK_PEM}'
+  "
+}
+
+install_shim() { # $1=ESP subdirectory under EFI/
+  local dir="${TARGET}${ESP_MOUNT}/EFI/$1"
+  mkdir -p "${dir}"
+  cp "${TARGET}/usr/lib/shim/shimx64.efi.signed" "${dir}/shimx64.efi"
+  cp "${TARGET}/usr/lib/shim/mmx64.efi.signed" "${dir}/mmx64.efi"
+}
+
+sign_loader() { # $1=source path (target-side), $2=ESP subdirectory under EFI/
+  local src="$1" dir="$2"
+  ensure_mok_pem
+  in_target "
+    set -e
+    sbsign --key '${MOK_KEY}' --cert '${MOK_PEM}' \
+      --output '${ESP_MOUNT}/EFI/${dir}/grubx64.efi' '${src}'
+  "
+}
+
+# Stage MOK enrollment: MokManager processes it at the next boot through
+# shim; the user confirms with the account password. Never fatal: without
+# efivars (some VMs, plain chroots) the request cannot be written — the
+# system still boots with secure boot off and the command can be run on
+# the real machine later.
+stage_mok_enrollment() {
+  local rc=0
+  # mokutil --import hard-rejects passwords outside PASSWORD_MIN/MAX
+  # (8-16 chars); don't even attempt the import with one.
+  if [[ -n "${USER_PASSWORD}" ]] &&
+    ((${#USER_PASSWORD} < 8 || ${#USER_PASSWORD} > 16)); then
+    warn "user password is ${#USER_PASSWORD} chars; mokutil needs 8-16 —" \
+      "MOK enrollment not staged; run 'mokutil --import ${MOK_CRT}' on the" \
+      "installed system with a 8-16 char password."
+    return 0
+  fi
+  if [[ -n "${USER_PASSWORD}" ]]; then
+    printf '%s\n%s\n' "${USER_PASSWORD}" "${USER_PASSWORD}" |
+      chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
+  elif ((IS_INTERACTIVE)); then
+    info "Choose a MOK password (you will re-enter it at first boot):"
+    chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
+  else
+    warn "No USER_PASSWORD and non-interactive: MOK enrollment not" \
+      "staged. Run 'mokutil --import ${MOK_CRT}' on the installed system."
+    return 0
+  fi
+  if ((rc != 0)); then
+    warn "mokutil --import failed — usually no efivars in this" \
+      "environment, or a password outside mokutil's 8-16 character" \
+      "range. Run 'mokutil --import ${MOK_CRT}' on the installed system," \
+      "then reboot and enroll at the MokManager screen."
+  fi
 }
 
 # --- ZFSBootMenu -------------------------------------------------------------
@@ -122,7 +198,9 @@ install_zbm() {
   # ZBM reads the kernel cmdline from this dataset property.
   zfs set org.zfsbootmenu:commandline="rw ${KERNEL_CMDLINE_EXTRA}" \
     "${ROOT_DATASET}"
-  create_nvram_entry "ZFSBootMenu" '\EFI\zbm\zfsbootmenu.efi'
+  install_shim zbm
+  sign_loader "${ESP_MOUNT}/EFI/zbm/zfsbootmenu.efi" zbm
+  create_nvram_entry "ZFSBootMenu" '\EFI\zbm\shimx64.efi'
 }
 
 # --- GRUB --------------------------------------------------------------------
@@ -142,21 +220,26 @@ menuentry "Debian ${SUITE} (ZFS root)" {
   initrd /EFI/debian/initrd.img
 }
 EOF
+  # The Debian-signed grubx64.efi reads (esp)/EFI/debian/grub.cfg (baked-in
+  # prefix); the locally-built image reads EFI/debian/grub/grub.cfg. Same
+  # content at both paths covers whichever image shim chain-loads.
+  cp "${TARGET}${ESP_MOUNT}/EFI/debian/grub/grub.cfg" \
+    "${TARGET}${ESP_MOUNT}/EFI/debian/grub.cfg"
 }
 
 install_grub() {
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y grub-efi-amd64
+    apt-get install -y grub-efi-amd64 grub-efi-amd64-signed shim-signed
     grub-install --target=x86_64-efi --efi-directory=${ESP_MOUNT} \
       --boot-directory=${ESP_MOUNT}/EFI/debian --bootloader-id=debian \
-      --no-nvram
+      --no-nvram --uefi-secure-boot
   "
   write_esp_sync_hook
   run_esp_sync
   write_grub_cfg
-  create_nvram_entry "debian" '\EFI\debian\grubx64.efi'
+  create_nvram_entry "debian" '\EFI\debian\shimx64.efi'
 }
 
 # --- systemd-boot --------------------------------------------------------------
@@ -186,9 +269,11 @@ install_sdboot() {
   write_esp_sync_hook
   run_esp_sync
   write_sdboot_entries
+  install_shim systemd
+  sign_loader "/usr/lib/systemd/boot/efi/systemd-bootx64.efi" systemd
   # --no-variables skips bootctl's NVRAM write (unreliable on a RAID1 ESP);
   # create the entry ourselves on both member disks.
-  create_nvram_entry "Linux Boot Manager" '\EFI\systemd\systemd-bootx64.efi'
+  create_nvram_entry "Linux Boot Manager" '\EFI\systemd\shimx64.efi'
 }
 
 phase_boot() {
@@ -199,4 +284,5 @@ phase_boot() {
     systemd-boot) install_sdboot ;;
     *) fatal "BOOTLOADER not set (preflight should have ensured this)." ;;
   esac
+  stage_mok_enrollment
 }

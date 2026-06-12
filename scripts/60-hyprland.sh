@@ -267,12 +267,30 @@ purge_build_deps() {
       xargs -r apt-mark manual
   "
   info "Purging build dependencies (cached debs remain in ${TARGET_CACHE_DIR})..."
-  in_target "
-    set -e
-    export DEBIAN_FRONTEND=noninteractive
-    xargs -a '${HYPR_SRC_DIR}/.build-deps' apt-get purge -y
-    apt-get autoremove --purge -y
-  "
+  # --zfs-from-source stages firstboot job 30-zfs-upgrade.sh with
+  # ZFS_BUILD_PACKAGES preinstalled so it can build offline. Several of
+  # them overlap the Hyprland build deps (build-essential, libffi-dev,
+  # libudev-dev, ...), so spare the whole ZFS set here — the zfs job does
+  # not purge them either (--keep-build-deps spirit for the zfs set), and
+  # stage_zfs_upgrade_job apt-marked them manual against the autoremove.
+  local dep="" purge_list=()
+  while IFS= read -r dep; do
+    [[ -n "${dep}" ]] || continue
+    if ((ZFS_FROM_SOURCE)); then
+      case " ${ZFS_BUILD_PACKAGES[*]} " in
+      *" ${dep} "*) continue ;;
+      esac
+    fi
+    purge_list+=("${dep}")
+  done <"${TARGET}${HYPR_SRC_DIR}/.build-deps"
+  if ((${#purge_list[@]} > 0)); then
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get purge -y ${purge_list[*]}
+      apt-get autoremove --purge -y
+    "
+  fi
   in_target "! ldd /usr/local/bin/Hyprland | grep -q 'not found'" ||
     fatal "Purge removed libraries Hyprland needs (ldd reports 'not found')."
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
@@ -345,52 +363,52 @@ EOF
 
 # --- First-boot deferral (--build-on-firstboot) ------------------------------
 
-stage_firstboot() {
-  info "Staging first-boot build..."
-  local name=""
-  mkdir -p "${TARGET}${HYPR_SRC_DIR}" "${TARGET}/usr/local/lib/hypr-deb"
-  for name in "${HYPR_BUILD_ORDER[@]}"; do
-    stage_source "${name}"
-  done
-  install_build_deps  # toolchain present so firstboot works offline
-
-  # Authoritative manifest so the staged resolve_all_tags works offline.
-  local manifest="${TARGET}${TARGET_CACHE_DIR}/sources/MANIFEST"
-  mkdir -p "${TARGET}${TARGET_CACHE_DIR}/sources"
-  : >"${manifest}"
-  for name in "${HYPR_BUILD_ORDER[@]}"; do
-    echo "${name} ${HYPR_RESOLVED_TAG["${name}"]}" >>"${manifest}"
-  done
-
-  cp lib/00-config.sh lib/01-log.sh scripts/60-hyprland.sh \
-    "${TARGET}/usr/local/lib/hypr-deb/"
-
-  cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<EOF
+# Shared firstboot machinery: a per-job directory so independent features
+# (Hyprland build, ZFS upgrade, future NVIDIA detect — issue #4) each
+# stage one script instead of growing a monolith. Jobs run lexically,
+# pre-login (Before=greetd). Success renames the job .done; failure
+# renames it .failed and the boot CONTINUES — jobs must leave the system
+# usable when they fail. The unit disables itself once no runnable jobs
+# remain; a job requests a reboot by touching /run/hypr-deb-reboot-required.
+stage_firstboot_runner() {
+  # The enable runs UNCONDITIONALLY (it is idempotent): a resumed run that
+  # died between writing the files and enabling the unit must still enable
+  # it, so only the file-writing is skipped when the runner exists.
+  if [[ ! -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot" ]]; then
+    mkdir -p "${TARGET}/usr/local/sbin" \
+      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d" \
+      "${TARGET}/etc/systemd/system"
+    cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<'EOF'
 #!/usr/bin/env bash
-# One-shot first-boot Hyprland build (staged by installer.sh).
-set -euo pipefail
-source /usr/local/lib/hypr-deb/00-config.sh
-source /usr/local/lib/hypr-deb/01-log.sh
-source /usr/local/lib/hypr-deb/60-hyprland.sh
-TARGET=""           # build on the running system
-NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
-CACHE_DIR="${TARGET_CACHE_DIR}"
-KEEP_BUILD_DEPS=${KEEP_BUILD_DEPS}
-resolve_all_tags
-check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"
-for name in "\${HYPR_BUILD_ORDER[@]}"; do
-  build_one "\${name}"
+# Hypr-Deb firstboot job runner (staged by installer.sh). Runs every
+# /usr/local/lib/hypr-deb/firstboot.d/*.sh in lexical order.
+set -uo pipefail
+dir=/usr/local/lib/hypr-deb/firstboot.d
+shopt -s nullglob
+for job in "${dir}"/*.sh; do
+  echo "hypr-deb-firstboot: running ${job##*/}" >&2
+  if bash "${job}"; then
+    mv "${job}" "${job%.sh}.done"
+  else
+    mv "${job}" "${job%.sh}.failed"
+    echo "hypr-deb-firstboot: JOB FAILED: ${job##*/} — system left as-is;" \
+      "inspect the journal, then re-run with: bash ${job%.sh}.failed" >&2
+  fi
 done
-test -x /usr/local/bin/Hyprland
-purge_build_deps
-systemctl disable hypr-deb-firstboot.service
-info "First-boot Hyprland build complete."
+remaining=("${dir}"/*.sh)
+if ((${#remaining[@]} == 0)); then
+  systemctl disable hypr-deb-firstboot.service
+fi
+if [[ -f /run/hypr-deb-reboot-required ]]; then
+  rm -f /run/hypr-deb-reboot-required
+  systemctl reboot
+fi
 EOF
-  chmod +x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+    chmod +x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
 
-  cat >"${TARGET}/etc/systemd/system/hypr-deb-firstboot.service" <<'EOF'
+    cat >"${TARGET}/etc/systemd/system/hypr-deb-firstboot.service" <<'EOF'
 [Unit]
-Description=Hypr-Deb first-boot Hyprland build
+Description=Hypr-Deb first-boot jobs
 Before=greetd.service
 ConditionPathExists=/usr/local/sbin/hypr-deb-firstboot
 
@@ -404,7 +422,55 @@ TimeoutStartSec=0
 [Install]
 WantedBy=multi-user.target
 EOF
+  fi
   in_target "systemctl enable hypr-deb-firstboot.service"
+}
+
+stage_firstboot() {
+  info "Staging first-boot build..."
+  local name=""
+  mkdir -p "${TARGET}${HYPR_SRC_DIR}" "${TARGET}/usr/local/lib/hypr-deb"
+  for name in "${HYPR_BUILD_ORDER[@]}"; do
+    stage_source "${name}"
+  done
+  install_build_deps # toolchain present so firstboot works offline
+
+  # Authoritative manifest so the staged resolve_all_tags works offline.
+  local manifest="${TARGET}${TARGET_CACHE_DIR}/sources/MANIFEST"
+  mkdir -p "${TARGET}${TARGET_CACHE_DIR}/sources"
+  : >"${manifest}"
+  for name in "${HYPR_BUILD_ORDER[@]}"; do
+    echo "${name} ${HYPR_RESOLVED_TAG["${name}"]}" >>"${manifest}"
+  done
+
+  cp lib/00-config.sh lib/01-log.sh scripts/60-hyprland.sh \
+    "${TARGET}/usr/local/lib/hypr-deb/"
+
+  stage_firstboot_runner
+  cat >"${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh" <<EOF
+#!/usr/bin/env bash
+# Firstboot job: one-shot Hyprland build (staged by installer.sh).
+set -euo pipefail
+source /usr/local/lib/hypr-deb/00-config.sh
+source /usr/local/lib/hypr-deb/01-log.sh
+source /usr/local/lib/hypr-deb/60-hyprland.sh
+TARGET=""           # build on the running system
+NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
+CACHE_DIR="${TARGET_CACHE_DIR}"
+KEEP_BUILD_DEPS=${KEEP_BUILD_DEPS}
+# Stage-time value: env-derived, so it would default to 0 at firstboot and
+# purge_build_deps would strip the toolchain the zfs job needs.
+ZFS_FROM_SOURCE=${ZFS_FROM_SOURCE}
+resolve_all_tags
+check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"
+for name in "\${HYPR_BUILD_ORDER[@]}"; do
+  build_one "\${name}"
+done
+test -x /usr/local/bin/Hyprland
+purge_build_deps
+info "First-boot Hyprland build complete."
+EOF
+  chmod +x "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
 }
 
 phase_hyprland() {

@@ -26,10 +26,8 @@ Options:
   --skip-cache          Do not populate or embed the offline cache (saves
                         several GB; the installed system loses offline
                         rebuild capability)
-  --zfs-from-source     Build OpenZFS from its latest release tag as native
-                        Debian packages instead of trixie's zfs-* (network
-                        required; live env still creates the pool with the
-                        distro version's feature set)
+  --zfs-from-source     Stage upstream OpenZFS to build at first boot
+                        (install keeps repo zfs; one extra reboot)
   --autologin           Boot straight into the Hyprland session as the
                         target user (no tuigreet console login)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
