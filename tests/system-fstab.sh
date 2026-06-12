@@ -80,6 +80,10 @@ assert_contains "${addon_body}" "/opt/addons" \
   "runfiles staged into the target"
 assert_contains "${addon_body}" "install_addon_artifacts" \
   "phase_system runs the addon artifact step"
+assert_contains "${addon_body}" "addon-scripts" \
+  "addon shell hooks execute inside the target"
+assert_contains "${addon_body}" "Addon script failed" \
+  "failing addon script fails the phase by name"
 
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.

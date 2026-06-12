@@ -259,11 +259,13 @@ phase_preflight() {
   validate_identity_settings
   ((${#ADDON_PACKAGES[@]} == 0)) ||
     info "Addons: ${#ADDON_PACKAGES[@]} extra package(s) from addons/*.list"
-  local deb_count=0 run_count=0
+  local deb_count=0 run_count=0 sh_count=0
   deb_count="$(compgen -G 'addons/*.deb' 2>/dev/null | wc -l)" || deb_count=0
   run_count="$(compgen -G 'addons/*.run' 2>/dev/null | wc -l)" || run_count=0
-  ((deb_count + run_count == 0)) ||
-    info "Addons: ${deb_count} .deb to install, ${run_count} .run to stage"
+  sh_count="$(compgen -G 'addons/*.sh' 2>/dev/null | wc -l)" || sh_count=0
+  ((deb_count + run_count + sh_count == 0)) ||
+    info "Addons: ${deb_count} .deb to install, ${sh_count} script(s)" \
+      "to run in target, ${run_count} .run to stage"
   detect_virt
   detect_live_environment
   check_network

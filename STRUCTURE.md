@@ -99,6 +99,9 @@ The addons directory is for things apt cannot provide:
 - `addons/*.deb` — vendor packages (Brave, 1Password, VS Code, …):
   installed into the target during the system phase, with apt resolving
   their dependencies from the enabled sources.
+- `addons/*.sh` — user-authored hooks, executed as root inside the
+  target chroot in lexical order, after packages and addon debs
+  (live-build hook semantics; a failing script fails the install).
 - `addons/*.run` — vendor runfiles (VMware, …): staged executable at
   `/opt/addons/` in the installed system for manual post-boot install.
   Never executed in the chroot — runfiles compile kernel modules and
