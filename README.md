@@ -270,13 +270,13 @@ signed at install time with the machine's dkms MOK key — the same key dkms
 uses to sign ZFS (and any future) kernel modules.
 
 **Enrollment:** the installer stages `mokutil --import` so the key is queued
-for enrolment. On first boot the blue MokManager screen appears — choose
-**Enroll MOK** and enter your user account password. After enrolment you can
+for enrollment. On first boot the blue MokManager screen appears — choose
+**Enroll MOK** and enter your user account password. After enrollment you can
 enable secure boot in firmware settings at any time.
 
 **Installing requires secure boot DISABLED** in firmware. The live session
 must load its own unsigned ZFS kernel module; preflight aborts if secure boot
-is active. Enable it after the first-boot MOK enrolment.
+is active. Enable it after the first-boot MOK enrollment.
 
 **Manual ZBM updates** need re-signing after replacing the binary:
 
