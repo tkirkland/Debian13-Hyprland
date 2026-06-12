@@ -7,7 +7,9 @@ phase_cleanup() {
   # The installed system must start services normally; drop the chroot
   # service guard before handing the disk over.
   if mountpoint -q "${TARGET}" 2>/dev/null; then
-    rm -f "${TARGET}/usr/sbin/policy-rc.d"
+    rm -f "${TARGET}/usr/sbin/policy-rc.d" \
+      "${TARGET}/etc/apt/sources.list.d/sid-toolchain.sources" \
+      "${TARGET}/etc/apt/preferences.d/sid-toolchain"
   fi
   kill_target_processes
   teardown_chroot_binds
