@@ -42,6 +42,8 @@ phase_verify() {
       "systemctl is-enabled hypr-deb-firstboot.service"
     vcheck "firstboot runner staged" \
       test -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+    vcheck "hyprland firstboot job staged" test -x \
+      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
     vcheck "sources staged" \
       test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
     vcheck "toolchain staged for firstboot" in_target "command -v cmake"
