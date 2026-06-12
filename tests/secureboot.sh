@@ -57,4 +57,20 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
+hypr_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/60-hyprland.sh
+  declare -f stage_firstboot_runner stage_firstboot' 2>/dev/null || true)"
+assert_contains "${hypr_body}" "firstboot.d" \
+  "runner executes a per-job directory"
+assert_contains "${hypr_body}" '${job%.sh}.done' \
+  "successful jobs renamed .done"
+assert_contains "${hypr_body}" '${job%.sh}.failed' \
+  "failed jobs renamed .failed (boot continues)"
+assert_contains "${hypr_body}" "hypr-deb-reboot-required" \
+  "jobs can request a reboot via flag file"
+assert_contains "${hypr_body}" "50-hyprland-build.sh" \
+  "hyprland build staged as a firstboot job"
+assert_contains "${hypr_body}" "Before=greetd.service" \
+  "firstboot unit runs pre-login"
+
 finish_test

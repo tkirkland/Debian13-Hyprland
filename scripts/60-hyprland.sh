@@ -345,6 +345,67 @@ EOF
 
 # --- First-boot deferral (--build-on-firstboot) ------------------------------
 
+# Shared firstboot machinery: a per-job directory so independent features
+# (Hyprland build, ZFS upgrade, future NVIDIA detect — issue #4) each
+# stage one script instead of growing a monolith. Jobs run lexically,
+# pre-login (Before=greetd). Success renames the job .done; failure
+# renames it .failed and the boot CONTINUES — jobs must leave the system
+# usable when they fail. The unit disables itself once no runnable jobs
+# remain; a job requests a reboot by touching /run/hypr-deb-reboot-required.
+stage_firstboot_runner() {
+  if [[ -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot" ]]; then
+    return 0
+  fi
+  mkdir -p "${TARGET}/usr/local/sbin" \
+    "${TARGET}/usr/local/lib/hypr-deb/firstboot.d" \
+    "${TARGET}/etc/systemd/system"
+  cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<'EOF'
+#!/usr/bin/env bash
+# Hypr-Deb firstboot job runner (staged by installer.sh). Runs every
+# /usr/local/lib/hypr-deb/firstboot.d/*.sh in lexical order.
+set -uo pipefail
+dir=/usr/local/lib/hypr-deb/firstboot.d
+shopt -s nullglob
+for job in "${dir}"/*.sh; do
+  echo "hypr-deb-firstboot: running ${job##*/}" >&2
+  if bash "${job}"; then
+    mv "${job}" "${job%.sh}.done"
+  else
+    mv "${job}" "${job%.sh}.failed"
+    echo "hypr-deb-firstboot: JOB FAILED: ${job##*/} — system left as-is;" \
+      "inspect the journal, then re-run with: bash ${job%.sh}.failed" >&2
+  fi
+done
+remaining=("${dir}"/*.sh)
+if ((${#remaining[@]} == 0)); then
+  systemctl disable hypr-deb-firstboot.service
+fi
+if [[ -f /run/hypr-deb-reboot-required ]]; then
+  rm -f /run/hypr-deb-reboot-required
+  systemctl reboot
+fi
+EOF
+  chmod +x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+
+  cat >"${TARGET}/etc/systemd/system/hypr-deb-firstboot.service" <<'EOF'
+[Unit]
+Description=Hypr-Deb first-boot jobs
+Before=greetd.service
+ConditionPathExists=/usr/local/sbin/hypr-deb-firstboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hypr-deb-firstboot
+StandardOutput=journal+console
+RemainAfterExit=yes
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  in_target "systemctl enable hypr-deb-firstboot.service"
+}
+
 stage_firstboot() {
   info "Staging first-boot build..."
   local name=""
@@ -352,7 +413,7 @@ stage_firstboot() {
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     stage_source "${name}"
   done
-  install_build_deps  # toolchain present so firstboot works offline
+  install_build_deps # toolchain present so firstboot works offline
 
   # Authoritative manifest so the staged resolve_all_tags works offline.
   local manifest="${TARGET}${TARGET_CACHE_DIR}/sources/MANIFEST"
@@ -365,9 +426,10 @@ stage_firstboot() {
   cp lib/00-config.sh lib/01-log.sh scripts/60-hyprland.sh \
     "${TARGET}/usr/local/lib/hypr-deb/"
 
-  cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<EOF
+  stage_firstboot_runner
+  cat >"${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh" <<EOF
 #!/usr/bin/env bash
-# One-shot first-boot Hyprland build (staged by installer.sh).
+# Firstboot job: one-shot Hyprland build (staged by installer.sh).
 set -euo pipefail
 source /usr/local/lib/hypr-deb/00-config.sh
 source /usr/local/lib/hypr-deb/01-log.sh
@@ -383,28 +445,9 @@ for name in "\${HYPR_BUILD_ORDER[@]}"; do
 done
 test -x /usr/local/bin/Hyprland
 purge_build_deps
-systemctl disable hypr-deb-firstboot.service
 info "First-boot Hyprland build complete."
 EOF
-  chmod +x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
-
-  cat >"${TARGET}/etc/systemd/system/hypr-deb-firstboot.service" <<'EOF'
-[Unit]
-Description=Hypr-Deb first-boot Hyprland build
-Before=greetd.service
-ConditionPathExists=/usr/local/sbin/hypr-deb-firstboot
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/hypr-deb-firstboot
-StandardOutput=journal+console
-RemainAfterExit=yes
-TimeoutStartSec=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  in_target "systemctl enable hypr-deb-firstboot.service"
+  chmod +x "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
 }
 
 phase_hyprland() {
