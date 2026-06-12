@@ -1,30 +1,46 @@
-# addons/ — your packages, no fork required
+# addons/ — drop in what apt can't give you
 
-Create a file here named anything ending in `.list` — for example
-`my-tools.list` — with one Debian package name per line (the same
-convention Debian live-build uses for its `package-lists/*.list`):
+This directory is for installation artifacts that do not exist in the
+Debian archive. Drop them here before running the installer:
 
+## Vendor .deb packages — `addons/*.deb`
+
+Brave, 1Password, VS Code, Discord — download the vendor's `.deb`, drop
+it here. Each one is installed into the target during the system phase
+with `apt`, which resolves its dependencies from the enabled Debian
+sources. Services they ship are enabled but not started inside the
+install chroot (the policy-rc.d guard); they start normally on first
+boot.
+
+Note for offline installs: the `.deb` itself installs from this
+directory, but its *dependencies* must be resolvable — online that is
+automatic; offline they must already be in the cache closure.
+
+## Vendor runfiles — `addons/*.run`
+
+VMware Workstation and friends. Runfiles are **staged, not executed**:
+they are copied executable to `/opt/addons/` in the installed system,
+and the installer log reminds you to run them after first boot. This is
+deliberate — runfile installers compile kernel modules and start
+services against the running system, which a chroot cannot honestly
+provide.
+
+```bash
+# after first boot:
+sudo /opt/addons/VMware-Workstation-Full-XX.x.x.run
 ```
-# editors and shell comforts
-htop
-ncdu
-tmux
-firefox-esr
-```
 
-Blank lines and `#` comments are ignored. Every `.list` file in this
-directory is loaded at installer startup and its packages are installed
-into the target system during the system phase, alongside the base set.
+## Convenience: archive package lists — `addons/*.list`
 
-Rules of the road:
+For packages that DO exist in the Debian archive, a `.list` file (one
+package name per line, `#` comments allowed — same convention as
+live-build's package lists) appends to the installer's base set. This is
+secondary to the artifact mechanism above: if you find yourself listing
+many archive packages, consider whether they belong in
+`TARGET_BASE_PACKAGES` instead.
 
-- Package names must exist in the apt sources the installer enables
-  (Debian trixie `main contrib non-free-firmware` by default). A typo or
-  unavailable package fails the system phase loudly — by design.
-- Services installed by addon packages are enabled per Debian policy but
-  are NOT started inside the install chroot (the installer's policy-rc.d
-  guard); they start normally on first boot.
-- `example.list.sample` is a template: only the `.list` suffix is loaded,
-  so copy it to `something.list` to activate it.
-- Preflight logs how many addon packages it picked up, and the full list
-  lands in the installer log with the apt transaction.
+`example.list.sample` is an inert template; copy it to `<name>.list` to
+activate.
+
+Preflight logs a count of everything it picked up (packages, debs,
+runfiles) before any destructive step, so you can confirm the pickup.

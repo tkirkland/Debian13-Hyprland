@@ -138,6 +138,39 @@ install_zfs_from_source() {
   rm -rf "${TARGET}/var/tmp/openzfs"
 }
 
+# Addon artifacts: things apt cannot provide, dropped into addons/.
+#   *.deb  installed via apt from the local file (dependencies resolved
+#          from the enabled sources; the chroot policy-rc.d guard blocks
+#          service starts like for every other package).
+#   *.run  staged executable at /opt/addons in the target and NOT
+#          executed: vendor runfiles (VMware etc.) compile kernel modules
+#          and start services against the RUNNING system, so they must be
+#          run manually after first boot.
+install_addon_artifacts() {
+  local f="" staged=0
+  if compgen -G "addons/*.deb" >/dev/null; then
+    info "Installing addon .deb packages..."
+    rm -rf "${TARGET}/var/tmp/addon-debs"
+    install -d "${TARGET}/var/tmp/addon-debs"
+    cp addons/*.deb "${TARGET}/var/tmp/addon-debs/"
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y /var/tmp/addon-debs/*.deb
+    "
+    rm -rf "${TARGET}/var/tmp/addon-debs"
+  fi
+  if compgen -G "addons/*.run" >/dev/null; then
+    install -d "${TARGET}/opt/addons"
+    for f in addons/*.run; do
+      install -m755 "${f}" "${TARGET}/opt/addons/"
+      staged=$((staged + 1))
+    done
+    info "Staged ${staged} vendor runfile(s) at /opt/addons — run them" \
+      "manually after first boot (they need the running system)."
+  fi
+}
+
 create_user() {
   # The Downloads dataset is created canmount=noauto (20-storage.sh) so no
   # zfs mount -a can pre-create a root-owned /home/<user>: adduser runs
@@ -197,6 +230,7 @@ phase_system() {
   write_fstab
   write_mdadm_conf
   install_base_packages
+  install_addon_artifacts
   configure_locale_tz
   create_user
   configure_zfs_boot_support

@@ -32,7 +32,8 @@ scripts/60-hyprland.sh      release-tag resolution, compatibility gate,
                             session, firstboot staging.
 scripts/90-verify.sh        the success-condition checklist (vcheck).
 scripts/99-cleanup.sh       teardown: binds, ESP, pool export.
-addons/                     drop-in user package lists (see below).
+addons/                     drop-in vendor .deb/.run artifacts and
+                            package lists (see below).
 tests/                      fake-driven test suites + run-all.sh.
 tools/check.sh              bash -n + shellcheck gate.
 docs/superpowers/           original design spec and implementation plan.
@@ -43,6 +44,12 @@ docs/superpowers/           original design spec and implementation plan.
 **Add a package to the installed system**
 : `TARGET_BASE_PACKAGES` in `lib/00-config.sh` — or, without touching the
   repo at all, an `addons/*.list` file (see below).
+
+**Install a vendor .deb or runfile (Brave, VMware, …)**
+: drop the file into `addons/`. `.deb` files install during the system
+  phase with apt resolving their dependencies; `.run` files are staged
+  executable at `/opt/addons/` in the target for manual post-boot
+  installation (runfiles need the running system, not a chroot).
 
 **Add a build-only dependency** (purged after the stack builds)
 : `HYPR_BUILD_PACKAGES` in `lib/00-config.sh`.
@@ -85,24 +92,20 @@ docs/superpowers/           original design spec and implementation plan.
 **Change bootloader behavior**
 : `scripts/50-boot.sh`, with `tests/boot-config.sh` updated alongside.
 
-## addons/ — user packages without forking
+## addons/ — drop-in artifacts, no fork required
 
-Any file matching `addons/*.list` is read at startup: one Debian package
-name per line, blank lines and `#` comments ignored. Everything found is
-appended to `TARGET_BASE_PACKAGES` and installed during the system phase,
-subject to the same `DEBIAN_FRONTEND=noninteractive` apt run and the
-chroot service-start guard as everything else.
+The addons directory is for things apt cannot provide:
 
-```bash
-# addons/my-tools.list
-htop
-ncdu
-firefox-esr   # comes from the same trixie sources the installer enables
-```
+- `addons/*.deb` — vendor packages (Brave, 1Password, VS Code, …):
+  installed into the target during the system phase, with apt resolving
+  their dependencies from the enabled sources.
+- `addons/*.run` — vendor runfiles (VMware, …): staged executable at
+  `/opt/addons/` in the installed system for manual post-boot install.
+  Never executed in the chroot — runfiles compile kernel modules and
+  start services against the running system.
+- `addons/*.list` — convenience lists of archive packages (one per line,
+  `#` comments; live-build convention), appended to the base set.
 
-Notes:
-- Packages must exist in the enabled apt sources (trixie main/contrib/
-  non-free-firmware by default). Typos fail the system phase loudly.
-- Preflight logs how many addon packages were picked up.
-- `addons/example.list.sample` ships as a template; only the `.list`
-  suffix is loaded, so the sample is inert until renamed.
+All paths go through the same noninteractive apt machinery and the
+chroot service-start guard. Preflight logs counts of everything picked
+up. See `addons/README.md` for details and the offline caveats.
