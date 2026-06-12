@@ -30,7 +30,7 @@ verify_report() {
 }
 
 phase_verify() {
-  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f="" greeter_bin=""
+  local esp="${TARGET}${ESP_MOUNT}" kver="" vers="" f="" greeter_bin="" sb_dir=""
   for f in "${TARGET}"/boot/vmlinuz-*; do
     [[ -e "${f}" ]] || continue
     vers+="${f##*/vmlinuz-}"$'\n'
@@ -42,6 +42,8 @@ phase_verify() {
       "systemctl is-enabled hypr-deb-firstboot.service"
     vcheck "firstboot runner staged" \
       test -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+    vcheck "hyprland firstboot job staged" test -x \
+      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
     vcheck "sources staged" \
       test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
     vcheck "toolchain staged for firstboot" in_target "command -v cmake"
@@ -116,6 +118,28 @@ phase_verify() {
       ;;
   esac
 
+  # Secure boot chain: shim + MokManager beside the loader; self-shipped
+  # loaders (zbm, systemd-boot) verify against the MOK cert. GRUB's
+  # grubx64.efi is Debian-signed, so presence (checked above) suffices.
+  case "${BOOTLOADER}" in
+    zbm) sb_dir="zbm" ;;
+    grub) sb_dir="debian" ;;
+    systemd-boot) sb_dir="systemd" ;;
+  esac
+  vcheck "shim on ESP" test -f "${esp}/EFI/${sb_dir}/shimx64.efi"
+  vcheck "MokManager on ESP" test -f "${esp}/EFI/${sb_dir}/mmx64.efi"
+  vcheck "chain-loaded loader on ESP" \
+    test -f "${esp}/EFI/${sb_dir}/grubx64.efi"
+  if [[ "${BOOTLOADER}" != "grub" ]]; then
+    vcheck "loader MOK signature valid" in_target \
+      "sbverify --cert '${MOK_PEM}' '${ESP_MOUNT}/EFI/${sb_dir}/grubx64.efi'"
+  fi
+  # Warn-only: VMs without efivars cannot stage the import.
+  if ! in_target "mokutil --list-new 2>/dev/null | grep -q ."; then
+    warn "MOK enrollment not staged (no efivars?). On the installed" \
+      "system run: mokutil --import ${MOK_CRT}"
+  fi
+
   vcheck "fstab ESP UUID valid" bash -c \
     "uuid=\$(grep -oP 'UUID=\K[^ ]+(?= /boot/efi)' '${TARGET}/etc/fstab');
      [[ -n \"\${uuid}\" ]] && blkid -U \"\${uuid}\""
@@ -123,8 +147,11 @@ phase_verify() {
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
   if ((ZFS_FROM_SOURCE)); then
-    vcheck "openzfs built from source installed" in_target \
-      "dpkg -s openzfs-zfsutils >/dev/null"
+    vcheck "zfs upgrade firstboot job staged" test -x \
+      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/30-zfs-upgrade.sh"
+    vcheck "zfs source tree staged" test -d "${TARGET}/var/tmp/openzfs"
+    vcheck "firstboot unit enabled (zfs upgrade)" in_target \
+      "systemctl is-enabled hypr-deb-firstboot.service"
   fi
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
@@ -138,4 +165,11 @@ phase_verify() {
 
   verify_report || fatal "Verification failed — installation is NOT complete."
   info "SUCCESS: bootable Debian + Hyprland conditions both met."
+  info "Secure boot: ready. First boot shows the blue MokManager screen —"
+  info "choose 'Enroll MOK' and enter your user password. After that you"
+  info "may enable secure boot in firmware at any time."
+  if ((ZFS_FROM_SOURCE)); then
+    info "First boot also builds the staged OpenZFS upgrade pre-login and"
+    info "reboots once when it finishes."
+  fi
 }

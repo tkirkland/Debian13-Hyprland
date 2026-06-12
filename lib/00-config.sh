@@ -104,6 +104,16 @@ ZBM_EFI_URL="${ZBM_EFI_URL:-https://get.zfsbootmenu.org/efi}"
 ESP_MOUNT="/boot/efi"
 KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"
 
+# --- Secure boot ---------------------------------------------------------------
+# Always on. The dkms MOK keypair signs everything self-built: dkms signs
+# kernel modules with it automatically; the boot phase signs loader EFI
+# binaries (zbm / systemd-boot) with the same key. GRUB needs no self-
+# signing (Debian ships signed shim + GRUB). Paths are target-side and
+# fixed: they are what Debian's dkms uses.
+MOK_KEY="/var/lib/dkms/mok.key" # PEM private key, passphrase-less
+MOK_CRT="/var/lib/dkms/mok.pub" # DER certificate (dkms + mokutil format)
+MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
+
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
 # Build order satisfies the dependency graph; hyprland after its deps.
@@ -229,18 +239,17 @@ HYPR_BUILD_PACKAGES=(
   libxcb-xinput-dev
 )
 
-# --zfs-from-source: replace trixie's OpenZFS 2.3.x with upstream's latest
-# release tag, built as upstream's native Debian packages (openzfs-*-dkms,
-# -zfsutils, -zfs-initramfs, -zfs-zed) inside the target. The live
-# environment keeps the distro 2.3.x, so the pool is created with the
-# conservative feature set; enable newer features deliberately with
+# --zfs-from-source (hybrid): the install keeps trixie's OpenZFS 2.3.x
+# (dkms-signed in the chroot; it mounts the ZFS root on boot #1); the
+# upstream release tag is staged and built at FIRST BOOT as upstream's
+# native Debian packages (openzfs-*) by firstboot job 30-zfs-upgrade.sh,
+# after the MOK key is enrolled. The pool is created with the conservative
+# 2.3.x feature set; enable newer features deliberately with
 # `zpool upgrade` from the booted system. Network-only for now (the
 # offline cache does not yet carry the zfs source tree).
 ZFS_FROM_SOURCE="${ZFS_FROM_SOURCE:-0}"
 ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
 ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
-# Debian packages replaced by the upstream build when the flag is on.
-ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
 # Upstream's documented Debian build dependencies (native-deb targets).
 ZFS_BUILD_PACKAGES=(
   build-essential autoconf automake libtool gawk alien fakeroot dkms
@@ -274,6 +283,7 @@ TARGET_BASE_PACKAGES=(
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd tuigreet kitty openssh-server
   psmisc
+  shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
@@ -304,6 +314,7 @@ LIVE_KERNEL_HEADERS="linux-headers-$(uname -r)"
 LIVE_TOOL_PACKAGES=(
   debootstrap gdisk parted mdadm dosfstools zfsutils-linux zfs-dkms
   "${LIVE_KERNEL_HEADERS}" apt-utils git curl efibootmgr rsync psmisc
+  openssl
 )
 
 # --- Behaviour ------------------------------------------------------------------

@@ -6,6 +6,42 @@ require_root() {
   [[ "$(id -u)" == "0" ]] || fatal "Must run as root."
 }
 
+# Secure boot must be OFF while installing: the storage phase loads the
+# live session's own ZFS dkms module, which is locally built and not
+# enrolled in this firmware — a secure-boot (lockdown) kernel refuses it
+# and the install would die at pool creation. The INSTALLED system is
+# fully secure-boot ready; only the live session cannot be.
+check_secureboot_disabled() {
+  local var="/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+  local enabled=0 sb_out=""
+  if command -v mokutil >/dev/null 2>&1; then
+    sb_out="$(mokutil --sb-state 2>/dev/null || true)"
+  fi
+  if [[ -n "${sb_out}" ]]; then
+    if grep -qi 'SecureBoot enabled' <<<"${sb_out}"; then
+      enabled=1
+    fi
+  elif [[ -r "${var}" ]]; then
+    # mokutil missing or unresponsive: read the efivar directly. Payload
+    # byte 5 (after the 4-byte attribute header): 1 = enforcing. An empty
+    # od read compares unequal and passes — the safe direction.
+    if [[ "$(od -An -tu1 -j4 -N1 "${var}" 2>/dev/null |
+      tr -d '[:space:]')" == "1" ]]; then
+      enabled=1
+    fi
+  fi
+  ((enabled)) || return 0
+  fatal "Secure boot is ENABLED in this live environment — the installer" \
+    "cannot proceed. The live session must load its own locally-built ZFS" \
+    "module, which this firmware does not trust, so pool creation would" \
+    "fail. Do this instead:" \
+    "(1) reboot into firmware setup and DISABLE secure boot;" \
+    "(2) run the installer (everything gets pre-signed);" \
+    "(3) boot the installed system — at the blue MokManager screen choose" \
+    "'Enroll MOK' and enter your user password;" \
+    "(4) re-enable secure boot in firmware. It will boot."
+}
+
 # Identity settings are interpolated into root chroot command strings;
 # restrict them to safe character sets (injection surface).
 validate_identity_settings() {
@@ -202,7 +238,7 @@ bootstrap_live_tools() {
     [debootstrap]=debootstrap [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
     [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool [apt-utils]=apt-ftparchive
     [git]=git [curl]=curl [efibootmgr]=efibootmgr [rsync]=rsync
-    [psmisc]=fuser
+    [psmisc]=fuser [openssl]=openssl
   )
   for pkg in "${!pkg_probe[@]}"; do
     command -v "${pkg_probe[${pkg}]}" >/dev/null 2>&1 || missing+=("${pkg}")
@@ -256,6 +292,7 @@ sync_clock() {
 
 phase_preflight() {
   require_root
+  check_secureboot_disabled
   validate_identity_settings
   ((${#ADDON_PACKAGES[@]} == 0)) ||
     info "Addons: ${#ADDON_PACKAGES[@]} extra package(s) from addons/*.list"

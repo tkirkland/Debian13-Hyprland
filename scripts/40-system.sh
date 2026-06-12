@@ -45,24 +45,33 @@ configure_locale_tz() {
   "
 }
 
+# dkms signs every module it builds with this keypair and the boot phase
+# signs loader EFI binaries with it. Debian's dkms would generate it on
+# demand, but the zfs-dkms postinst (during install_base_packages) is the
+# first consumer, so it must exist before packages land. Generated with
+# the LIVE environment's openssl (the chroot has none yet). Parameters
+# mirror Debian dkms defaults: passphrase-less RSA 2048, DER certificate.
+ensure_mok_key() {
+  if [[ -f "${TARGET}${MOK_KEY}" && -f "${TARGET}${MOK_CRT}" ]]; then
+    return 0
+  fi
+  mkdir -p "${TARGET}/var/lib/dkms"
+  openssl req -new -x509 -nodes -days 36500 -newkey rsa:2048 \
+    -subj "/CN=hypr-deb DKMS module signing key/" \
+    -keyout "${TARGET}${MOK_KEY}" -outform DER \
+    -out "${TARGET}${MOK_CRT}" 2>/dev/null ||
+    fatal "MOK keypair generation failed (openssl)."
+  chmod 600 "${TARGET}${MOK_KEY}"
+  info "Generated MOK signing keypair at ${MOK_KEY}."
+}
+
 install_base_packages() {
-  local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
+  local pkgs=("${TARGET_BASE_PACKAGES[@]}")
   # VMware guest integration (display resize, clipboard, time sync,
   # clean shutdown). open-vm-tools-desktop layers desktop features on the
   # base daemon; both are pointless on bare metal, so VIRT_TYPE gates them.
   if [[ "${VIRT_TYPE}" == "vmware" ]]; then
     pkgs+=(open-vm-tools open-vm-tools-desktop)
-  fi
-  if ((ZFS_FROM_SOURCE)); then
-    # The upstream openzfs-* packages replace these; installing Debian's
-    # first would only churn (and dkms-build) packages we remove again.
-    for p in "${pkgs[@]}"; do
-      case " ${ZFS_DEBIAN_PACKAGES[*]} " in
-        *" ${p} "*) continue ;;
-      esac
-      filtered+=("${p}")
-    done
-    pkgs=("${filtered[@]}")
   fi
   in_target "
     set -e
@@ -70,72 +79,89 @@ install_base_packages() {
     apt-get install -y ${pkgs[*]}
   "
   if ((ZFS_FROM_SOURCE)); then
-    install_zfs_from_source
+    stage_zfs_upgrade_job
   fi
 }
 
-# Build upstream OpenZFS at its latest release as native Debian packages
-# inside the target and install them. ONLY native-deb-utils is built: that
-# set includes openzfs-zfs-dkms (whose postinst builds the module for the
-# TARGET's kernels — headers are already installed). native-deb-kmod is
-# deliberately avoided: it compiles modules for the RUNNING (live) kernel
-# and its package dependency drags that kernel image into the target.
-# Upstream's deb recipes swallow dpkg-buildpackage failures (the lock-file
-# rm masks the exit code), so the required packages are asserted by name.
-install_zfs_from_source() {
+# --zfs-from-source (hybrid): the install keeps Debian's zfs 2.3.x — fast,
+# dkms-signed in the chroot, and it mounts the ZFS root on boot #1. The
+# upstream release builds at FIRST BOOT, after the MokManager screen has
+# enrolled the MOK key, as firstboot job 30-zfs-upgrade.sh. Sources and
+# build deps are staged now so the job needs no network. A failed build
+# keeps the running 2.3.x: the system stays bootable and the job is
+# re-runnable from its .failed file.
+stage_zfs_upgrade_job() {
   ((NETWORK_AVAILABLE)) ||
-    fatal "--zfs-from-source requires network (zfs is not in the offline cache yet)."
-  local tag="" jobs="${HYPR_BUILD_JOBS:-}"
-  [[ -n "${jobs}" ]] || jobs="\$(nproc)"
+    fatal "--zfs-from-source requires network to stage the source tree."
+  local tag=""
   # Tags include dev-cycle markers (zfs-X.Y.99) that outrank real releases
   # in a version sort; the GitHub API names the actual latest release.
-  # ls-remote with the tag pattern remains the fallback.
   tag="$(curl -fsSL --retry 3 \
     "https://api.github.com/repos/openzfs/zfs/releases/latest" 2>/dev/null |
     grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
   [[ -n "${tag}" ]] ||
     tag="$(resolve_latest_release_tag "${ZFS_REPO_URL}" "${ZFS_TAG_PATTERN}")"
-  info "Building OpenZFS ${tag} from source (replaces Debian's zfs-*)..."
+  info "Staging OpenZFS ${tag} for the first-boot upgrade build..."
   rm -rf "${TARGET}/var/tmp/openzfs"
-  rm -f "${TARGET}"/var/tmp/*.deb "${TARGET}"/var/tmp/*.changes \
-    "${TARGET}"/var/tmp/*.buildinfo
   git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
     "${ZFS_REPO_URL}" "${TARGET}/var/tmp/openzfs"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    # Drop any live-kernel modules package from an earlier failed attempt.
-    if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
-      apt-get purge -y 'openzfs-zfs-modules-*'
-    fi
     apt-get install -y ${ZFS_BUILD_PACKAGES[*]}
-    cd /var/tmp/openzfs
-    ./autogen.sh
-    ./configure
-    make -j\"${jobs}\" native-deb-utils
-    for p in openzfs-zfs-dkms openzfs-zfsutils openzfs-zfs-initramfs \
-      openzfs-zfs-zed; do
-      ls /var/tmp/\${p}_*.deb >/dev/null 2>&1 ||
-        { echo \"required package not built: \${p}\" >&2; exit 1; }
-    done
-    debs=\"\$(ls /var/tmp/*.deb |
-      grep -Ev 'zfs-modules|test|dracut|dbg|-dev|pam' || true)\"
-    [[ -n \"\${debs}\" ]] ||
-      { echo 'native-deb-utils produced no installable packages' >&2; exit 1; }
-    echo \"\${debs}\" | xargs apt-get install -y
-    # pam_zfs_key (encrypted-home key sync) registers itself in
-    # common-password and makes chpasswd fail with 'Authentication token
-    # manipulation error' on systems without encrypted homes. Keep it out:
-    # never install it (deb filter above), purge it if a previous attempt
-    # installed it, and regenerate the PAM stack from clean profiles.
-    if dpkg-query -W 'openzfs*pam*' >/dev/null 2>&1; then
-      apt-get purge -y 'openzfs*pam*'
-    fi
-    rm -f /usr/share/pam-configs/*zfs*
-    pam-auth-update --package
   "
-  in_target "zfs version" || true
-  rm -rf "${TARGET}/var/tmp/openzfs"
+  # The firstboot job builds offline; mark its toolchain manual so the
+  # `apt-get autoremove --purge` in purge_build_deps (in-chroot Hyprland
+  # build) cannot sweep it away as orphaned.
+  in_target "apt-mark manual ${ZFS_BUILD_PACKAGES[*]} >/dev/null"
+  stage_firstboot_runner
+  write_zfs_upgrade_job
+}
+
+write_zfs_upgrade_job() {
+  local jobs="${TARGET}/usr/local/lib/hypr-deb/firstboot.d"
+  mkdir -p "${jobs}"
+  cat >"${jobs}/30-zfs-upgrade.sh" <<'EOF'
+#!/usr/bin/env bash
+# Firstboot job: build upstream OpenZFS (staged at install) as native
+# Debian packages and replace the repo 2.3.x. dkms signs the module with
+# the MOK key the user enrolled at the MokManager screen. ONLY
+# native-deb-utils is built: it includes openzfs-zfs-dkms, whose postinst
+# builds for the installed kernels. Upstream's deb recipes swallow
+# dpkg-buildpackage failures, so required packages are asserted by name.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+cd /var/tmp/openzfs
+if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
+  apt-get purge -y 'openzfs-zfs-modules-*'
+fi
+./autogen.sh
+./configure
+make -j"$(nproc)" native-deb-utils
+for p in openzfs-zfs-dkms openzfs-zfsutils openzfs-zfs-initramfs \
+  openzfs-zfs-zed; do
+  ls /var/tmp/${p}_*.deb >/dev/null 2>&1 ||
+    { echo "required package not built: ${p}" >&2; exit 1; }
+done
+debs="$(ls /var/tmp/*.deb |
+  grep -Ev 'zfs-modules|test|dracut|dbg|-dev|pam' || true)"
+[[ -n "${debs}" ]] ||
+  { echo 'native-deb-utils produced no installable packages' >&2; exit 1; }
+echo "${debs}" | xargs apt-get install -y
+# pam_zfs_key registers itself in common-password and breaks chpasswd on
+# systems without encrypted homes; keep it out and regenerate PAM.
+if dpkg-query -W 'openzfs*pam*' >/dev/null 2>&1; then
+  apt-get purge -y 'openzfs*pam*'
+fi
+rm -f /usr/share/pam-configs/*zfs*
+pam-auth-update --package
+update-initramfs -u -k all
+rm -rf /var/tmp/openzfs
+rm -f /var/tmp/*.deb /var/tmp/*.changes /var/tmp/*.buildinfo
+touch /run/hypr-deb-reboot-required
+echo "OpenZFS upgrade complete; reboot pending." >&2
+EOF
+  chmod +x "${jobs}/30-zfs-upgrade.sh"
 }
 
 # Addon artifacts: things apt cannot provide, dropped into addons/.
@@ -244,6 +270,7 @@ phase_system() {
   write_identity
   write_fstab
   write_mdadm_conf
+  ensure_mok_key
   install_base_packages
   install_addon_artifacts
   configure_locale_tz
