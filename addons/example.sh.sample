@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Copy to <name>.sh to activate (only *.sh files run; lexical order, so
+# bashsupport disable=BP5007
+# Copy to "<filename>.sh" to activate (only *.sh files run; lexical order, so
 # prefix 10-, 20-, ... to sequence). Executes as root INSIDE the target
 # chroot during the system phase, after packages and addon debs.
 set -euo pipefail
 
 # Examples:
-# systemctl enable my-service        # enabled now, starts on first boot
+# systemctl enable my-service # enabled now, starts on the first boot
 # install -d -o me -g me /home/me/Projects
 # git clone https://github.com/you/dotfiles /home/me/.dotfiles
