@@ -110,6 +110,10 @@ stage_zfs_upgrade_job() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y ${ZFS_BUILD_PACKAGES[*]}
   "
+  # The firstboot job builds offline; mark its toolchain manual so the
+  # `apt-get autoremove --purge` in purge_build_deps (in-chroot Hyprland
+  # build) cannot sweep it away as orphaned.
+  in_target "apt-mark manual ${ZFS_BUILD_PACKAGES[*]} >/dev/null"
   stage_firstboot_runner
   write_zfs_upgrade_job
 }
