@@ -141,9 +141,10 @@ stage_mok_enrollment() {
     return 0
   fi
   if ((rc != 0)); then
-    warn "mokutil --import failed (no efivars in this environment?)." \
-      "Run 'mokutil --import ${MOK_CRT}' on the installed system, then" \
-      "reboot and enroll at the MokManager screen."
+    warn "mokutil --import failed — usually no efivars in this" \
+      "environment, or a password outside mokutil's 8-16 character" \
+      "range. Run 'mokutil --import ${MOK_CRT}' on the installed system," \
+      "then reboot and enroll at the MokManager screen."
   fi
 }
 
