@@ -345,6 +345,11 @@ local main_mod = "SUPER"
 hl.bind(main_mod .. " + Return", hl.dsp.exec_cmd("kitty"))
 hl.bind(main_mod .. " + Q", hl.dsp.window.close())
 hl.bind(main_mod .. " + SHIFT + E", hl.dsp.exit())
+
+-- First login only: show the welcome app once, marker-guarded. The marker
+-- is touched BEFORE the app runs so a crashing welcome can never nag every
+-- session. Lua long brackets keep the sh quoting sane.
+hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { touch "$marker"; /usr/local/bin/hyprland-welcome; }']])
 EOF
   in_target "
     set -e
