@@ -1,6 +1,6 @@
 # bashsupport disable=BP5007
 # shellcheck shell=bash
-# Logging helpers. Sourced by hypr_deb.sh; VERBOSE comes from lib/00-config.sh.
+# Logging helpers. Sourced by installer.sh; VERBOSE comes from lib/00-config.sh.
 
 info() { printf '[INFO] %s\n' "$*"; }
 
