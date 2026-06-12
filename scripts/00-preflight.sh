@@ -13,13 +13,18 @@ require_root() {
 # fully secure-boot ready; only the live session cannot be.
 check_secureboot_disabled() {
   local var="/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
-  local enabled=0
+  local enabled=0 sb_out=""
   if command -v mokutil >/dev/null 2>&1; then
-    if mokutil --sb-state 2>/dev/null | grep -qi 'SecureBoot enabled'; then
+    sb_out="$(mokutil --sb-state 2>/dev/null || true)"
+  fi
+  if [[ -n "${sb_out}" ]]; then
+    if grep -qi 'SecureBoot enabled' <<<"${sb_out}"; then
       enabled=1
     fi
   elif [[ -r "${var}" ]]; then
-    # Payload byte 5 (after the 4-byte attribute header): 1 = enforcing.
+    # mokutil missing or unresponsive: read the efivar directly. Payload
+    # byte 5 (after the 4-byte attribute header): 1 = enforcing. An empty
+    # od read compares unequal and passes — the safe direction.
     if [[ "$(od -An -tu1 -j4 -N1 "${var}" 2>/dev/null |
       tr -d '[:space:]')" == "1" ]]; then
       enabled=1
