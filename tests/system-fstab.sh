@@ -45,27 +45,27 @@ assert_contains "${user_body}" "chown -R" \
 assert_contains "${user_body}" "canmount=on" \
   "create_user enables the Downloads dataset only after adduser"
 
-# The zfs firstboot job must produce ONLY the utils/dkms package set:
+# The zfs build must produce ONLY the utils/dkms package set:
 # native-deb-kmod compiles modules for the RUNNING (live) kernel and drags
 # that kernel image into the target as a dependency.
 zfs_body="$(bash -c '
   source lib/00-config.sh
   source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f write_zfs_upgrade_job')"
+  declare -f install_zfs_from_source')"
 assert_contains "${zfs_body}" "native-deb-utils" \
-  "zfs firstboot job uses native-deb-utils"
+  "zfs build uses native-deb-utils"
 if printf '%s\n' "${zfs_body}" | grep -qE 'native-deb(-kmod)?[" ]*$'; then
-  echo "  FAIL: zfs firstboot job must not invoke native-deb or native-deb-kmod" >&2
+  echo "  FAIL: zfs build must not invoke native-deb or native-deb-kmod" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
-  echo "  ok: zfs firstboot job avoids native-deb-kmod"
+  echo "  ok: zfs build avoids native-deb-kmod"
 fi
 assert_contains "${zfs_body}" "openzfs-zfs-dkms" \
-  "zfs firstboot job asserts the dkms package was produced"
+  "zfs build asserts the dkms package was produced"
 # pam_zfs_key in common-password breaks chpasswd without encrypted homes.
 assert_contains "${zfs_body}" "pam-auth-update" \
-  "zfs firstboot job purges pam_zfs_key and regenerates the PAM stack"
+  "zfs build purges pam_zfs_key and regenerates the PAM stack"
 
 # Addon artifacts: debs install via apt (dependency resolution); runfiles
 # are staged at /opt/addons, never executed in the chroot.

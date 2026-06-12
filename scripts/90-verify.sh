@@ -150,12 +150,11 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
-  if ((ZFS_FROM_SOURCE)); then
-    vcheck "zfs upgrade firstboot job staged" test -x \
-      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/30-zfs-upgrade.sh"
-    vcheck "zfs source tree staged" test -d "${TARGET}/var/tmp/openzfs"
-    vcheck "firstboot unit enabled (zfs upgrade)" in_target \
-      "systemctl is-enabled hypr-deb-firstboot.service"
+  # Networked installs replace Debian's zfs with the upstream build;
+  # offline installs legitimately keep the repo 2.3.x packages.
+  if ((NETWORK_AVAILABLE)); then
+    vcheck "upstream openzfs installed" in_target \
+      "dpkg -s openzfs-zfsutils >/dev/null"
   fi
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
@@ -172,8 +171,4 @@ phase_verify() {
   info "Secure boot: ready. First boot shows the blue MokManager screen —"
   info "choose 'Enroll MOK' and enter your user password. After that you"
   info "may enable secure boot in firmware at any time."
-  if ((ZFS_FROM_SOURCE)); then
-    info "First boot also builds the staged OpenZFS upgrade pre-login and"
-    info "reboots once when it finishes."
-  fi
 }
