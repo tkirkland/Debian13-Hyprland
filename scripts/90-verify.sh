@@ -73,8 +73,8 @@ phase_verify() {
   # shellcheck disable=SC2016  # the $() must expand inside the chroot, not here
   vcheck "getty@tty1 masked (no VT1 contention with greetd)" in_target \
     '[[ "$(systemctl is-enabled getty@tty1.service 2>/dev/null || true)" == masked ]]'
-  vcheck "user hyprland.conf exists" \
-    test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.conf"
+  vcheck "user hyprland.lua exists" \
+    test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.lua"
 
   vcheck "kernel on ZFS /boot" \
     bash -c "ls ${TARGET}/boot/vmlinuz-* >/dev/null 2>&1"

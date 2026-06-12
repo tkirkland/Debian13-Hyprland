@@ -140,7 +140,7 @@ NVIDIA, no extras. UWSM is not in the Debian archive, so it is built from
 source at its latest release tag (meson) alongside the hyprwm stack, with
 its runtime dependencies (python3, pyxdg, whiptail, dbus) from Debian
 packages. Greetd config execs `uwsm start hyprland`; a minimal
-valid `hyprland.conf` is installed for the user; greetd service enabled,
+valid `hyprland.lua` is installed for the user; greetd service enabled,
 graphical target default.
 
 Source policy:
@@ -247,7 +247,7 @@ the pool on failure paths; phases idempotent.
 In-chroot/target checks, all must pass for success:
 
 - `Hyprland --version` executes; `ldd` on Hyprland and built libs resolves.
-- greetd enabled; uwsm present; hyprland.conf parses (`hyprland --verify-config`
+- greetd enabled; uwsm present; hyprland.lua parses (`hyprland --verify-config`
   if available at the built version, else presence and ownership checks).
 - Chosen bootloader EFI binary present on ESP; NVRAM entry exists; kernel +
   initramfs present (pool `/boot`, plus ESP copies for grub/systemd-boot).
