@@ -45,6 +45,26 @@ configure_locale_tz() {
   "
 }
 
+# dkms signs every module it builds with this keypair and the boot phase
+# signs loader EFI binaries with it. Debian's dkms would generate it on
+# demand, but the zfs-dkms postinst (during install_base_packages) is the
+# first consumer, so it must exist before packages land. Generated with
+# the LIVE environment's openssl (the chroot has none yet). Parameters
+# mirror Debian dkms defaults: passphrase-less RSA 2048, DER certificate.
+ensure_mok_key() {
+  if [[ -f "${TARGET}${MOK_KEY}" && -f "${TARGET}${MOK_CRT}" ]]; then
+    return 0
+  fi
+  mkdir -p "${TARGET}/var/lib/dkms"
+  openssl req -new -x509 -nodes -days 36500 -newkey rsa:2048 \
+    -subj "/CN=hypr-deb DKMS module signing key/" \
+    -keyout "${TARGET}${MOK_KEY}" -outform DER \
+    -out "${TARGET}${MOK_CRT}" 2>/dev/null ||
+    fatal "MOK keypair generation failed (openssl)."
+  chmod 600 "${TARGET}${MOK_KEY}"
+  info "Generated MOK signing keypair at ${MOK_KEY}."
+}
+
 install_base_packages() {
   local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
   # VMware guest integration (display resize, clipboard, time sync,
@@ -244,6 +264,7 @@ phase_system() {
   write_identity
   write_fstab
   write_mdadm_conf
+  ensure_mok_key
   install_base_packages
   install_addon_artifacts
   configure_locale_tz

@@ -37,4 +37,24 @@ boot_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   declare -f bootstrap_live_tools || true')"
 assert_contains "${boot_body}" "openssl" "openssl probed by live bootstrap"
 
+sys_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f ensure_mok_key phase_system' 2>/dev/null || true)"
+assert_contains "${sys_body}" "openssl req -new -x509" \
+  "MOK keypair generated with openssl"
+assert_contains "${sys_body}" "outform DER" \
+  "MOK certificate is DER (dkms/mokutil format)"
+assert_contains "${sys_body}" "chmod 600" "private key is chmod 600"
+
+phase_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
+  source scripts/40-system.sh; declare -f phase_system' 2>/dev/null || true)"
+mok_line="$(printf '%s\n' "${phase_body}" | grep -n 'ensure_mok_key' | cut -d: -f1 | head -n1 || true)"
+pkg_line="$(printf '%s\n' "${phase_body}" | grep -n 'install_base_packages' | cut -d: -f1 | head -n1 || true)"
+if [[ -n "${mok_line}" && -n "${pkg_line}" ]] && ((mok_line < pkg_line)); then
+  echo "  ok: ensure_mok_key runs before install_base_packages"
+else
+  echo "  FAIL: ensure_mok_key must run before install_base_packages" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
 finish_test
