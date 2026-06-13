@@ -41,6 +41,20 @@ gen_cfg write_esp_sync_hook
 out="$(cat "${tmp}/target/usr/local/sbin/hypr-deb-sync-esp")"
 assert_contains "${out}" "vmlinuz" "hook copies kernel"
 assert_contains "${out}" "initrd.img" "hook copies initrd"
+assert_contains "${out}" "systemd-bootx64.efi.signed" \
+  "hook prefers Debian's signed systemd-boot binary"
+
+mkdir -p "${tmp}/target/usr/lib/systemd/boot/efi"
+touch "${tmp}/target/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed"
+out="$(gen_cfg find_systemd_boot_efi)"
+assert_eq "/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed" "${out}" \
+  "sd-boot selects Debian's signed-only package path"
+
+rm "${tmp}/target/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed"
+touch "${tmp}/target/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+out="$(gen_cfg find_systemd_boot_efi)"
+assert_eq "/usr/lib/systemd/boot/efi/systemd-bootx64.efi" "${out}" \
+  "sd-boot falls back to the unsigned package path"
 
 # ZBM fetch resolves the real asset URL via the GitHub API and must pick
 # the release variant, not recovery (whose URL also contains '/releases/').
