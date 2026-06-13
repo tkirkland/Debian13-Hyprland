@@ -300,7 +300,7 @@ ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
 # Upstream's documented Debian build dependencies (native-deb targets).
 ZFS_BUILD_PACKAGES=(
   build-essential autoconf automake libtool gawk alien fakeroot dkms
-  debhelper dh-python dh-dkms po-debconf
+  debhelper dh-python dh-dkms po-debconf lsb-release
   uuid-dev libblkid-dev libelf-dev libudev-dev libssl-dev zlib1g-dev
   libaio-dev libattr1-dev libffi-dev libcurl4-openssl-dev libpam0g-dev
   libtirpc-dev python3-dev python3-setuptools python3-cffi python3-packaging
