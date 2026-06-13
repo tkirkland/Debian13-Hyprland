@@ -7,8 +7,15 @@ and its hyprwm dependencies from their **latest release tags** with a check
 for version compatibility. The installation is complete only when both the
 bootable Debian system and the Hyprland build pass the verification suite.
 
-**This installer DESTROYS the target disks.** On bare metal the targets are
-fixed — these exact three disks, no detection, no fallback, no override:
+**This installer DESTROYS the target disks.** It was written for one
+specific machine — a Dell Precision workstation with three internal NVMe
+drives (hence the `PRECISION` pool name and `precision` hostname defaults).
+It is published as a reference and a starting point, not as a
+general-purpose installer: the storage layout, disk count, and the disk
+identities below are deliberately hard-coded to that hardware so the
+destructive path can never aim at the wrong machine. On bare metal the
+targets are fixed — these exact three disks, no detection, no fallback,
+no override:
 
 ```
 DISK1=/dev/disk/by-id/nvme-eui.0025384331408197
@@ -17,7 +24,12 @@ DISK3=/dev/disk/by-id/nvme-eui.002538433140819d
 ```
 
 Each path must exist and resolve to an internal whole disk (not removable,
-not USB). If you are not installing onto that machine, run it on a VM.
+not USB). The by-id paths are serial-number-derived, so on any other
+computer they simply do not exist and the installer refuses to run — that
+is the intended behavior, not a bug. To adapt the installer to different
+hardware, change `DISK1`–`DISK3` in `lib/00-config.sh` to your own
+`/dev/disk/by-id/` paths and review the partition sizes next to them. If
+you are not installing onto that machine, run it on a VM.
 
 ## VM test mode
 
