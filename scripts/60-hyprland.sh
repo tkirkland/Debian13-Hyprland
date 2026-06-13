@@ -361,10 +361,23 @@ EOF
 
 configure_session() {
   info "Configuring greetd + uwsm session..."
+  # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
+  # Hyprland startup chatter paints over the console during the greeter →
+  # desktop handoff (issue #12). Both session paths route through this
+  # wrapper: systemd-cat keeps the output in the journal (read it with
+  # `journalctl -t hypr-session`) instead of the VT — quiet, not discarded.
+  mkdir -p "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/hypr-session" <<'EOF'
+#!/usr/bin/env bash
+# Staged by installer.sh: greetd session entry. Session output goes to
+# the journal (journalctl -t hypr-session), never to the VT.
+exec systemd-cat -t hypr-session /usr/local/bin/uwsm start -- hyprland.desktop
+EOF
+  chmod +x "${TARGET}/usr/local/bin/hypr-session"
   local session_command="" session_user=""
   if ((HYPR_AUTOLOGIN)); then
     # No greeter: greetd starts the session directly as the target user.
-    session_command="/usr/local/bin/uwsm start -- hyprland.desktop"
+    session_command="/usr/local/bin/hypr-session"
     session_user="${TARGET_USERNAME}"
   else
     # Debian ships the greetd daemon WITHOUT any greeter binary (agreety
@@ -376,7 +389,7 @@ configure_session() {
       fatal "tuigreet not found in target (TARGET_BASE_PACKAGES should install it)."
     # --asterisks: tuigreet's default password field echoes NOTHING,
     # which reads as broken input on a console with redraw jitter.
-    session_command="${greeter} --remember --asterisks --cmd '/usr/local/bin/uwsm start -- hyprland.desktop'"
+    session_command="${greeter} --remember --asterisks --cmd /usr/local/bin/hypr-session"
     session_user="_greetd"
   fi
   mkdir -p "${TARGET}/etc/greetd"
