@@ -28,6 +28,9 @@ Options:
                         rebuild capability)
   --autologin           Boot straight into the Hyprland session as the
                         target user (no tuigreet console login)
+  --local-rtc           Keep the hardware clock in LOCAL time instead of
+                        UTC (for dual boot with Windows, which assumes a
+                        local-time RTC)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
   --nvidia=<open|debian|none|package>
@@ -76,6 +79,7 @@ parse_args() {
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
       --skip-cache) SKIP_CACHE=1 ;;
       --autologin) HYPR_AUTOLOGIN=1 ;;
+      --local-rtc) RTC_LOCAL_TIME=1 ;;
       --jobs=*)
         HYPR_BUILD_JOBS="${arg#*=}"
         [[ "${HYPR_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] ||
