@@ -77,4 +77,12 @@ else
   echo "  ok: uwsm and libhwdata-dev absent from apt package lists"
 fi
 
+# openzfs debian/control Build-Depends on lsb-release; debootstrap's
+# minimal base omits it, so the source build's dpkg-checkbuilddeps aborts
+# ("Unmet build dependencies: lsb-release") unless it is in the build set.
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${ZFS_BUILD_PACKAGES[@]}"')"
+assert_contains "${out}" "lsb-release" \
+  "zfs build deps include lsb-release (openzfs Build-Depends)"
+
 finish_test
