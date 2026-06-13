@@ -134,6 +134,7 @@ Common flags (see `--help` for the full list):
 --keep-build-deps                      do not purge build deps after success
 --skip-cache                           omit the embedded offline cache
 --autologin                            start Hyprland without the login prompt
+--local-rtc                            hardware clock in local time (Windows dual boot)
 --nvidia=<open|debian|none|package>    NVIDIA driver source when a GPU is
                                        detected (default: prompt; unattended
                                        uses "open" — NVIDIA's repo, open
