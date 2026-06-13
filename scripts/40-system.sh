@@ -43,6 +43,14 @@ configure_locale_tz() {
     locale-gen
     update-locale LANG='${LOCALE}'
   "
+  # --local-rtc (dual boot with Windows): timedatectl set-local-rtc needs
+  # a running systemd/dbus, which a chroot lacks — /etc/adjtime is the
+  # state it persists, so write it directly. The third line tells hwclock
+  # and systemd how to interpret the RTC.
+  if ((RTC_LOCAL_TIME)); then
+    printf '0.0 0 0.0\n0\nLOCAL\n' >"${TARGET}/etc/adjtime"
+    info "Hardware clock configured for LOCAL time (dual boot)."
+  fi
 }
 
 # dkms signs every module it builds with this keypair and the boot phase

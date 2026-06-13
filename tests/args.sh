@@ -45,6 +45,18 @@ out="$(bash -c '
 assert_eq "1|4|1" "${out}" \
   "--skip-cache, --jobs, --autologin parsed"
 
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args --local-rtc
+  echo "${RTC_LOCAL_TIME}"')"
+assert_eq "1" "${out}" "--local-rtc sets RTC_LOCAL_TIME"
+
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args
+  echo "${RTC_LOCAL_TIME}"')"
+assert_eq "0" "${out}" "RTC defaults to UTC without --local-rtc"
+
 # The upstream OpenZFS build is forced on networked installs; the old
 # opt-in flag must be gone (unknown flags are usage errors).
 assert_fails "--zfs-from-source flag removed" bash -c '
