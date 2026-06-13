@@ -7,33 +7,30 @@ set -euo pipefail
 
 BASEDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-source_file() {
-    local file="${BASEDIR}/$1"
-
-    if [[ ! -f "$file" ]]; then
-        echo "ERROR: Missing file: $file" >&2
-        exit 1
-    fi
-
-    # shellcheck disable=SC1090  # Validated repository path is intentionally dynamic.
-    source "$file"
-}
-
-source_file "lib/00-config.sh"
-source_file "lib/01-log.sh"
-source_file "lib/02-args.sh"
-source_file "lib/03-state.sh"
-source_file "lib/04-chroot-mounts.sh"
-
-source_file "scripts/00-preflight.sh"
-source_file "scripts/10-cache.sh"
-source_file "scripts/20-storage.sh"
-source_file "scripts/30-bootstrap.sh"
-source_file "scripts/40-system.sh"
-source_file "scripts/50-boot.sh"
-source_file "scripts/60-hyprland.sh"
-source_file "scripts/90-verify.sh"
-source_file "scripts/99-cleanup.sh"
+for source_rel in \
+  lib/00-config.sh \
+  lib/01-log.sh \
+  lib/02-args.sh \
+  lib/03-state.sh \
+  lib/04-chroot-mounts.sh \
+  scripts/00-preflight.sh \
+  scripts/10-cache.sh \
+  scripts/20-storage.sh \
+  scripts/30-bootstrap.sh \
+  scripts/40-system.sh \
+  scripts/50-boot.sh \
+  scripts/60-hyprland.sh \
+  scripts/90-verify.sh \
+  scripts/99-cleanup.sh; do
+  source_path="${BASEDIR}/${source_rel}"
+  if [[ ! -f "${source_path}" ]]; then
+    echo "ERROR: Missing file: ${source_path}" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090  # Validated repository path is intentionally dynamic.
+  source "${source_path}"
+done
+unset source_rel source_path
 
 # Triggers when error fires
 on_error() {
