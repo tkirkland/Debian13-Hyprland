@@ -95,7 +95,7 @@ install_base_packages() {
     warn "Offline install: keeping Debian's OpenZFS 2.3.x (the cache" \
       "does not carry the upstream source tree)."
   fi
-  run_step "Installing ${#pkgs[@]} base packages" in_target "
+  in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y ${pkgs[*]}
@@ -133,7 +133,7 @@ install_zfs_from_source() {
     "${TARGET}"/var/tmp/*.buildinfo
   git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
     "${ZFS_REPO_URL}" "${TARGET}/var/tmp/openzfs"
-  run_step "Building OpenZFS ${tag}" in_target "
+  in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     # Drop any live-kernel modules package from an earlier failed attempt.
@@ -200,7 +200,7 @@ install_nvidia_driver() {
     curl -fsSL --retry 3 -o "${TARGET}/tmp/cuda-keyring.deb" \
       "${NVIDIA_REPO_KEYRING_URL}" ||
       fatal "Could not fetch NVIDIA repo keyring (${NVIDIA_REPO_KEYRING_URL})."
-    run_step "NVIDIA driver install (dkms build included)" in_target "
+    in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
       dpkg -i /tmp/cuda-keyring.deb
@@ -221,7 +221,8 @@ install_nvidia_driver() {
   else
     local pkg="${NVIDIA_DRIVER}"
     [[ "${pkg}" == "debian" ]] && pkg="nvidia-driver"
-    run_step "NVIDIA driver install (${pkg}, dkms build included)" in_target "
+    info "Installing NVIDIA driver from Debian non-free: ${pkg}..."
+    in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
       apt-get install -y ${pkg}
@@ -317,9 +318,7 @@ create_user() {
     echo "${TARGET_USERNAME}:${USER_PASSWORD}" | chroot "${TARGET}" chpasswd
   elif ((IS_INTERACTIVE)); then
     info "Set a password for ${TARGET_USERNAME}:"
-    # passwd's dialog must reach the real console (quiet logging would
-    # swallow it); with_console keeps it off the log, where it belongs.
-    with_console chroot "${TARGET}" passwd "${TARGET_USERNAME}"
+    chroot "${TARGET}" passwd "${TARGET_USERNAME}"
   else
     warn "No USER_PASSWORD and non-interactive: ${TARGET_USERNAME} has no password."
   fi
