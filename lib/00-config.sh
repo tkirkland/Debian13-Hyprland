@@ -114,6 +114,26 @@ MOK_KEY="/var/lib/dkms/mok.key" # PEM private key, passphrase-less
 MOK_CRT="/var/lib/dkms/mok.pub" # DER certificate (dkms + mokutil format)
 MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
 
+# --- NVIDIA driver (issue #4) --------------------------------------------------
+# Detection happens BEFORE preflight (sysfs only, no tools), so prompts can
+# fail fast. NVIDIA_DRIVER: empty = decide interactively (unattended runs
+# default to nvidia-driver), "none" = skip, anything else = the apt package
+# to install. Debian 13's nvidia-driver is the 550-series proprietary
+# driver — the suggested choice for Hyprland; newer series (580+/open
+# kernel modules) come from NVIDIA's own repository and are out of scope.
+HAS_NVIDIA_GPU=0
+NVIDIA_DRIVER="${NVIDIA_DRIVER:-}"
+# Overridable for tests (fake sysfs trees).
+SYS_PCI_PATH="${SYS_PCI_PATH:-/sys/bus/pci/devices}"
+
+# True when a detected GPU plus a chosen package mean the driver will be
+# (or was) installed — gates the non-free component, the install itself,
+# the verify checks, and the session environment variables.
+nvidia_install_requested() {
+  ((${HAS_NVIDIA_GPU:-0})) &&
+    [[ -n "${NVIDIA_DRIVER:-}" && "${NVIDIA_DRIVER}" != "none" ]]
+}
+
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
 # Build order satisfies the dependency graph; hyprland after its deps.

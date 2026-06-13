@@ -81,6 +81,17 @@ main() {
   # minutes installing tools — non-interactive runs fail fast here instead
   # of mid-run.
   require_root
+  # NVIDIA decision (issue #4): detection is sysfs-only so it can run
+  # before preflight; phases that install, configure, or verify the
+  # driver need the package choice settled (and non-free enabled) first.
+  detect_nvidia_gpu
+  case "${RUN_PHASE}" in
+    full | system | hyprland | verify) require_nvidia_choice ;;
+  esac
+  if nvidia_install_requested &&
+    [[ " ${DEBIAN_COMPONENTS} " != *" non-free "* ]]; then
+    DEBIAN_COMPONENTS+=" non-free"
+  fi
   write_debian_sources
   case "${RUN_PHASE}" in
     full | boot | verify) require_bootloader_choice ;;

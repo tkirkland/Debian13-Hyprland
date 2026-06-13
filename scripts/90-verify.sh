@@ -82,6 +82,20 @@ phase_verify() {
   vcheck "user hyprland.lua exists" \
     test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.lua"
 
+  # NVIDIA (issue #4): only when a GPU was detected and a driver chosen.
+  # Offline installs legitimately skip the package (warned at install).
+  if nvidia_install_requested; then
+    if ((NETWORK_AVAILABLE)); then
+      vcheck "NVIDIA driver package installed (${NVIDIA_DRIVER})" \
+        in_target "dpkg -s '${NVIDIA_DRIVER}' >/dev/null"
+      vcheck "nvidia-drm modeset configured" \
+        grep -q "nvidia-drm" "${TARGET}/etc/modprobe.d/nvidia-options.conf"
+    fi
+    vcheck "uwsm env carries NVIDIA variables" \
+      grep -q "__GLX_VENDOR_LIBRARY_NAME" \
+      "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env"
+  fi
+
   vcheck "kernel on ZFS /boot" \
     bash -c "ls ${TARGET}/boot/vmlinuz-* >/dev/null 2>&1"
   vcheck "initramfs on ZFS /boot" \

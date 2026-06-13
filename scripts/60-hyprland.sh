@@ -10,6 +10,13 @@ if ! declare -f in_target >/dev/null; then
     /usr/bin/env bash -c "$1"
   }
 fi
+# Same standalone-staging concern: the helper lives in lib/00-config.sh.
+if ! declare -f nvidia_install_requested >/dev/null; then
+  nvidia_install_requested() {
+    ((${HAS_NVIDIA_GPU:-0})) &&
+      [[ -n "${NVIDIA_DRIVER:-}" && "${NVIDIA_DRIVER}" != "none" ]]
+  }
+fi
 
 HYPR_SRC_DIR="/var/tmp/hypr-deb-build"
 
@@ -390,6 +397,20 @@ vt = 1
 command = "${session_command}"
 user = "${session_user}"
 EOF
+  # NVIDIA session environment (issue #4): uwsm sources ~/.config/uwsm/env
+  # into the systemd user session before Hyprland starts. These are the
+  # Hyprland-wiki variables for NVIDIA GPUs; the chown -R below covers the
+  # file's ownership.
+  if nvidia_install_requested; then
+    mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm"
+    cat >"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
+# Managed by hypr-deb (issue #4): NVIDIA environment for the Hyprland
+# session. Sourced by uwsm into the systemd user environment.
+export LIBVA_DRIVER_NAME=nvidia
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export GBM_BACKEND=nvidia-drm
+EOF
+  fi
   write_hypr_lua_config
   in_target "
     set -e
