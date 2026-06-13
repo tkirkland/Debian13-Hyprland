@@ -134,6 +134,9 @@ Common flags (see `--help` for the full list):
 --keep-build-deps                      do not purge build deps after success
 --skip-cache                           omit the embedded offline cache
 --autologin                            start Hyprland without the login prompt
+--nvidia=<none|package>                NVIDIA driver when a GPU is detected
+                                       (default: prompt; unattended installs
+                                       nvidia-driver, Debian's 550 series)
 --jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
 --cache-dir=<path>                     cache location (default /var/cache/hypr-deb)

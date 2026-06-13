@@ -30,6 +30,12 @@ Options:
                         target user (no tuigreet console login)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
+  --nvidia=<none|package>
+                        NVIDIA driver handling when a GPU is detected:
+                        "none" skips the install; any other value is the
+                        Debian package to install (prompted interactively
+                        if omitted; unattended runs default to
+                        nvidia-driver, Debian 13's 550-series build)
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
   --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
@@ -67,6 +73,11 @@ parse_args() {
         [[ "${HYPR_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] ||
           fatal "--jobs expects a positive integer, got '${HYPR_BUILD_JOBS}'"
         ;;
+      --nvidia=*)
+        NVIDIA_DRIVER="${arg#*=}"
+        [[ -n "${NVIDIA_DRIVER}" ]] ||
+          fatal "--nvidia expects 'none' or a Debian package name"
+        ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
       --cache-dir=*) CACHE_DIR="${arg#*=}" ;;
       --fresh) FRESH=1 ;;
@@ -103,6 +114,37 @@ require_bootloader_choice() {
     break
   done
   info "Bootloader: ${BOOTLOADER}"
+}
+
+# Decide the NVIDIA driver package when a GPU is present (issue #4):
+# prompt when interactive, default to Debian's nvidia-driver otherwise.
+# No GPU or an explicit --nvidia=... means there is nothing to ask.
+require_nvidia_choice() {
+  ((HAS_NVIDIA_GPU)) || return 0
+  [[ -n "${NVIDIA_DRIVER}" ]] && return 0
+  if ((!IS_INTERACTIVE)) || ((ASSUME_YES)); then
+    NVIDIA_DRIVER="nvidia-driver"
+    info "NVIDIA GPU detected: defaulting to '${NVIDIA_DRIVER}'" \
+      "(override with --nvidia=<none|package>)."
+    return 0
+  fi
+  local choice=""
+  echo "NVIDIA GPU detected. Driver to install:"
+  echo "  1) nvidia-driver  Debian 13's proprietary 550-series driver (suggested"
+  echo "                    for Hyprland; dkms-built and MOK-signed like zfs)"
+  echo "  2) none           skip — keep the kernel's nouveau driver"
+  echo "  (other Debian driver packages can be chosen with --nvidia=<package>)"
+  while true; do
+    read -r -p "Choice [1-2, default 1]: " choice ||
+      fatal "No input (EOF) while selecting the NVIDIA driver."
+    case "${choice}" in
+      1 | "") NVIDIA_DRIVER="nvidia-driver" ;;
+      2) NVIDIA_DRIVER="none" ;;
+      *) continue ;;
+    esac
+    break
+  done
+  info "NVIDIA driver: ${NVIDIA_DRIVER}"
 }
 
 # Destructive gate. Lists the disks about to be destroyed.

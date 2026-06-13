@@ -166,6 +166,35 @@ install_zfs_from_source() {
   rm -rf "${TARGET}/var/tmp/openzfs"
 }
 
+# NVIDIA driver install (issue #4), gated on detection + user choice.
+# The driver's dkms modules are built and MOK-signed exactly like zfs, so
+# secure boot works once the key is enrolled. nouveau blacklisting is
+# handled by the driver package itself.
+install_nvidia_driver() {
+  nvidia_install_requested || return 0
+  if ((!NETWORK_AVAILABLE)); then
+    warn "Offline install: skipping NVIDIA driver '${NVIDIA_DRIVER}'" \
+      "(the cache does not carry non-free packages). Install it after" \
+      "first boot: apt-get install ${NVIDIA_DRIVER}"
+    return 0
+  fi
+  info "Installing NVIDIA driver: ${NVIDIA_DRIVER}..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${NVIDIA_DRIVER}
+  "
+  # Hyprland (any wlroots/aquamarine compositor) requires the DRM KMS
+  # interface; fbdev replaces efifb with a native high-res console on the
+  # same driver. Set via modprobe.d + initramfs so it applies regardless
+  # of which of the three bootloaders writes the kernel cmdline.
+  cat >"${TARGET}/etc/modprobe.d/nvidia-options.conf" <<'EOF'
+# Managed by hypr-deb (issue #4): Hyprland requires nvidia-drm KMS.
+options nvidia-drm modeset=1 fbdev=1
+EOF
+  in_target "update-initramfs -u"
+}
+
 # Addon artifacts: things apt cannot provide, dropped into addons/.
 #   *.deb  installed via apt from the local file (dependencies resolved
 #          from the enabled sources; the chroot policy-rc.d guard blocks
@@ -274,6 +303,7 @@ phase_system() {
   write_mdadm_conf
   ensure_mok_key
   install_base_packages
+  install_nvidia_driver
   install_addon_artifacts
   configure_locale_tz
   create_user
