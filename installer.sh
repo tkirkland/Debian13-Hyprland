@@ -88,7 +88,9 @@ main() {
   case "${RUN_PHASE}" in
     full | system | hyprland | verify) require_nvidia_choice ;;
   esac
-  if nvidia_install_requested &&
+  # Debian's non-free component is only needed for the "debian"/package
+  # modes; "open" installs from NVIDIA's own repository.
+  if nvidia_install_requested && [[ "${NVIDIA_DRIVER}" != "open" ]] &&
     [[ " ${DEBIAN_COMPONENTS} " != *" non-free "* ]]; then
     DEBIAN_COMPONENTS+=" non-free"
   fi

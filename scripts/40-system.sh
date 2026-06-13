@@ -169,21 +169,57 @@ install_zfs_from_source() {
 # NVIDIA driver install (issue #4), gated on detection + user choice.
 # The driver's dkms modules are built and MOK-signed exactly like zfs, so
 # secure boot works once the key is enrolled. nouveau blacklisting is
-# handled by the driver package itself.
+# handled by the driver packages themselves.
+#
+# "open" installs from NVIDIA's Debian 13 CUDA repo (keyring deb +
+# apt update). The repo pins its production branch via a
+# nvidia-driver-pinning-* package; with no NVIDIA_DRIVER_VERSION the
+# install follows that pin (and future branch promotions). A pinned
+# version purges the pinning package (it outranks the request) and
+# apt-mark holds the trio so unattended upgrades cannot mix branches.
 install_nvidia_driver() {
   nvidia_install_requested || return 0
   if ((!NETWORK_AVAILABLE)); then
     warn "Offline install: skipping NVIDIA driver '${NVIDIA_DRIVER}'" \
-      "(the cache does not carry non-free packages). Install it after" \
-      "first boot: apt-get install ${NVIDIA_DRIVER}"
+      "(the cache carries neither non-free nor NVIDIA-repo packages)." \
+      "Install it after first boot."
     return 0
   fi
-  info "Installing NVIDIA driver: ${NVIDIA_DRIVER}..."
-  in_target "
-    set -e
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y ${NVIDIA_DRIVER}
-  "
+  if [[ "${NVIDIA_DRIVER}" == "open" ]]; then
+    local pin="${NVIDIA_DRIVER_VERSION:+=${NVIDIA_DRIVER_VERSION}}"
+    info "Installing NVIDIA open kernel modules" \
+      "${NVIDIA_DRIVER_VERSION:-(production branch)} from NVIDIA's repo..."
+    curl -fsSL --retry 3 -o "${TARGET}/tmp/cuda-keyring.deb" \
+      "${NVIDIA_REPO_KEYRING_URL}" ||
+      fatal "Could not fetch NVIDIA repo keyring (${NVIDIA_REPO_KEYRING_URL})."
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      dpkg -i /tmp/cuda-keyring.deb
+      rm -f /tmp/cuda-keyring.deb
+      apt-get update
+      if [[ -n '${pin}' ]]; then
+        # The repo's production-branch pin outranks an explicit version.
+        if dpkg-query -W 'nvidia-driver-pinning-*' >/dev/null 2>&1; then
+          apt-get purge -y 'nvidia-driver-pinning-*'
+        fi
+      fi
+      apt-get install -y nvidia-open${pin} nvidia-driver${pin} \
+        nvidia-kernel-open-dkms${pin}
+      if [[ -n '${pin}' ]]; then
+        apt-mark hold nvidia-open nvidia-driver nvidia-kernel-open-dkms
+      fi
+    "
+  else
+    local pkg="${NVIDIA_DRIVER}"
+    [[ "${pkg}" == "debian" ]] && pkg="nvidia-driver"
+    info "Installing NVIDIA driver from Debian non-free: ${pkg}..."
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y ${pkg}
+    "
+  fi
   # Hyprland (any wlroots/aquamarine compositor) requires the DRM KMS
   # interface; fbdev replaces efifb with a native high-res console on the
   # same driver. Set via modprobe.d + initramfs so it applies regardless

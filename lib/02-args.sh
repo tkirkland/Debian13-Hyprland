@@ -30,12 +30,20 @@ Options:
                         target user (no tuigreet console login)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
-  --nvidia=<none|package>
-                        NVIDIA driver handling when a GPU is detected:
-                        "none" skips the install; any other value is the
-                        Debian package to install (prompted interactively
-                        if omitted; unattended runs default to
-                        nvidia-driver, Debian 13's 550-series build)
+  --nvidia=<open|debian|none|package>
+                        NVIDIA driver source when a GPU is detected:
+                        "open" = NVIDIA's Debian 13 repo, open kernel
+                        modules pinned to NVIDIA_DRIVER_VERSION (default
+                        610.43.02-1); "debian" = Debian's non-free
+                        nvidia-driver (550); "none" = skip; any other
+                        value = a literal non-free package name.
+                        Prompted interactively if omitted; unattended
+                        runs default to "open"
+  --nvidia-version=<ver>
+                        Exact driver version for --nvidia=open, e.g.
+                        610.43.02-1 (pinned and apt-mark held). Default:
+                        the repo's production branch, tracked across
+                        NVIDIA's branch promotions
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
   --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
@@ -76,7 +84,13 @@ parse_args() {
       --nvidia=*)
         NVIDIA_DRIVER="${arg#*=}"
         [[ -n "${NVIDIA_DRIVER}" ]] ||
-          fatal "--nvidia expects 'none' or a Debian package name"
+          fatal "--nvidia expects open|debian|none or a package name"
+        ;;
+      --nvidia-version=*)
+        NVIDIA_DRIVER_VERSION="${arg#*=}"
+        [[ "${NVIDIA_DRIVER_VERSION}" =~ ^[0-9]+\.[0-9]+ ]] ||
+          fatal "--nvidia-version expects a version like 610.43.02-1," \
+            "got '${NVIDIA_DRIVER_VERSION}'"
         ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
       --cache-dir=*) CACHE_DIR="${arg#*=}" ;;
@@ -116,35 +130,40 @@ require_bootloader_choice() {
   info "Bootloader: ${BOOTLOADER}"
 }
 
-# Decide the NVIDIA driver package when a GPU is present (issue #4):
-# prompt when interactive, default to Debian's nvidia-driver otherwise.
-# No GPU or an explicit --nvidia=... means there is nothing to ask.
+# Decide the NVIDIA driver source when a GPU is present (issue #4):
+# prompt when interactive, default to "open" otherwise. No GPU or an
+# explicit --nvidia=... means there is nothing to ask.
 require_nvidia_choice() {
   ((HAS_NVIDIA_GPU)) || return 0
   [[ -n "${NVIDIA_DRIVER}" ]] && return 0
   if ((!IS_INTERACTIVE)) || ((ASSUME_YES)); then
-    NVIDIA_DRIVER="nvidia-driver"
-    info "NVIDIA GPU detected: defaulting to '${NVIDIA_DRIVER}'" \
-      "(override with --nvidia=<none|package>)."
+    NVIDIA_DRIVER="open"
+    info "NVIDIA GPU detected: defaulting to the open kernel modules from" \
+      "NVIDIA's repo (override with --nvidia=<open|debian|none>)."
     return 0
   fi
   local choice=""
   echo "NVIDIA GPU detected. Driver to install:"
-  echo "  1) nvidia-driver  Debian 13's proprietary 550-series driver (suggested"
-  echo "                    for Hyprland; dkms-built and MOK-signed like zfs)"
-  echo "  2) none           skip — keep the kernel's nouveau driver"
-  echo "  (other Debian driver packages can be chosen with --nvidia=<package>)"
+  echo "  1) open    NVIDIA's Debian 13 repo, open kernel modules — suggested."
+  echo "             Production branch by default; --nvidia-version=<ver> pins"
+  echo "             an exact release (e.g. 610.43.02-1, the feature branch)."
+  echo "             Requires a Turing (RTX/GTX 16xx) or newer GPU."
+  echo "  2) debian  Debian 13's non-free nvidia-driver (550 series, proprietary"
+  echo "             kernel modules) — for pre-Turing GPUs."
+  echo "  3) none    skip — keep the kernel's nouveau driver."
   while true; do
-    read -r -p "Choice [1-2, default 1]: " choice ||
+    read -r -p "Choice [1-3, default 1]: " choice ||
       fatal "No input (EOF) while selecting the NVIDIA driver."
     case "${choice}" in
-      1 | "") NVIDIA_DRIVER="nvidia-driver" ;;
-      2) NVIDIA_DRIVER="none" ;;
+      1 | "") NVIDIA_DRIVER="open" ;;
+      2) NVIDIA_DRIVER="debian" ;;
+      3) NVIDIA_DRIVER="none" ;;
       *) continue ;;
     esac
     break
   done
-  info "NVIDIA driver: ${NVIDIA_DRIVER}"
+  info "NVIDIA driver: ${NVIDIA_DRIVER}" \
+    "${NVIDIA_DRIVER_VERSION:+(version ${NVIDIA_DRIVER_VERSION})}"
 }
 
 # Destructive gate. Lists the disks about to be destroyed.

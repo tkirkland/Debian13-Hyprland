@@ -85,9 +85,14 @@ phase_verify() {
   # NVIDIA (issue #4): only when a GPU was detected and a driver chosen.
   # Offline installs legitimately skip the package (warned at install).
   if nvidia_install_requested; then
+    local nv_pkg="${NVIDIA_DRIVER}"
+    case "${nv_pkg}" in
+      open) nv_pkg="nvidia-open" ;;
+      debian) nv_pkg="nvidia-driver" ;;
+    esac
     if ((NETWORK_AVAILABLE)); then
-      vcheck "NVIDIA driver package installed (${NVIDIA_DRIVER})" \
-        in_target "dpkg -s '${NVIDIA_DRIVER}' >/dev/null"
+      vcheck "NVIDIA driver package installed (${nv_pkg})" \
+        in_target "dpkg -s '${nv_pkg}' >/dev/null"
       vcheck "nvidia-drm modeset configured" \
         grep -q "nvidia-drm" "${TARGET}/etc/modprobe.d/nvidia-options.conf"
     fi
