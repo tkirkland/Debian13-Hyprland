@@ -28,13 +28,13 @@ mark_phase_done() {
 # intermediate failures slide. run_phase must only be called under `set -e`
 # (never in a condition context); a failing phase then aborts via the
 # caller's ERR trap before the stamp line is reached.
-run_phase() {
-  local name="$1" func="$2"
+run_phase() { # NAME FUNC [k/N position for the banner]
+  local name="$1" func="$2" pos="${3:-}"
   if phase_done "${name}"; then
     info "Skipping ${name} (already complete; --fresh to redo)"
     return 0
   fi
-  info "=== Phase: ${name} ==="
+  info "=== Phase${pos:+ ${pos}}: ${name} ==="
   "${func}"
   mark_phase_done "${name}"
 }
