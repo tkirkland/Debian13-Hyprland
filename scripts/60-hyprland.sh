@@ -134,19 +134,19 @@ install_build_deps() {
   if ((NETWORK_AVAILABLE)); then
     write_sid_toolchain_sources "${TARGET}"
     in_target "apt-get update"
-    in_target "
+    run_step "Installing gcc-15 toolchain (sid)" in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
       apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
     "
   else
-    in_target "
+    run_step "Installing gcc-15 toolchain (cache)" in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
       apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
     "
   fi
-  in_target "
+  run_step "Installing Hyprland build dependencies" in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y ${HYPR_BUILD_PACKAGES[*]}
@@ -225,8 +225,7 @@ build_one() {
   # Empty --jobs means one job per CPU (expanded inside the target).
   local jobs="${HYPR_BUILD_JOBS:-}"
   [[ -n "${jobs}" ]] || jobs="\$(nproc)"
-  info "Building ${name} ${HYPR_RESOLVED_TAG[${name}]}..."
-  in_target "
+  run_step "Building ${name} ${HYPR_RESOLVED_TAG[${name}]}" in_target "
     set -e
     export CC='${HYPR_CC}' CXX='${HYPR_CXX}'
     cd '${HYPR_SRC_DIR}/${name}'
