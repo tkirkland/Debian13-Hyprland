@@ -227,6 +227,7 @@ detect_nvidia_gpu() {
     read -r vendor <"${dev}/vendor"
     read -r class <"${dev}/class"
     if [[ "${vendor}" == "0x10de" && "${class}" == 0x03* ]]; then
+      # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
       HAS_NVIDIA_GPU=1
       info "NVIDIA GPU detected (PCI ${dev##*/})."
       return 0

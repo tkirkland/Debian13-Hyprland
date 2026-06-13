@@ -55,12 +55,12 @@ run_debootstrap() {
     return 0
   fi
   if ((NETWORK_AVAILABLE)); then
-    run_step "debootstrap ${SUITE} from ${MIRROR}" \
-      debootstrap --arch="${ARCH}" "${SUITE}" "${TARGET}" "${MIRROR}"
+    info "debootstrap ${SUITE} from ${MIRROR}..."
+    debootstrap --arch="${ARCH}" "${SUITE}" "${TARGET}" "${MIRROR}"
   else
     cache_validate
-    run_step "debootstrap ${SUITE} from offline cache" \
-      debootstrap --no-check-gpg --arch="${ARCH}" "${SUITE}" "${TARGET}" \
+    info "debootstrap ${SUITE} from offline cache..."
+    debootstrap --no-check-gpg --arch="${ARCH}" "${SUITE}" "${TARGET}" \
       "file://${CACHE_DIR}/repo"
   fi
 }

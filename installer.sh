@@ -15,6 +15,7 @@ source_file() {
         exit 1
     fi
 
+    # shellcheck disable=SC1090  # Validated repository path is intentionally dynamic.
     source "$file"
 }
 
@@ -138,7 +139,7 @@ main() {
   # (NETWORK_AVAILABLE, VIRT_TYPE, disk selection) that resumed runs need.
   # It is idempotent by design.
   current_phase="preflight"
-  info "=== Phase 1/8: preflight ==="
+  info "=== Phase: preflight ==="
   phase_preflight
 
   if [[ "${RUN_PHASE}" != "full" ]]; then
@@ -151,15 +152,14 @@ main() {
   fi
 
   ensure_target_ready
-  local name="" idx=1
+  local name=""
   for name in cache storage bootstrap system boot hyprland verify; do
-    idx=$((idx + 1))
     if [[ "${name}" == "cache" ]] && ((SKIP_CACHE)); then
       info "Skipping cache phase (--skip-cache); no offline cache."
       continue
     fi
     current_phase="${name}"
-    run_phase "${name}" "phase_${name}" "${idx}/8"
+    run_phase "${name}" "phase_${name}"
   done
   current_phase="cleanup"
   phase_cleanup
