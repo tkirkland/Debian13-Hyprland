@@ -13,7 +13,7 @@ drives (hence the `PRECISION` pool name and `precision` hostname defaults).
 It is published as a reference and a starting point, not as a
 general-purpose installer: the storage layout, disk count, and the disk
 identities below are deliberately hard-coded to that hardware so the
-destructive path can never aim at the wrong machine. On bare metal the
+destructive path cannot aim at the wrong disks. On bare metal the
 targets are fixed — these exact three disks, no detection, no fallback,
 no override:
 
@@ -24,12 +24,16 @@ DISK3=/dev/disk/by-id/nvme-eui.002538433140819d
 ```
 
 Each path must exist and resolve to an internal whole disk (not removable,
-not USB). The by-id paths are serial-number-derived, so on any other
-computer they simply do not exist and the installer refuses to run — that
-is the intended behavior, not a bug. To adapt the installer to different
-hardware, change `DISK1`–`DISK3` in `lib/00-config.sh` to your own
-`/dev/disk/by-id/` paths and review the partition sizes next to them. If
-you are not installing onto that machine, run it on a VM.
+not USB). The by-id paths are derived from each drive's NVMe EUI, so they
+identify **those exact three drives** — on hardware that doesn't contain
+them the paths don't exist and the installer refuses to run; that is the
+intended behavior, not a bug. (Note the guard follows the drives, not the
+computer: if those drives were physically moved to another machine, the
+paths would exist there and the installer would happily erase them.) To
+adapt the installer to different hardware, change `DISK1`–`DISK3` in
+`lib/00-config.sh` to your own `/dev/disk/by-id/` paths and review the
+partition sizes next to them. If you are not installing onto that
+machine, run it on a VM.
 
 ## VM test mode
 
