@@ -12,10 +12,17 @@ mount_target_tree() {
     zpool import -N -R "${TARGET}" "${POOL_NAME}" ||
       fatal "Pool ${POOL_NAME} not imported and import failed."
   fi
-  zfs mount "${ROOT_DATASET}"
+  # Resumed runs reach here with the tree already mounted by
+  # ensure_target_ready (zfs mount refuses a second mount, killing the
+  # run under set -e), so every mount is guarded. zfs mount -a is
+  # natively idempotent.
+  if ! mountpoint -q "${TARGET}"; then
+    zfs mount "${ROOT_DATASET}"
+  fi
   zfs mount -a
   mkdir -p "${TARGET}${ESP_MOUNT}"
-  mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
+  mountpoint -q "${TARGET}${ESP_MOUNT}" ||
+    mount /dev/md/efi "${TARGET}${ESP_MOUNT}"
 }
 
 # Ready the target whenever its pool exists (already imported, or
