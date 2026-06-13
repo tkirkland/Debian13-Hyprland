@@ -17,6 +17,18 @@ assert_fails "unknown flag fails" bash installer.sh --bogus
 assert_contains "$(cat installer.sh)" "Re-run installer.sh to resume" \
   "failure message names the installer"
 
+# Modules must be sourced at top level: `declare -A` inside a helper function
+# creates function-local arrays that vanish before main runs.
+sed -e "s|^BASEDIR=.*|BASEDIR=\"${PWD}\"|" \
+  -e '/^main "\$@"$/d' installer.sh >"${tmp}/installer-no-main.sh"
+out="$(bash -c '
+  source "$1"
+  declare -p HYPR_REPO_URL HYPR_TAG_PATTERN HYPR_MESON_ARGS \
+    HYPR_RESOLVED_TAG >/dev/null
+  echo arrays-global' _ "${tmp}/installer-no-main.sh")"
+assert_eq "arrays-global" "${out}" \
+  "config associative arrays survive installer initialization"
+
 # Non-root full run must fail in preflight, not crash on sourcing.
 # STATE_DIR/LOG_DIR point into tmp so the dev machine stays clean.
 out="$(STATE_DIR="${tmp}/state" LOG_DIR="${tmp}/logs" \
