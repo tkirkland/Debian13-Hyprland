@@ -131,6 +131,21 @@ else
   echo "  ok: legacy hyprland.conf is not generated"
 fi
 
+# Quiet VT handoff (issue #12): the session must launch through the
+# journal-routing wrapper so uwsm/Hyprland chatter never paints VT1.
+wrapper="${TARGET}/usr/local/bin/hypr-session"
+if [[ -x "${wrapper}" ]]; then
+  echo "  ok: hypr-session wrapper staged executable"
+  assert_contains "$(<"${wrapper}")" "systemd-cat" \
+    "wrapper routes session output to the journal"
+else
+  echo "  FAIL: hypr-session wrapper missing or not executable" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
+assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
+  "greetd session command uses the wrapper"
+
 # A missing staged example is a loud failure, not a silent fallback.
 # fatal exits in the real installer (lib/01-log.sh); mirror that here.
 assert_fails "missing staged example config is fatal" bash -c "
