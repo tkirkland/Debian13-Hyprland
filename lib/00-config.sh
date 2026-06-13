@@ -114,6 +114,41 @@ MOK_KEY="/var/lib/dkms/mok.key" # PEM private key, passphrase-less
 MOK_CRT="/var/lib/dkms/mok.pub" # DER certificate (dkms + mokutil format)
 MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
 
+# --- NVIDIA driver (issue #4) --------------------------------------------------
+# Detection happens BEFORE preflight (sysfs only, no tools), so prompts can
+# fail fast. NVIDIA_DRIVER selects the source:
+#   ""       decide interactively (unattended runs default to "open")
+#   open     NVIDIA's Debian 13 CUDA repo: open kernel modules
+#            (nvidia-open + nvidia-driver + nvidia-kernel-open-dkms),
+#            pinned to NVIDIA_DRIVER_VERSION and apt-mark held. Open
+#            modules support Turing and newer GPUs only — older cards
+#            must use "debian".
+#   debian   Debian 13's non-free nvidia-driver (550-series proprietary)
+#   none     skip — keep the kernel's nouveau driver
+#   <pkg>    any other value: a literal package name from Debian non-free
+HAS_NVIDIA_GPU=0
+NVIDIA_DRIVER="${NVIDIA_DRIVER:-}"
+NVIDIA_REPO_KEYRING_URL="${NVIDIA_REPO_KEYRING_URL:-https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb}"
+# Exact version for "open" mode, e.g. 610.43.02-1 (--nvidia-version=...).
+# Empty = repo default: NVIDIA pins its production branch (R595 at the
+# time of writing) via a nvidia-driver-pinning-* package, and the install
+# tracks branch promotions automatically. A pinned version purges that
+# pinning package (it would outrank the request) and apt-mark holds the
+# driver packages so unattended upgrades cannot mix branches. 610.43.02-1
+# (the R610 feature branch: HDR, DRM color pipeline) is validated with
+# Hyprland on this machine.
+NVIDIA_DRIVER_VERSION="${NVIDIA_DRIVER_VERSION:-}"
+# Overridable for tests (fake sysfs trees).
+SYS_PCI_PATH="${SYS_PCI_PATH:-/sys/bus/pci/devices}"
+
+# True when a detected GPU plus a chosen package mean the driver will be
+# (or was) installed — gates the non-free component, the install itself,
+# the verify checks, and the session environment variables.
+nvidia_install_requested() {
+  ((${HAS_NVIDIA_GPU:-0})) &&
+    [[ -n "${NVIDIA_DRIVER:-}" && "${NVIDIA_DRIVER}" != "none" ]]
+}
+
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
 # Build order satisfies the dependency graph; hyprland after its deps.
