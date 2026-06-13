@@ -85,6 +85,17 @@ assert_contains "${addon_body}" "addon-scripts" \
 assert_contains "${addon_body}" "Addon script failed" \
   "failing addon script fails the phase by name"
 
+# man-db re-indexes on every apt transaction's trigger; install_base_packages
+# disables its auto-update (debconf) before the first package install so the
+# ~10 transactions don't each spend minutes rebuilding the index.
+base_body="$(bash -c '
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/40-system.sh
+  declare -f install_base_packages')"
+assert_contains "${base_body}" "man-db/auto-update boolean false" \
+  "install disables man-db auto-update to skip per-transaction reindexing"
+
 # configure_locale_tz needs /etc/locale.gen from the locales package, so
 # install_base_packages must come first in phase_system.
 first_step="$(bash -c '

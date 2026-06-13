@@ -95,6 +95,15 @@ install_base_packages() {
     warn "Offline install: keeping Debian's OpenZFS 2.3.x (the cache" \
       "does not carry the upstream source tree)."
   fi
+  # man-db re-indexes every installed man page on each apt transaction's
+  # trigger phase — there are ~10 transactions across the install, minutes
+  # of CPU on bare metal. Disable its auto-update for the chroot's lifetime
+  # BEFORE the first transaction configures man-db, so neither the initial
+  # build nor any later trigger fires. Man pages are still installed;
+  # man-db's daily timer builds the index on the running system. The
+  # debconf value persists in the target, so it also covers the boot and
+  # hyprland phases' apt calls and any resumed run.
+  in_target "echo 'man-db man-db/auto-update boolean false' | debconf-set-selections"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
