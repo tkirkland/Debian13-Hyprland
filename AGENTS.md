@@ -85,3 +85,10 @@ Conventional Commits, lowercase after the prefix:
 `feat:` / `fix:` / `test:` / `docs:` / `chore:` / `refactor:`.
 One concern per commit. Work on a short-lived branch, merge to `master`
 after the gates pass. History on GitHub is append-only — no rewrites.
+
+## Pull requests
+
+Agents may create draft pull requests only. Never approve, mark ready,
+merge, close, or enable auto-merge on a pull request. The user performs
+the final review and merge unless the user explicitly changes this rule
+in `AGENTS.md`.
