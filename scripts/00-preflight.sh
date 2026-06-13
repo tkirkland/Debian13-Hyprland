@@ -216,6 +216,25 @@ check_network() {
   fi
 }
 
+# NVIDIA GPU detection (issue #4). Runs BEFORE preflight installs tools,
+# so it reads sysfs directly instead of lspci: vendor 0x10de with a
+# display-controller class (0x03xxxx) means an NVIDIA GPU is present.
+detect_nvidia_gpu() {
+  HAS_NVIDIA_GPU=0
+  local dev="" vendor="" class=""
+  for dev in "${SYS_PCI_PATH}"/*; do
+    [[ -r "${dev}/vendor" && -r "${dev}/class" ]] || continue
+    read -r vendor <"${dev}/vendor"
+    read -r class <"${dev}/class"
+    if [[ "${vendor}" == "0x10de" && "${class}" == 0x03* ]]; then
+      HAS_NVIDIA_GPU=1
+      info "NVIDIA GPU detected (PCI ${dev##*/})."
+      return 0
+    fi
+  done
+  return 0
+}
+
 detect_live_environment() {
   if grep -qE '(^| )boot=live( |$)' /proc/cmdline 2>/dev/null ||
     mountpoint -q /run/live/medium 2>/dev/null; then
