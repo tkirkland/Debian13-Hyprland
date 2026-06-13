@@ -119,6 +119,11 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
   assert_contains "${deb}" \
     '/usr/local/bin/hyprland-welcome && touch "$marker"' \
     "marker touched only after the app is acknowledged"
+  # The exec must run on the hyprland.start event — a bare top-level
+  # hl.exec_cmd fires at config-parse time, before the compositor is up,
+  # so the GUI client has no Wayland display and never launches.
+  assert_contains "${deb}" 'hl.on("hyprland.start"' \
+    "welcome exec registered on the hyprland.start autostart event"
 else
   echo "  FAIL: hypr-deb.lua module missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
