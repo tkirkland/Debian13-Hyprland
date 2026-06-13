@@ -42,8 +42,10 @@ mkdir -p "${esp}"
 cp "/boot/vmlinuz-${kver}" "${esp}/vmlinuz"
 cp "/boot/initrd.img-${kver}" "${esp}/initrd.img"
 # Keep the MOK-signed systemd-boot copy fresh: package updates rewrite the
-# canonical binary; shim chain-loads our signed copy on the ESP.
-sd_src="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+# canonical binary; shim chain-loads our signed copy on the ESP. Debian's
+# signed package omits the unsigned path, so prefer its .signed binary.
+sd_src="/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed"
+[[ -f "${sd_src}" ]] || sd_src="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
 sd_dst="/boot/efi/EFI/systemd/grubx64.efi"
 if [[ -f "${sd_src}" && -f "${sd_dst}" && "${sd_src}" -nt "${sd_dst}" ]]; then
   sbsign --key /var/lib/dkms/mok.key --cert /var/lib/dkms/mok.pem \
@@ -244,6 +246,17 @@ install_grub() {
 
 # --- systemd-boot --------------------------------------------------------------
 
+find_systemd_boot_efi() {
+  local src="/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+  if [[ -f "${TARGET}${src}.signed" ]]; then
+    printf '%s\n' "${src}.signed"
+  elif [[ -f "${TARGET}${src}" ]]; then
+    printf '%s\n' "${src}"
+  else
+    fatal "systemd-boot EFI binary not found after package installation."
+  fi
+}
+
 write_sdboot_entries() {
   mkdir -p "${TARGET}${ESP_MOUNT}/loader/entries"
   cat >"${TARGET}${ESP_MOUNT}/loader/loader.conf" <<'EOF'
@@ -259,6 +272,7 @@ EOF
 }
 
 install_sdboot() {
+  local sd_src=""
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -270,7 +284,9 @@ install_sdboot() {
   run_esp_sync
   write_sdboot_entries
   install_shim systemd
-  sign_loader "/usr/lib/systemd/boot/efi/systemd-bootx64.efi" systemd
+  sd_src="$(find_systemd_boot_efi)" ||
+    fatal "Could not locate the installed systemd-boot EFI binary."
+  sign_loader "${sd_src}" systemd
   # --no-variables skips bootctl's NVRAM write (unreliable on a RAID1 ESP);
   # create the entry ourselves on both member disks.
   create_nvram_entry "Linux Boot Manager" '\EFI\systemd\shimx64.efi'
