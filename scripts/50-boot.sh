@@ -143,7 +143,9 @@ stage_mok_enrollment() {
       chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
   elif ((IS_INTERACTIVE)); then
     info "Choose a MOK password (you will re-enter it at first boot):"
-    chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
+    # mokutil prompts for the password interactively; keep the dialog on
+    # the real console and out of the log.
+    with_console chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
   else
     warn "No USER_PASSWORD and non-interactive: MOK enrollment not" \
       "staged. Run 'mokutil --import ${MOK_CRT}' on the installed system."
