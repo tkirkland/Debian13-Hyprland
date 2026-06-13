@@ -53,10 +53,7 @@ Options:
   --yes                 Unattended mode: skips the destructive confirmation
                         and refuses to reach any later prompt — requires
                         --bootloader and the USER_PASSWORD env var
-  --verbose             Stream full command output (apt, compiles) to the
-                        console. Default: the console shows only prompts
-                        and [INFO]/[WARN] status lines; the full stream
-                        always lands in the log file
+  --verbose             Detailed logging
   --help                This text
 EOF
 }
@@ -120,13 +117,12 @@ require_bootloader_choice() {
     fatal "--bootloader=<zbm|grub|systemd-boot> is required in non-interactive runs"
   fi
   local choice=""
-  console "Select a bootloader:"
-  console "  1) zbm           ZFSBootMenu — boots snapshots/datasets directly"
-  console "  2) grub          GRUB (reads kernel copies from the ESP)"
-  console "  3) systemd-boot  systemd-boot (reads kernel copies from the ESP)"
+  echo "Select a bootloader:"
+  echo "  1) zbm           ZFSBootMenu — boots snapshots/datasets directly"
+  echo "  2) grub          GRUB (reads kernel copies from the ESP)"
+  echo "  3) systemd-boot  systemd-boot (reads kernel copies from the ESP)"
   while true; do
-    prompt "Choice [1-3]: " || fatal "No input (EOF) while selecting bootloader."
-    choice="${REPLY}"
+    read -r -p "Choice [1-3]: " choice || fatal "No input (EOF) while selecting bootloader."
     case "${choice}" in
       1) BOOTLOADER="zbm" ;;
       2) BOOTLOADER="grub" ;;
@@ -151,18 +147,17 @@ require_nvidia_choice() {
     return 0
   fi
   local choice=""
-  console "NVIDIA GPU detected. Driver to install:"
-  console "  1) open    NVIDIA's Debian 13 repo, open kernel modules — suggested."
-  console "             Production branch by default; --nvidia-version=<ver> pins"
-  console "             an exact release (e.g. 610.43.02-1, the feature branch)."
-  console "             Requires a Turing (RTX/GTX 16xx) or newer GPU."
-  console "  2) debian  Debian 13's non-free nvidia-driver (550 series, proprietary"
-  console "             kernel modules) — for pre-Turing GPUs."
-  console "  3) none    skip — keep the kernel's nouveau driver."
+  echo "NVIDIA GPU detected. Driver to install:"
+  echo "  1) open    NVIDIA's Debian 13 repo, open kernel modules — suggested."
+  echo "             Production branch by default; --nvidia-version=<ver> pins"
+  echo "             an exact release (e.g. 610.43.02-1, the feature branch)."
+  echo "             Requires a Turing (RTX/GTX 16xx) or newer GPU."
+  echo "  2) debian  Debian 13's non-free nvidia-driver (550 series, proprietary"
+  echo "             kernel modules) — for pre-Turing GPUs."
+  echo "  3) none    skip — keep the kernel's nouveau driver."
   while true; do
-    prompt "Choice [1-3, default 1]: " ||
+    read -r -p "Choice [1-3, default 1]: " choice ||
       fatal "No input (EOF) while selecting the NVIDIA driver."
-    choice="${REPLY}"
     case "${choice}" in
       1 | "") NVIDIA_DRIVER="open" ;;
       2) NVIDIA_DRIVER="debian" ;;
@@ -180,16 +175,15 @@ confirm_destruction() {
   ((ASSUME_YES)) && return 0
   ((IS_INTERACTIVE)) ||
     fatal "Refusing destructive run without --yes in a non-interactive session"
-  console ""
-  console "  *** ALL DATA on these disks will be DESTROYED ***"
-  console "      DISK1=${DISK1}"
-  console "      DISK2=${DISK2}"
-  console "      DISK3=${DISK3}"
-  console "      Mode: $([[ "${VIRT_TYPE}" == "none" ]] && echo "BARE METAL" ||
+  echo ""
+  echo "  *** ALL DATA on these disks will be DESTROYED ***"
+  echo "      DISK1=${DISK1}"
+  echo "      DISK2=${DISK2}"
+  echo "      DISK3=${DISK3}"
+  echo "      Mode: $([[ "${VIRT_TYPE}" == "none" ]] && echo "BARE METAL" ||
     echo "VM (${VIRT_TYPE})")"
-  console ""
+  echo ""
   local answer=""
-  prompt "Type 'destroy' to continue: " || fatal "No input (EOF) at confirmation."
-  answer="${REPLY}"
+  read -r -p "Type 'destroy' to continue: " answer || fatal "No input (EOF) at confirmation."
   [[ "${answer}" == "destroy" ]] || fatal "Aborted by user."
 }

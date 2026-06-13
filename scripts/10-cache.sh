@@ -32,20 +32,19 @@ cache_populate_debs() {
   rm -rf "${work}"
   mkdir -p "${pool}" "${work}"
 
-  run_step "Downloading debootstrap base packages" \
-    debootstrap --download-only --arch="${ARCH}" "${SUITE}" \
+  info "Downloading debootstrap base packages..."
+  debootstrap --download-only --arch="${ARCH}" "${SUITE}" \
     "${work}/bootstrap" "${MIRROR}"
   if compgen -G "${work}/bootstrap/var/cache/apt/archives/*.deb" >/dev/null; then
     cp -n "${work}/bootstrap/var/cache/apt/archives/"*.deb "${pool}/"
   fi
 
-  run_step "Building scratch chroot for closure resolution" \
-    debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
+  info "Resolving full package closure in a scratch chroot..."
+  debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
   # The pinned sid source supplies gcc-15 (absent from trixie), so the
   # offline cache carries the toolchain debs too.
   write_sid_toolchain_sources "${work}/closure"
-  run_step "Downloading the full package closure" \
-    chroot "${work}/closure" /usr/bin/env bash -c "
+  chroot "${work}/closure" /usr/bin/env bash -c "
     set -e
     echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
       > /etc/apt/sources.list
