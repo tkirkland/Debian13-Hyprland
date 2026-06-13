@@ -163,7 +163,9 @@ Common flags (see `--help` for the full list):
 --cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
 --fresh                                discard phase state and start over
 --yes                                  unattended mode; requires USER_PASSWORD
---verbose                              detailed logging
+--verbose                              full command output on the console
+                                       (default: status lines + prompts only;
+                                       everything is always in the log file)
 ```
 
 Identity and layout knobs are environment overrides (set before launch):
