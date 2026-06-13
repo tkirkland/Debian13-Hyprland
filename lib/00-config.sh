@@ -102,7 +102,11 @@ ZBM_REPO_URL="${ZBM_REPO_URL:-https://github.com/zbm-dev/zfsbootmenu}"
 # Fallback redirector, used only if the direct release-asset fetch fails.
 ZBM_EFI_URL="${ZBM_EFI_URL:-https://get.zfsbootmenu.org/efi}"
 ESP_MOUNT="/boot/efi"
-KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet}"
+# quiet alone still lets kernel errors and systemd unit chatter paint the
+# console during boot and shutdown (issue #12): loglevel=3 keeps printk at
+# err-and-worse, systemd.show_status=auto shows unit lines only when boot
+# is slow or failing. Everything still lands in the journal.
+KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet loglevel=3 systemd.show_status=auto}"
 
 # --- Secure boot ---------------------------------------------------------------
 # Always on. The dkms MOK keypair signs everything self-built: dkms signs
