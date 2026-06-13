@@ -83,4 +83,49 @@ wc_out="$(bash -c '
 assert_contains "${wc_out}" "interactive dialog" \
   "with_console reattaches the real console"
 
+# run_step: spinner wrapper for long commands.
+out="$(bash -c '
+  VERBOSE=0; CONSOLE_READY=0; LOG_FILE=""
+  source lib/01-log.sh
+  run_step "plain" echo "ran-directly"')"
+assert_contains "${out}" "ran-directly" \
+  "run_step executes directly without a console"
+
+assert_fails "run_step propagates the exit code (no console)" bash -c '
+  VERBOSE=0; LOG_FILE=""
+  source lib/01-log.sh
+  run_step "boom" bash -c "exit 3"'
+
+step_out="$(bash -c '
+  VERBOSE=0
+  LOG_FILE=""
+  source lib/01-log.sh
+  setup_logging "$1"
+  run_step "quick step" bash -c "echo step-output; exit 0"
+' _ "${tmp}" 2>&1)"
+assert_contains "${step_out}" "quick step — done" \
+  "run_step reports completion with elapsed time"
+
+fail_out="$(bash -c '
+  VERBOSE=0
+  LOG_FILE=""
+  source lib/01-log.sh
+  setup_logging "$1"
+  run_step "bad step" bash -c "echo failing; exit 7" || console "rc=$?"
+' _ "${tmp}" 2>&1)"
+assert_contains "${fail_out}" "bad step — FAILED" "run_step reports failure"
+assert_contains "${fail_out}" "rc=7" "run_step propagates the exit code"
+
+# Best-effort percentage: ninja-style [n/m] markers in the log tail are
+# rendered as a percent while the step runs.
+pct_out="$(bash -c '
+  VERBOSE=0
+  LOG_FILE=""
+  source lib/01-log.sh
+  setup_logging "$1"
+  run_step "compile" bash -c "echo \"[5/10] Compiling thing.cpp\"; sleep 1.3"
+' _ "${tmp}" 2>&1)"
+assert_contains "${pct_out}" "50%" \
+  "run_step parses [n/m] progress into a percentage"
+
 finish_test

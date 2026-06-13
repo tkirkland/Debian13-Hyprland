@@ -79,6 +79,51 @@ with_console() {
   fi
 }
 
+# Run a long command behind a console spinner: "[|] label  03:12 45%".
+# The command's output streams to the log as usual; the spinner samples
+# the log tail for progress markers — ninja/meson "[n/m]" and cmake/curl
+# "NN%" — for a best-effort percentage (apt/debootstrap emit none, so
+# those steps show spinner + elapsed only). When the console carries the
+# full stream anyway (--verbose, or logging not up yet) the command just
+# runs without decoration.
+run_step() {
+  local label="$1"
+  shift
+  if ((!CONSOLE_READY)); then
+    "$@"
+    return $?
+  fi
+  local rc=0 pid=0 frame=0 start="${SECONDS}" elapsed=0 pct="" mark=""
+  local frames='|/-\'
+  "$@" &
+  pid=$!
+  while kill -0 "${pid}" 2>/dev/null; do
+    pct=""
+    mark="$(tail -c 4096 "${LOG_FILE}" 2>/dev/null |
+      grep -oE '\[ *[0-9]+/[0-9]+\]|[0-9]{1,3}%' | tail -n 1 || true)"
+    if [[ "${mark}" =~ ^\[\ *([0-9]+)/([0-9]+)\]$ ]] &&
+      ((BASH_REMATCH[2] > 0)); then
+      pct="  $((BASH_REMATCH[1] * 100 / BASH_REMATCH[2]))%"
+    elif [[ "${mark}" =~ ^([0-9]{1,3})%$ ]]; then
+      pct="  ${BASH_REMATCH[1]}%"
+    fi
+    elapsed=$((SECONDS - start))
+    printf '\r\033[K[%s] %s  %02d:%02d%s' "${frames:frame:1}" "${label}" \
+      $((elapsed / 60)) $((elapsed % 60)) "${pct}" >&3
+    frame=$(((frame + 1) % 4))
+    sleep 0.5
+  done
+  wait "${pid}" || rc=$?
+  printf '\r\033[K' >&3
+  elapsed=$((SECONDS - start))
+  if ((rc == 0)); then
+    info "${label} — done ($((elapsed / 60))m$((elapsed % 60))s)"
+  else
+    warn "${label} — FAILED after $((elapsed / 60))m$((elapsed % 60))s (exit ${rc})"
+  fi
+  return "${rc}"
+}
+
 # Route all further output into a timestamped log file under $1; see the
 # header comment for the console split. fds 3/4 stay aimed at the real
 # console for the helpers above.
