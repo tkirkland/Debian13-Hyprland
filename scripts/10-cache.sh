@@ -50,12 +50,13 @@ cache_populate_debs() {
     echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
       > /etc/apt/sources.list
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -o APT::Status-Fd=1 \
+      --download-only \
       ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_PACKAGES[*]} \
       ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 grub-efi-amd64-signed \
       systemd-boot
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -o APT::Status-Fd=1 \
+      --download-only -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"

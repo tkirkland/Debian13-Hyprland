@@ -120,7 +120,7 @@ out="$(bash -c '
   NETWORK_AVAILABLE=1
   install_nvidia_driver >/dev/null 2>&1
   cat "${TARGET}/in_target.log"')"
-assert_contains "${out}" "apt-get install -y nvidia-open nvidia-driver" \
+assert_contains "${out}" "nvidia-open nvidia-driver" \
   "unpinned open mode follows the repo production branch"
 if printf '%s' "${out}" | grep -q "nvidia-open="; then
   echo "  FAIL: unpinned open mode must not pin a version" >&2

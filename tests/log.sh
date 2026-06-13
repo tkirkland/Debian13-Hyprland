@@ -128,4 +128,16 @@ pct_out="$(bash -c '
 assert_contains "${pct_out}" "50%" \
   "run_step parses [n/m] progress into a percentage"
 
+# apt status-fd: "pmstatus:pkg:NN.N:desc" lines render as a percentage so
+# package installs (not just compiles) show real progress.
+apt_out="$(bash -c '
+  VERBOSE=0
+  LOG_FILE=""
+  source lib/01-log.sh
+  setup_logging "$1"
+  run_step "apt" bash -c "echo \"pmstatus:libc6:73.5000:Unpacking libc6\"; sleep 1.3"
+' _ "${tmp}" 2>&1)"
+assert_contains "${apt_out}" "73%" \
+  "run_step parses apt status-fd progress into a percentage"
+
 finish_test

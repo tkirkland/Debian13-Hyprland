@@ -81,11 +81,12 @@ with_console() {
 
 # Run a long command behind a console spinner: "[|] label  03:12 45%".
 # The command's output streams to the log as usual; the spinner samples
-# the log tail for progress markers — ninja/meson "[n/m]" and cmake/curl
-# "NN%" — for a best-effort percentage (apt/debootstrap emit none, so
-# those steps show spinner + elapsed only). When the console carries the
-# full stream anyway (--verbose, or logging not up yet) the command just
-# runs without decoration.
+# the log tail for progress markers — ninja/meson "[n/m]", cmake/curl
+# "NN%", and apt's status-fd "pmstatus:pkg:NN.N:" / "dlstatus:..:NN.N:"
+# lines (emitted when the apt call passes -o APT::Status-Fd=1, as the
+# wrapped install steps do). debootstrap emits none, so it shows spinner
+# + elapsed only. When the console carries the full stream anyway
+# (--verbose, or logging not up yet) the command just runs undecorated.
 run_step() {
   local label="$1"
   shift
@@ -97,15 +98,26 @@ run_step() {
   local frames='|/-\'
   "$@" &
   pid=$!
+  local tailbuf=""
   while kill -0 "${pid}" 2>/dev/null; do
     pct=""
-    mark="$(tail -c 4096 "${LOG_FILE}" 2>/dev/null |
-      grep -oE '\[ *[0-9]+/[0-9]+\]|[0-9]{1,3}%' | tail -n 1 || true)"
-    if [[ "${mark}" =~ ^\[\ *([0-9]+)/([0-9]+)\]$ ]] &&
-      ((BASH_REMATCH[2] > 0)); then
-      pct="  $((BASH_REMATCH[1] * 100 / BASH_REMATCH[2]))%"
-    elif [[ "${mark}" =~ ^([0-9]{1,3})%$ ]]; then
+    tailbuf="$(tail -c 4096 "${LOG_FILE}" 2>/dev/null || true)"
+    # apt status-fd lines win when present: "<dl|pm>status:pkg:NN.N:desc"
+    # (the integer part is enough; grep stops at the decimal point).
+    mark="$(printf '%s\n' "${tailbuf}" |
+      grep -oE '(dl|pm)status:[^:]*:[0-9]+' | tail -n 1 || true)"
+    if [[ "${mark}" =~ :([0-9]+)$ ]]; then
       pct="  ${BASH_REMATCH[1]}%"
+    else
+      # ninja/meson "[n/m]" or cmake/curl "NN%".
+      mark="$(printf '%s\n' "${tailbuf}" |
+        grep -oE '\[ *[0-9]+/[0-9]+\]|[0-9]{1,3}%' | tail -n 1 || true)"
+      if [[ "${mark}" =~ ^\[\ *([0-9]+)/([0-9]+)\]$ ]] &&
+        ((BASH_REMATCH[2] > 0)); then
+        pct="  $((BASH_REMATCH[1] * 100 / BASH_REMATCH[2]))%"
+      elif [[ "${mark}" =~ ^([0-9]{1,3})%$ ]]; then
+        pct="  ${BASH_REMATCH[1]}%"
+      fi
     fi
     elapsed=$((SECONDS - start))
     printf '\r\033[K[%s] %s  %02d:%02d%s' "${frames:frame:1}" "${label}" \

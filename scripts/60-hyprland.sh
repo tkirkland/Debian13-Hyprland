@@ -137,19 +137,19 @@ install_build_deps() {
     run_step "Installing gcc-15 toolchain (sid)" in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y -o APT::Status-Fd=1 -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
     "
   else
     run_step "Installing gcc-15 toolchain (cache)" in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y -o APT::Status-Fd=1 ${HYPR_TOOLCHAIN_PACKAGES[*]}
     "
   fi
   run_step "Installing Hyprland build dependencies" in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y ${HYPR_BUILD_PACKAGES[*]}
+    apt-get install -y -o APT::Status-Fd=1 ${HYPR_BUILD_PACKAGES[*]}
   "
   # uwsm's meson probes its Python runtime deps at configure time; the
   # system phase that installs them may be stamped done on a resume, so

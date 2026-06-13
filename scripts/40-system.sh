@@ -98,7 +98,7 @@ install_base_packages() {
   run_step "Installing ${#pkgs[@]} base packages" in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y ${pkgs[*]}
+    apt-get install -y -o APT::Status-Fd=1 ${pkgs[*]}
   "
   if ((NETWORK_AVAILABLE)); then
     install_zfs_from_source
@@ -212,8 +212,8 @@ install_nvidia_driver() {
           apt-get purge -y 'nvidia-driver-pinning-*'
         fi
       fi
-      apt-get install -y nvidia-open${pin} nvidia-driver${pin} \
-        nvidia-kernel-open-dkms${pin}
+      apt-get install -y -o APT::Status-Fd=1 nvidia-open${pin} \
+        nvidia-driver${pin} nvidia-kernel-open-dkms${pin}
       if [[ -n '${pin}' ]]; then
         apt-mark hold nvidia-open nvidia-driver nvidia-kernel-open-dkms
       fi
@@ -224,7 +224,7 @@ install_nvidia_driver() {
     run_step "NVIDIA driver install (${pkg}, dkms build included)" in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y ${pkg}
+      apt-get install -y -o APT::Status-Fd=1 ${pkg}
     "
   fi
   # Hyprland (any wlroots/aquamarine compositor) requires the DRM KMS
