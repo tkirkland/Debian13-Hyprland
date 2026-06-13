@@ -89,6 +89,10 @@ USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
+# --local-rtc: the hardware clock keeps LOCAL time instead of UTC. Only
+# useful when dual booting Windows (which assumes a local-time RTC and
+# would otherwise skew the clock on every reboot); leave at UTC otherwise.
+RTC_LOCAL_TIME="${RTC_LOCAL_TIME:-0}"
 
 # --- Cache (network-preferred, offline-complete) -----------------------------
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
