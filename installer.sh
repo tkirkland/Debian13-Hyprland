@@ -2,22 +2,37 @@
 # bashsupport disable=BP5007
 # Hypr-Deb: Debian 13 + Hyprland (release tags) installer for the fixed
 # three-disk ZFS/mdadm layout. See README.md and docs/superpowers/specs/.
+
 set -euo pipefail
 
-source lib/00-config.sh
-source lib/01-log.sh
-source lib/02-args.sh
-source lib/03-state.sh
-source lib/04-chroot-mounts.sh
-source scripts/00-preflight.sh
-source scripts/10-cache.sh
-source scripts/20-storage.sh
-source scripts/30-bootstrap.sh
-source scripts/40-system.sh
-source scripts/50-boot.sh
-source scripts/60-hyprland.sh
-source scripts/90-verify.sh
-source scripts/99-cleanup.sh
+BASEDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+source_file() {
+    local file="${BASEDIR}/$1"
+
+    if [[ ! -f "$file" ]]; then
+        echo "ERROR: Missing file: $file" >&2
+        exit 1
+    fi
+
+    source "$file"
+}
+
+source_file "lib/00-config.sh"
+source_file "lib/01-log.sh"
+source_file "lib/02-args.sh"
+source_file "lib/03-state.sh"
+source_file "lib/04-chroot-mounts.sh"
+
+source_file "scripts/00-preflight.sh"
+source_file "scripts/10-cache.sh"
+source_file "scripts/20-storage.sh"
+source_file "scripts/30-bootstrap.sh"
+source_file "scripts/40-system.sh"
+source_file "scripts/50-boot.sh"
+source_file "scripts/60-hyprland.sh"
+source_file "scripts/90-verify.sh"
+source_file "scripts/99-cleanup.sh"
 
 # Triggers when error fires
 on_error() {
@@ -58,9 +73,7 @@ on_exit() {
 
 # Main loop
 main() {
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  cd "${script_dir}"
+  cd "${BASEDIR}"
   parse_args "$@"
   state_init "${FRESH}"
   setup_logging "${LOG_DIR}"
