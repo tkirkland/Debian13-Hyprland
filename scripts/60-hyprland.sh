@@ -378,13 +378,15 @@ configure_session() {
   # Hyprland startup chatter paints over the console during the greeter →
   # desktop handoff (issue #12). Both session paths route through this
   # wrapper: systemd-cat keeps the output in the journal (read it with
-  # `journalctl -t hypr-session`) instead of the VT — quiet, not discarded.
+  # `journalctl -t hypr-session`) instead of the VT, and
+  # UWSM_SILENT_START=2 suppresses uwsm's own startup text.
   mkdir -p "${TARGET}/usr/local/bin"
   cat >"${TARGET}/usr/local/bin/hypr-session" <<'EOF'
 #!/usr/bin/env bash
 # Staged by installer.sh: greetd session entry. Session output goes to
 # the journal (journalctl -t hypr-session), never to the VT.
-exec systemd-cat -t hypr-session /usr/local/bin/uwsm start -- hyprland.desktop
+UWSM_SILENT_START=2 exec /usr/bin/systemd-cat -t hypr-session \
+  /usr/local/bin/uwsm start -- hyprland.desktop
 EOF
   chmod +x "${TARGET}/usr/local/bin/hypr-session"
   local session_command="" session_user=""

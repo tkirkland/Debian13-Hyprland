@@ -143,6 +143,8 @@ if [[ -x "${wrapper}" ]]; then
   echo "  ok: hypr-session wrapper staged executable"
   assert_contains "$(<"${wrapper}")" "systemd-cat" \
     "wrapper routes session output to the journal"
+  assert_contains "$(<"${wrapper}")" "UWSM_SILENT_START=2" \
+    "wrapper suppresses uwsm startup chatter"
 else
   echo "  FAIL: hypr-session wrapper missing or not executable" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
