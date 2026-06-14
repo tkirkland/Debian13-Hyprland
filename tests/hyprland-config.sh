@@ -145,6 +145,8 @@ if [[ -x "${wrapper}" ]]; then
   echo "  ok: hypr-session wrapper staged executable"
   assert_contains "$(<"${wrapper}")" "systemd-cat" \
     "wrapper routes session output to the journal"
+  assert_contains "$(<"${wrapper}")" "UWSM_SILENT_START=2" \
+    "wrapper suppresses uwsm startup chatter"
 else
   echo "  FAIL: hypr-session wrapper missing or not executable" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
@@ -152,6 +154,54 @@ fi
 greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
 assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
   "greetd session command uses the wrapper"
+
+# Greeter branch (no autologin): tuigreet builds its session menu from
+# ${XDG_DATA_DIRS}/wayland-sessions, where the uwsm/Hyprland source builds
+# drop hyprland*.desktop entries that bypass the silencing wrapper and
+# reintroduce VT chatter (issue #12). --sessions must aim at our own dir
+# (replaces the scan, no fallback) holding exactly one curated entry that
+# launches the silent wrapper, and --cmd must be omitted so tuigreet
+# defaults to that lone "Hyprland" session.
+greeter_target="${tmp}/greeter-target"
+mkdir -p "${greeter_target}${HYPR_SRC_DIR}/hyprland/example"
+cp "${TARGET}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
+  "${greeter_target}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua"
+(
+  # Stub the chroot helper so `command -v tuigreet` resolves to a path;
+  # stay quiet for the unrelated chown/systemctl block.
+  in_target() { [[ "$*" == *"command -v tuigreet"* ]] && echo /usr/bin/tuigreet || :; }
+  TARGET="${greeter_target}"
+  HYPR_AUTOLOGIN=0
+  configure_session
+)
+greeter_cfg="$(<"${greeter_target}/etc/greetd/config.toml")"
+assert_contains "${greeter_cfg}" 'tuigreet' \
+  "greeter branch uses tuigreet"
+assert_contains "${greeter_cfg}" '--sessions /etc/greetd/sessions' \
+  "tuigreet --sessions points at our curated dir (no bypass menu)"
+if [[ "${greeter_cfg}" == *"--cmd"* ]]; then
+  echo "  FAIL: greeter must omit --cmd so the curated session is the default" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: greeter omits --cmd (lone session becomes the default)"
+fi
+greeter_entry="${greeter_target}/etc/greetd/sessions/hyprland.desktop"
+if [[ -f "${greeter_entry}" ]]; then
+  echo "  ok: curated greeter session entry staged"
+  entry_txt="$(<"${greeter_entry}")"
+  assert_contains "${entry_txt}" 'Name=Hyprland' \
+    "curated session is named Hyprland"
+  assert_contains "${entry_txt}" 'Exec=/usr/local/bin/hypr-session' \
+    "curated session launches the silent wrapper"
+  # The bypassing upstream names must NOT be reintroduced here.
+  if [[ "${entry_txt}" == *"uwsm start"* ]]; then
+    echo "  FAIL: curated entry must go through the wrapper, not raw uwsm start" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  fi
+else
+  echo "  FAIL: ${greeter_entry} (curated single session) missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
 
 # A missing staged example is a loud failure, not a silent fallback.
 # fatal exits in the real installer (lib/01-log.sh); mirror that here.
