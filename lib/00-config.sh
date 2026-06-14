@@ -111,6 +111,12 @@ ESP_MOUNT="/boot/efi"
 # err-and-worse, systemd.show_status=auto shows unit lines only when boot
 # is slow or failing. Everything still lands in the journal.
 KERNEL_CMDLINE_EXTRA="${KERNEL_CMDLINE_EXTRA:-quiet loglevel=3 systemd.show_status=auto}"
+# GRUB only: detect other installed OSes (e.g. Windows) and add chainloader
+# menu entries. The installer writes a STATIC grub.cfg (no grub-mkconfig),
+# so GRUB_DISABLE_OS_PROBER has nothing to act on — instead os-prober is run
+# at install time and its EFI entries are appended to grub.cfg. Set to 0 to
+# skip. No effect with the zbm or systemd-boot bootloaders.
+GRUB_OS_PROBER="${GRUB_OS_PROBER:-1}"
 
 # --- Secure boot ---------------------------------------------------------------
 # Always on. The dkms MOK keypair signs everything self-built: dkms signs

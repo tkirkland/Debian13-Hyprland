@@ -52,7 +52,7 @@ cache_populate_debs() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
       ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_PACKAGES[*]} \
       ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 grub-efi-amd64-signed \
-      systemd-boot
+      systemd-boot os-prober
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
       -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
   "

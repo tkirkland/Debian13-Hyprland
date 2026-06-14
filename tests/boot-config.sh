@@ -31,6 +31,54 @@ assert_contains "${out}" "/EFI/debian/vmlinuz" "grub: ESP kernel copy path"
 assert_contains "${out}" "search --no-floppy --fs-uuid --set=root AAAA-1111" \
   "grub: finds ESP by UUID"
 
+# os-prober (GRUB path): EFI entries (e.g. Windows) become chainloader
+# stanzas appended to the static grub.cfg. Stub in_target to fake the
+# os-prober + blkid output; logs must NOT leak into the cfg file.
+op_file="${tmp}/op-grub.cfg"
+: >"${op_file}"
+bash -c "
+  source lib/00-config.sh
+  source lib/01-log.sh
+  in_target() {
+    case \"\$1\" in
+      os-prober) echo '/dev/nvme9n1p1@/EFI/Microsoft/Boot/bootmgfw.efi:Windows Boot Manager:Windows:efi' ;;
+      *blkid*) echo 'DEAD-BEEF' ;;
+    esac
+  }
+  source scripts/50-boot.sh
+  append_os_prober_entries '${op_file}'
+" >/dev/null 2>&1
+out="$(cat "${op_file}")"
+assert_contains "${out}" 'menuentry "Windows Boot Manager (on /dev/nvme9n1p1)"' \
+  "os-prober: detected EFI OS becomes a menuentry"
+assert_contains "${out}" "chainloader /EFI/Microsoft/Boot/bootmgfw.efi" \
+  "os-prober: chainloads the detected EFI binary"
+assert_contains "${out}" "search --no-floppy --fs-uuid --set=root DEAD-BEEF" \
+  "os-prober: targets the detected OS partition by UUID"
+if printf '%s' "${out}" | grep -q '\[INFO\]'; then
+  echo "  FAIL: log output leaked into grub.cfg" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: os-prober logs stay out of grub.cfg"
+fi
+
+# No other OS detected -> nothing appended (best-effort no-op).
+op_none="${tmp}/op-none.cfg"
+: >"${op_none}"
+bash -c "
+  source lib/00-config.sh
+  source lib/01-log.sh
+  in_target() { :; }
+  source scripts/50-boot.sh
+  append_os_prober_entries '${op_none}'
+" >/dev/null 2>&1
+if [[ -s "${op_none}" ]]; then
+  echo "  FAIL: no-detection must append nothing" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: os-prober no-op when nothing detected"
+fi
+
 gen_cfg write_sdboot_entries
 out="$(cat "${tmp}/target/boot/efi/loader/entries/debian.conf")"
 assert_contains "${out}" "linux /EFI/debian/vmlinuz" "sd-boot: kernel"
