@@ -409,10 +409,32 @@ EOF
       fatal "tuigreet not found in target (TARGET_BASE_PACKAGES should install it)."
     # --asterisks: tuigreet's default password field echoes NOTHING,
     # which reads as broken input on a console with redraw jitter.
-    session_command="${greeter} --remember --asterisks --cmd /usr/local/bin/hypr-session"
+    #
+    # --sessions points at our own one-entry dir on purpose. tuigreet
+    # builds its session menu from ${XDG_DATA_DIRS}/wayland-sessions
+    # (default /usr/local/share:/usr/share), where the uwsm/Hyprland
+    # source builds drop hyprland.desktop and hyprland-uwsm.desktop —
+    # both bypass the silencing wrapper and reintroduce VT chatter
+    # (issue #12). --sessions replaces that scan (no fallback), so only
+    # our curated entry is offered. We ship exactly one entry rather than
+    # an empty dir because tuigreet always renders the "Choose session"
+    # key (no flag hides it); an empty chooser is worse UX than one clean,
+    # silent, correctly-named session. We omit --cmd so tuigreet defaults
+    # to that lone session (a --cmd would otherwise win the default slot
+    # and show the bare command instead of the "Hyprland" name).
+    session_command="${greeter} --remember --asterisks --sessions /etc/greetd/sessions"
     session_user="_greetd"
   fi
-  mkdir -p "${TARGET}/etc/greetd"
+  mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
+  # The sole greeter session: launches the silent, uwsm-managed wrapper.
+  cat >"${TARGET}/etc/greetd/sessions/hyprland.desktop" <<'EOF'
+[Desktop Entry]
+Name=Hyprland
+Comment=Hyprland (uwsm-managed, silenced)
+Exec=/usr/local/bin/hypr-session
+Type=Application
+DesktopNames=Hyprland
+EOF
   cat >"${TARGET}/etc/greetd/config.toml" <<EOF
 [terminal]
 vt = 1
