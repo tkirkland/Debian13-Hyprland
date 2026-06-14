@@ -124,6 +124,8 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
   # so the GUI client has no Wayland display and never launches.
   assert_contains "${deb}" 'hl.on("hyprland.start"' \
     "welcome exec registered on the hyprland.start autostart event"
+  assert_contains "${deb}" "uwsm finalize" \
+    "compositor finalizes the UWSM session on start"
 else
   echo "  FAIL: hypr-deb.lua module missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))

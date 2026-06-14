@@ -365,6 +365,11 @@ write_hypr_lua_config() {
 -- keeps appearing until actually acknowledged. Lua long brackets keep the
 -- sh quoting sane.
 hl.on("hyprland.start", function()
+  -- Finalize the UWSM session: activates graphical-session.target, imports
+  -- the session environment, and runs XDG autostart. Without this the
+  -- session is launched by uwsm but never actually managed by it. Harmless
+  -- no-op if the session was not started through uwsm.
+  hl.exec_cmd("uwsm finalize")
   hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
 end)
 EOF
