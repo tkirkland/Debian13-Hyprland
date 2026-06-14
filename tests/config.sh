@@ -50,6 +50,10 @@ out="$(bash -c 'source lib/00-config.sh
   printf "%s\n" "${TARGET_BASE_PACKAGES[@]}"')"
 assert_contains "${out}" "linux-headers-amd64" \
   "target gets kernel headers so dkms can build the zfs module"
+assert_contains "${out}" "pipewire-audio" "PipeWire audio in base set"
+assert_contains "${out}" "wireplumber"    "WirePlumber (wpctl) in base set"
+assert_contains "${out}" "brightnessctl"  "brightness key binary in base set"
+assert_contains "${out}" "playerctl"      "media key binary in base set"
 
 # addons/*.list files are appended to the target package set (comments
 # and whitespace stripped); the .sample template must NOT load.
