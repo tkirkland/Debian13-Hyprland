@@ -1,0 +1,48 @@
+name: Sync develop with master
+
+# After anything lands on master (PR merge or direct push), fast-forward
+# develop up to it so the two branches never drift. FF-only by design: if
+# develop ever carries commits master doesn't, the run fails loudly instead
+# of creating merge commits or clobbering work — sync that case by hand.
+on:
+  push:
+    branches: [master]
+
+# Needed for the built-in GITHUB_TOKEN to push to develop. develop is
+# unprotected, so no PAT/app is required. Token pushes do not re-trigger
+# workflows, and this triggers on master while writing to develop, so there
+# is no loop.
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-develop
+  cancel-in-progress: false
+
+jobs:
+  fast-forward:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Fast-forward develop to master
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin master
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)" ]; then
+            echo "develop already in sync with master; nothing to do."
+            exit 0
+          fi
+          if git merge-base --is-ancestor HEAD origin/master; then
+            git merge --ff-only origin/master
+            git push origin HEAD:develop
+            echo "develop fast-forwarded to master."
+          else
+            echo "::error::develop has commits not on master; cannot fast-forward. Sync manually."
+            exit 1
+          fi
