@@ -320,16 +320,28 @@ installer. GRUB needs nothing — its binary is Debian-signed.
 
 ## Hyprland stack
 
-Scope is deliberately bare: Debian base + compiled Hyprland + greetd +
-UWSM + a terminal (kitty). No waybar, no NVIDIA, no extras. UWSM is not
-packaged in Debian, so it is built from source (meson) at its latest
-release tag, like the hyprwm stack; its runtime dependencies (python3,
-python3-xdg, whiptail, dbus-user-session) come from Debian. By default,
-greetd runs `tuigreet --remember --asterisks`, which launches
-``uwsm start -- hyprland.desktop` after login. `--autologin` makes greetd
-start that session directly as the target user. The installer writes a
-minimal `hyprland.lua`, enables greetd, masks the competing VT1 getty, and
-sets `graphical.target` as the default.
+Scope is deliberately lean: a Debian base, compiled Hyprland, greetd +
+UWSM, a terminal (kitty), and a PipeWire/WirePlumber audio stack — no
+waybar or other desktop extras. NVIDIA support is opt-in (`--nvidia`, and
+only when a GPU is detected); on the Dell Precision 7780 a `modprobe.d`
+drop-in forces the SOF SoundWire audio driver. UWSM is not packaged in
+Debian, so it is built from source (meson) at its latest release tag, like
+the hyprwm stack; its runtime dependencies (python3, python3-xdg,
+whiptail, dbus-user-session) come from Debian.
+
+greetd launches a single Hyprland session through a wrapper at
+`/usr/local/bin/hypr-session` (`uwsm start -- hyprland.desktop`). The
+wrapper keeps the greeter→desktop handoff quiet (issue #12): it runs uwsm
+under `systemd-cat` with `UWSM_SILENT_START=2`, so startup chatter lands in
+the journal (`journalctl -t hypr-session`) instead of painting over VT1.
+With a greeter, greetd runs `tuigreet --remember --asterisks --sessions
+/etc/greetd/sessions` — a directory holding exactly one curated "Hyprland"
+entry that points at the wrapper, so the upstream session files (which
+would bypass the silencing) are never offered. `--autologin` runs the
+wrapper directly as the target user, with no greeter. The installer also
+writes a minimal `hyprland.lua`, launches a first-login welcome app,
+enables greetd, masks the competing VT1 getty, and sets `graphical.target`
+as the default.
 
 Source policy:
 

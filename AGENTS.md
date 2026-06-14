@@ -83,12 +83,16 @@ pinning test with the fix.
 
 Conventional Commits, lowercase after the prefix:
 `feat:` / `fix:` / `test:` / `docs:` / `chore:` / `refactor:`.
-One concern per commit. Work on a short-lived branch, merge to `master`
-after the gates pass. History on GitHub is append-only — no rewrites.
+One concern per commit. Work on a short-lived branch and, once the gates
+pass, open a pull request against `develop` (the integration branch) —
+never commit straight to `master`. `develop` flows up to `master` for
+releases; the `sync-develop.yml` workflow keeps the two in sync. History
+on GitHub is append-only — no rewrites.
 
 ## Pull requests
 
-Agents may create draft pull requests only. Never approve, mark ready,
-merge, close, or enable auto-merge on a pull request. The user performs
-the final review and merge unless the user explicitly changes this rule
-in `AGENTS.md`.
+Agents may open pull requests against `develop` and may merge them when
+the user explicitly directs it. Default to leaving the final review and
+merge to the user; do not approve or enable auto-merge on your own
+initiative. Target `develop`, never `master` directly — releases flow
+develop → master.
