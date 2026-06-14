@@ -350,6 +350,24 @@ configure_zfs_boot_support() {
   in_target "update-initramfs -u -k all"
 }
 
+# Dell Precision 7780: the kernel auto-selects legacy HDA for the SoundWire
+# dual digital-array mics, which then return near full-scale samples. Force
+# Linux's SOF driver via a modprobe.d drop-in (firmware-sof-signed is in the
+# base set). DMI-guarded: a strict no-op on the VM target and any non-7780
+# machine. DMI_PRODUCT_PATH is overridable so tests can fake the DMI read.
+configure_audio_quirks() {
+  local product=""
+  product="$(cat "${DMI_PRODUCT_PATH:-/sys/class/dmi/id/product_name}" \
+    2>/dev/null || true)"
+  [[ "${product}" == *"Precision 7780"* ]] || return 0
+  info "Dell Precision 7780 detected: forcing SOF SoundWire audio driver."
+  cat >"${TARGET}/etc/modprobe.d/dell-precision-7780-audio.conf" <<'EOF'
+# Managed by installer.sh: force Linux's SOF driver for the Precision 7780
+# SoundWire internal audio interface and dual digital-array microphones.
+options snd_intel_dspcfg dsp_driver=3
+EOF
+}
+
 phase_system() {
   write_identity
   write_fstab
@@ -360,5 +378,8 @@ phase_system() {
   install_addon_artifacts
   configure_locale_tz
   create_user
+  # Before configure_zfs_boot_support: its update-initramfs -u -k all then
+  # captures the modprobe.d drop-in without a second rebuild.
+  configure_audio_quirks
   configure_zfs_boot_support
 }
