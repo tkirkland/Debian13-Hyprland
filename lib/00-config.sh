@@ -316,6 +316,19 @@ UWSM_RUNTIME_PACKAGES=(
   python3 python3-xdg python3-dbus whiptail dbus-user-session
 )
 
+# Userspace audio: PipeWire + WirePlumber replace the absent sound server
+# (a fresh install has ALSA kernel devices but no userspace server). wpctl
+# (wireplumber) and brightnessctl/playerctl also back the multimedia keybinds
+# inherited from upstream's example config, which are otherwise dead. All are
+# in main except firmware-sof-signed (non-free-firmware, already enabled via
+# DEBIAN_COMPONENTS) — no apt-source change required.
+AUDIO_PACKAGES=(
+  pipewire pipewire-audio pipewire-pulse wireplumber libspa-0.2-bluetooth
+  alsa-utils pulseaudio-utils pavucontrol
+  brightnessctl playerctl
+  firmware-sof-signed
+)
+
 # Target base packages beyond debootstrap's minimal set.
 # linux-headers-amd64 is REQUIRED alongside zfs-dkms: without headers for
 # the target kernel, dkms silently skips the zfs module build and the
@@ -332,6 +345,7 @@ TARGET_BASE_PACKAGES=(
   psmisc
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
+  "${AUDIO_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
