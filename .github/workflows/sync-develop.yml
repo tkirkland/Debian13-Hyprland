@@ -1,26 +1,28 @@
-name: Sync develop with master
+name: Back-merge master into develop
 
-# After anything lands on master (PR merge or direct push), fast-forward
-# develop up to it so the two branches never drift. FF-only by design: if
-# develop ever carries commits master doesn't, the run fails loudly instead
-# of creating merge commits or clobbering work — sync that case by hand.
+# git-flow: feature PRs land on develop, which is normally AHEAD of master
+# (several fixes not yet promoted). When master receives a commit develop
+# does NOT already have — a hotfix, or a PR merged straight to master — merge
+# it back into develop so develop never loses it. develop's own ahead-commits
+# are preserved (this is a merge, not a fast-forward). No-op when develop
+# already contains master (e.g. a normal develop->master promotion).
+# Conflicts fail the run for manual resolution rather than guessing.
 on:
   push:
     branches: [master]
 
-# Needed for the built-in GITHUB_TOKEN to push to develop. develop is
+# GITHUB_TOKEN needs write to push the merge to develop. develop is
 # unprotected, so no PAT/app is required. Token pushes do not re-trigger
-# workflows, and this triggers on master while writing to develop, so there
-# is no loop.
+# workflows, and this triggers on master while writing to develop — no loop.
 permissions:
   contents: write
 
 concurrency:
-  group: sync-develop
+  group: backmerge-develop
   cancel-in-progress: false
 
 jobs:
-  fast-forward:
+  back-merge:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout develop (full history)
@@ -29,20 +31,24 @@ jobs:
           ref: develop
           fetch-depth: 0
 
-      - name: Fast-forward develop to master
+      - name: Merge master into develop
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin master
-          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)" ]; then
-            echo "develop already in sync with master; nothing to do."
+          # develop already has everything on master -> nothing to do (the
+          # common case: develop is ahead during normal development).
+          if git merge-base --is-ancestor origin/master HEAD; then
+            echo "develop already contains master; nothing to back-merge."
             exit 0
           fi
-          if git merge-base --is-ancestor HEAD origin/master; then
-            git merge --ff-only origin/master
+          # master has commit(s) develop lacks (hotfix / direct-to-master PR):
+          # merge them in, keeping develop's own commits.
+          if git merge --no-edit origin/master; then
             git push origin HEAD:develop
-            echo "develop fast-forwarded to master."
+            echo "Merged master into develop."
           else
-            echo "::error::develop has commits not on master; cannot fast-forward. Sync manually."
+            git merge --abort || true
+            echo "::error::Conflict merging master into develop; resolve manually."
             exit 1
           fi
