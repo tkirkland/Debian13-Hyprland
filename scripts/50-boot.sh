@@ -207,6 +207,48 @@ install_zbm() {
 
 # --- GRUB --------------------------------------------------------------------
 
+# Append GRUB chainloader menuentries for other OSes os-prober detects
+# (Windows, etc.) to $1 (a grub.cfg path). The installer writes a STATIC
+# grub.cfg (no grub-mkconfig), so os-prober is run here and its EFI-type
+# entries become chainloader stanzas. Best-effort: no detection, a missing
+# UUID, or an os-prober failure leaves just the Debian entry. Only EFI
+# entries (the UEFI case) are added; linux/BIOS entries are noted and
+# skipped. Logs go to the console, never into $1.
+append_os_prober_entries() {
+  local cfg="$1" probed="" line="" field1="" part="" efipath="" name="" uuid=""
+  probed="$(in_target "os-prober" 2>/dev/null || true)"
+  if [[ -z "${probed}" ]]; then
+    info "os-prober: no other operating systems detected."
+    return 0
+  fi
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    field1="${line%%:*}"
+    name="$(printf '%s' "${line}" | cut -d: -f2)"
+    if [[ "${line##*:}" != "efi" ]]; then
+      info "os-prober: skipping non-EFI entry: ${name:-${field1}}"
+      continue
+    fi
+    part="${field1%%@*}"
+    efipath="${field1#*@}"
+    uuid="$(in_target "blkid -s UUID -o value '${part}'" 2>/dev/null || true)"
+    if [[ -z "${uuid}" ]]; then
+      warn "os-prober: no UUID for ${part}; skipping '${name}'."
+      continue
+    fi
+    info "os-prober: adding chainloader entry '${name}' (${part} ${uuid})."
+    cat >>"${cfg}" <<EOF
+menuentry "${name} (on ${part})" {
+  insmod part_gpt
+  insmod fat
+  insmod chain
+  search --no-floppy --fs-uuid --set=root ${uuid}
+  chainloader ${efipath}
+}
+EOF
+  done <<<"${probed}"
+}
+
 write_grub_cfg() {
   # grub-install --boot-directory=${ESP_MOUNT}/EFI/debian embeds the prefix
   # (ESP)/EFI/debian/grub/, so the cfg must live in that grub/ subdirectory.
@@ -222,6 +264,13 @@ menuentry "Debian ${SUITE} (ZFS root)" {
   initrd /EFI/debian/initrd.img
 }
 EOF
+  # Other-OS detection (Windows, ...). Static cfg means there is no
+  # grub-mkconfig to honor GRUB_DISABLE_OS_PROBER, so run os-prober now and
+  # append chainloader entries directly (before the copy below, so both cfg
+  # paths carry them).
+  if ((GRUB_OS_PROBER)); then
+    append_os_prober_entries "${TARGET}${ESP_MOUNT}/EFI/debian/grub/grub.cfg"
+  fi
   # The Debian-signed grubx64.efi reads (esp)/EFI/debian/grub.cfg (baked-in
   # prefix); the locally-built image reads EFI/debian/grub/grub.cfg. Same
   # content at both paths covers whichever image shim chain-loads.
@@ -230,10 +279,12 @@ EOF
 }
 
 install_grub() {
+  local osprober_pkg=""
+  ((GRUB_OS_PROBER)) && osprober_pkg="os-prober"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y grub-efi-amd64 grub-efi-amd64-signed shim-signed
+    apt-get install -y grub-efi-amd64 grub-efi-amd64-signed shim-signed ${osprober_pkg}
     grub-install --target=x86_64-efi --efi-directory=${ESP_MOUNT} \
       --boot-directory=${ESP_MOUNT}/EFI/debian --bootloader-id=debian \
       --no-nvram --uefi-secure-boot
