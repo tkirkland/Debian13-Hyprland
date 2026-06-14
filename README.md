@@ -171,6 +171,13 @@ Identity and layout knobs are environment overrides (set before launch):
 `TIMEZONE`, `LOCALE`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and more — see
 `lib/00-config.sh`.
 
+With `--bootloader=grub`, the installer runs `os-prober` and adds chainloader
+menu entries for other detected OSes (e.g. Windows) — GRUB writes a static
+config here, so this happens at install time, not via `grub-mkconfig`. Set
+`GRUB_OS_PROBER=0` to skip. The `zbm` and `systemd-boot` loaders don't scan
+for other OSes; use the UEFI firmware boot menu (or rEFInd) to pick between
+them and Windows.
+
 ### Add-ons
 
 Drop optional installation inputs into `addons/` before starting:
