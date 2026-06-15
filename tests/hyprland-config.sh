@@ -214,6 +214,13 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
+# xdg-desktop-portal-hyprland installs to /usr/local/libexec (issue #58); the
+# build-dep purge must scan that path too, or xdph's libsdbus-c++2 runtime —
+# pulled in only by the purged -dev package — gets autoremoved and the portal
+# binary breaks. Pin it by including libexec binaries in the ldd survival scan.
+assert_contains "$(declare -f purge_build_deps)" '/usr/local/libexec' \
+  "purge scans /usr/local/libexec so xdph runtime libs survive (issue #58)"
+
 # A missing staged example is a loud failure, not a silent fallback.
 # fatal exits in the real installer (lib/01-log.sh); mirror that here.
 assert_fails "missing staged example config is fatal" bash -c "
