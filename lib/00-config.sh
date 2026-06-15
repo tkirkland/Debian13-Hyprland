@@ -188,6 +188,10 @@ HYPR_BUILD_ORDER=(
   hyprland
   hyprtoolkit
   hyprland-guiutils
+  # Portal backend (issue #58): screencast/screenshot/global-shortcuts. Slots
+  # after its hyprwm deps (hyprutils/hyprlang/hyprwayland-scanner/
+  # hyprland-protocols); its other deps (pipewire, sdbus-c++) come from Debian.
+  xdg-desktop-portal-hyprland
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -212,6 +216,7 @@ declare -A HYPR_REPO_URL=(
   # is the qtutils successor, built on hyprwm's native hyprtoolkit.
   ["hyprtoolkit"]="${HYPR_GIT_BASE}/hyprtoolkit"
   ["hyprland-guiutils"]="${HYPR_GIT_BASE}/hyprland-guiutils"
+  ["xdg-desktop-portal-hyprland"]="${HYPR_GIT_BASE}/xdg-desktop-portal-hyprland"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Release-tag pattern per component when it differs from the default
@@ -286,6 +291,10 @@ HYPR_BUILD_PACKAGES=(
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
+  # xdg-desktop-portal-hyprland (issue #58): CMake needs sdbus-c++>=2.0.0
+  # (trixie 2.1.0) and libpipewire-0.3>=1.1.82 (trixie 1.4.2). The pipewire
+  # runtime itself is already installed via AUDIO_PACKAGES.
+  libsdbus-c++-dev libpipewire-0.3-dev
 )
 
 # Upstream OpenZFS, FORCED on networked installs: trixie's 2.3.x is

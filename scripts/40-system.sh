@@ -330,7 +330,7 @@ create_user() {
     echo "${TARGET_USERNAME}:${USER_PASSWORD}" | chroot "${TARGET}" chpasswd
   elif ((IS_INTERACTIVE)); then
     info "Set a password for ${TARGET_USERNAME}:"
-    chroot "${TARGET}" passwd "${TARGET_USERNAME}"
+    with_console chroot "${TARGET}" passwd "${TARGET_USERNAME}"
   else
     warn "No USER_PASSWORD and non-interactive: ${TARGET_USERNAME} has no password."
   fi
