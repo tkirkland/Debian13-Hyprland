@@ -267,7 +267,10 @@ purge_build_deps() {
   info "Pinning runtime libraries of built binaries..."
   in_target "
     set -e
-    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* 2>/dev/null |
+    # /usr/local/libexec catches xdg-desktop-portal-hyprland (issue #58): its
+    # libsdbus-c++2 runtime is pulled in only by the purged -dev package, so it
+    # must be pinned here or autoremove would delete it and break the portal.
+    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* /usr/local/libexec/* 2>/dev/null |
       grep -oE '/[^ ]+\.so[^ ]*' | sort -u |
       xargs -r -n1 -- realpath 2>/dev/null | sort -u |
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
