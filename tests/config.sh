@@ -53,6 +53,11 @@ assert_contains "${out}" "linux-headers-amd64" \
 assert_contains "${out}" "pipewire-audio" "PipeWire audio in base set"
 assert_contains "${out}" "wireplumber"    "WirePlumber (wpctl) in base set"
 assert_contains "${out}" "brightnessctl"  "brightness key binary in base set"
+# Debian's brightnessctl is built without logind and writes the backlight via
+# sysfs; the udev rule that makes it group-writable ships separately as
+# brightness-udev (only Recommended), so it must be installed explicitly or the
+# brightness keys are dead (issue #48).
+assert_contains "${out}" "brightness-udev" "brightness udev-rule package in base set (issue #48)"
 assert_contains "${out}" "playerctl"      "media key binary in base set"
 
 # addons/*.list files are appended to the target package set (comments

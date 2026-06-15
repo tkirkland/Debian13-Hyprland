@@ -325,13 +325,18 @@ UWSM_RUNTIME_PACKAGES=(
 # Userspace audio: PipeWire + WirePlumber replace the absent sound server
 # (a fresh install has ALSA kernel devices but no userspace server). wpctl
 # (wireplumber) and brightnessctl/playerctl also back the multimedia keybinds
-# inherited from upstream's example config, which are otherwise dead. All are
-# in main except firmware-sof-signed (non-free-firmware, already enabled via
-# DEBIAN_COMPONENTS) — no apt-source change required.
+# inherited from upstream's example config, which are otherwise dead.
+# brightness-udev ships the udev rule that makes /sys/class/backlight/*/brightness
+# writable by the video group: Debian's brightnessctl is built WITHOUT logind and
+# writes sysfs directly, and that rule is only Recommended (not pulled in by
+# default), so without it the screen-brightness keys do nothing (issue #48; the
+# owner is added to the video group in create_user). All are in main except
+# firmware-sof-signed (non-free-firmware, already enabled via DEBIAN_COMPONENTS)
+# — no apt-source change required.
 AUDIO_PACKAGES=(
   pipewire pipewire-audio pipewire-pulse wireplumber libspa-0.2-bluetooth
   alsa-utils pulseaudio-utils pavucontrol
-  brightnessctl playerctl
+  brightnessctl brightness-udev playerctl
   firmware-sof-signed
 )
 
