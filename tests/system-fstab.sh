@@ -44,6 +44,11 @@ assert_contains "${user_body}" "chown -R" \
   "create_user fixes ownership of the pre-existing home"
 assert_contains "${user_body}" "canmount=on" \
   "create_user enables the Downloads dataset only after adduser"
+# brightnessctl writes the backlight via sysfs; the brightness-udev rule makes
+# /sys/class/backlight/*/brightness writable by the video group, so the owner
+# must be in it or the brightness keys do nothing (issue #48).
+assert_contains "${user_body}" "sudo,adm,systemd-journal,video" \
+  "create_user adds the owner to the video group (backlight access, issue #48)"
 
 # The zfs build must produce ONLY the utils/dkms package set:
 # native-deb-kmod compiles modules for the RUNNING (live) kernel and drags

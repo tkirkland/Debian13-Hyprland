@@ -305,7 +305,10 @@ create_user() {
     id '${TARGET_USERNAME}' >/dev/null 2>&1 ||
       adduser --disabled-password --gecos '' '${TARGET_USERNAME}'
     # adm + systemd-journal: the workstation owner reads logs without sudo.
-    usermod -aG sudo,adm,systemd-journal '${TARGET_USERNAME}'
+    # video: brightnessctl writes the backlight through sysfs (Debian builds it
+    # without logind); the brightness-udev rule makes that file group-writable
+    # by 'video', so the brightness keys are dead without this membership (#48).
+    usermod -aG sudo,adm,systemd-journal,video '${TARGET_USERNAME}'
     # Persistent journal (journald Storage=auto): without this directory,
     # per-user journals are volatile and unreadable by their own user.
     install -d -m 2755 -g systemd-journal /var/log/journal
