@@ -45,6 +45,27 @@ bash tests/run-all.sh    # the full fake-driven test suite
   intended; for generated files that need both, write them from the parent
   side (see `lua.pc` generation in `scripts/60-hyprland.sh`).
 
+## Console output (quiet mode)
+
+`setup_logging` (the default) routes the command stream to the install log
+and keeps the operator console on fds 3/4; `--verbose` streams everything via
+`tee`. Choose the output verb by intent (`lib/01-log.sh`):
+
+- **Status** → `info` / `warn` / `verbose` / `fatal` — the established levels;
+  always logged, shown on the console when no activity spinner is running.
+- **Must-see text** the operator needs even in quiet mode → `console`.
+- **Interactive prompt** → `prompt` (reads the reply into `$REPLY`).
+- **Interactive child** (e.g. `passwd`, `mokutil`) → `with_console`; its output
+  is deliberately NOT copied to the log (secrets).
+- **Phase boundaries** → `activity_start` / `activity_success` (the spinner).
+
+Bare `echo` / `printf` are for **data only**: a function's stdout return, a
+redirect to a file, or a pipe — never operator-facing chatter. The lone
+exception is code running where these helpers are undefined: inside
+`in_target` command strings (the chroot), generated standalone scripts (the
+firstboot runner), and `installer.sh` before `lib/01-log.sh` is sourced —
+there, plain `echo ... >&2` is correct.
+
 ## Hard-won facts (do not relearn these the expensive way)
 
 - GitHub tag tarballs omit submodules — sources are fetched as
