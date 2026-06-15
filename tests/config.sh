@@ -22,7 +22,7 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils xdg-desktop-portal-hyprland uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
 
 # Every build-order entry must map to a repo URL. Guards against assoc-array
@@ -33,13 +33,6 @@ out="$(bash -c 'source lib/00-config.sh
   done
   echo all-mapped')"
 assert_eq "all-mapped" "${out}" "every build-order entry has a repo URL"
-
-# xdg-desktop-portal-hyprland (issue #58) pulls two Debian build deps not used
-# elsewhere: sdbus-c++ headers (CMake needs >=2.0.0; trixie ships 2.1.0) and
-# pipewire dev headers (>=1.1.82; trixie 1.4.2).
-out="$(bash -c 'source lib/00-config.sh; printf "%s\n" "${HYPR_BUILD_PACKAGES[@]}"')"
-assert_contains "${out}" "libsdbus-c++-dev" "xdph build dep: sdbus-c++ headers (issue #58)"
-assert_contains "${out}" "libpipewire-0.3-dev" "xdph build dep: pipewire headers (issue #58)"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_CC} ${HYPR_CXX}"')"
 assert_eq "gcc-15 g++-15" "${out}" \

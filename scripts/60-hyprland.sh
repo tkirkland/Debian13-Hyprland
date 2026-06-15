@@ -257,6 +257,13 @@ build_stack() {
   done
   in_target "test -x /usr/local/bin/Hyprland" ||
     fatal "Hyprland binary missing after build."
+  # uwsm builds LAST and is the session entrypoint (greetd -> hypr-session ->
+  # uwsm). If any earlier component fails, the loop aborts and uwsm never
+  # builds, leaving a system that boots to greetd with no session manager — a
+  # dead greeter ("failed to execute process: .../uwsm"). Verify it so a
+  # half-finished build fails the install instead of shipping broken.
+  in_target "test -x /usr/local/bin/uwsm" ||
+    fatal "uwsm binary missing after build (the session would not launch)."
 }
 
 purge_build_deps() {
@@ -267,10 +274,7 @@ purge_build_deps() {
   info "Pinning runtime libraries of built binaries..."
   in_target "
     set -e
-    # /usr/local/libexec catches xdg-desktop-portal-hyprland (issue #58): its
-    # libsdbus-c++2 runtime is pulled in only by the purged -dev package, so it
-    # must be pinned here or autoremove would delete it and break the portal.
-    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* /usr/local/libexec/* 2>/dev/null |
+    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* 2>/dev/null |
       grep -oE '/[^ ]+\.so[^ ]*' | sort -u |
       xargs -r -n1 -- realpath 2>/dev/null | sort -u |
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
