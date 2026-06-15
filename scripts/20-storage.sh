@@ -164,6 +164,12 @@ format_arrays() {
 
 create_pool_and_datasets() {
   info "Creating ZFS pool ${POOL_NAME} (raidz1)..."
+  # The pool is stamped with the live environment's hostid; the installed
+  # system must carry the SAME one or zfs-initramfs refuses the import at first
+  # boot ("pool was previously in use from another system"). Ensure the live
+  # env has a stable /etc/hostid before create — configure_zfs_boot_support
+  # then copies this very file into the target so the two always agree.
+  [[ -f /etc/hostid ]] || zgenhostid
   zpool create -f \
     -o ashift=12 \
     -o autotrim=on \
