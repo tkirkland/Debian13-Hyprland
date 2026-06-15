@@ -43,7 +43,11 @@ teardown_chroot_binds() {
 
 in_target() {
   (($# == 1)) || fatal "in_target expects exactly one command string"
-  chroot "${TARGET}" /usr/bin/env bash -c "$1"
+  # Close fds 3/4 (the operator console opened by setup_logging in quiet mode)
+  # across the chroot boundary: chrooted processes write to the log via
+  # stdout/stderr and have no business holding the host console. No-op before
+  # logging is set up, when 3/4 are not open.
+  chroot "${TARGET}" /usr/bin/env bash -c "$1" 3>&- 4>&-
 }
 
 # Kill anything still running out of the target tree (daemons started by

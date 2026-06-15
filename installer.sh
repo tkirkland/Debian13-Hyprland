@@ -35,6 +35,7 @@ unset source_rel source_path
 # Triggers when error fires
 on_error() {
   local exit_code=$?
+  activity_abort
   warn "FAILED in phase '${current_phase:-startup}' (exit ${exit_code})."
   [[ -n "${LOG_FILE}" ]] && warn "Full log: ${LOG_FILE}"
   warn "Re-run installer.sh to resume; completed phases are skipped."
@@ -64,6 +65,7 @@ on_error() {
 # also be torn down here on any nonzero exit (spec: every failure path).
 on_exit() {
   local exit_code=$?
+  activity_abort
   if ((exit_code != 0)); then
     teardown_chroot_binds
   fi
@@ -84,7 +86,9 @@ main() {
   if [[ "${RUN_PHASE}" == "cleanup" ]]; then
     current_phase="cleanup"
     require_root
+    activity_start "Phase: cleanup"
     phase_cleanup
+    activity_success
     return 0
   fi
 
@@ -136,15 +140,18 @@ main() {
   # (NETWORK_AVAILABLE, VIRT_TYPE, disk selection) that resumed runs need.
   # It is idempotent by design.
   current_phase="preflight"
-  info "=== Phase: preflight ==="
+  activity_start "Phase: preflight"
   phase_preflight
+  activity_success
 
   if [[ "${RUN_PHASE}" != "full" ]]; then
     current_phase="${RUN_PHASE}"
     case "${RUN_PHASE}" in
       system | boot | hyprland | verify) ensure_target_ready ;;
     esac
+    activity_start "Phase: ${RUN_PHASE}"
     "phase_${RUN_PHASE//-/_}"
+    activity_success
     return 0
   fi
 
@@ -159,7 +166,9 @@ main() {
     run_phase "${name}" "phase_${name}"
   done
   current_phase="cleanup"
+  activity_start "Phase: cleanup"
   phase_cleanup
+  activity_success
   # A completed installation has no resume state worth keeping: clearing the
   # stamps (and saved disk selection) makes an immediate re-run a genuine
   # fresh installation — still behind the destructive confirmation gate —
