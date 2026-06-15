@@ -422,7 +422,20 @@ EOF
     # silent, correctly-named session. We omit --cmd so tuigreet defaults
     # to that lone session (a --cmd would otherwise win the default slot
     # and show the bare command instead of the "Hyprland" name).
+    # tuigreet's power menu (Shut down / Reboot) shells out to fulfil the
+    # request. Its built-in defaults exec the bare `shutdown` binary
+    # (prefixed with a bare `setsid`) via a PATH lookup the greeter's
+    # environment cannot satisfy — /usr/sbin is not on its PATH — so both
+    # actions die with "file not found" (issue #49). Give tuigreet
+    # absolute-path commands and --power-no-setsid so it execs systemctl
+    # directly, independent of PATH, matching the absolute-path rule the
+    # rest of this session setup already follows. greetd runs the session
+    # command via `sh -c`, so the single-quoted values survive as one
+    # argument each.
     session_command="${greeter} --remember --asterisks --sessions /etc/greetd/sessions"
+    session_command+=" --power-no-setsid"
+    session_command+=" --power-shutdown '/usr/bin/systemctl poweroff'"
+    session_command+=" --power-reboot '/usr/bin/systemctl reboot'"
     session_user="_greetd"
   fi
   mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
