@@ -333,14 +333,15 @@ AUDIO_PACKAGES=(
   firmware-sof-signed
 )
 
-# Laptop hotkey backing for the XF86MonBrightness*/playerctl keybinds Hyprland's
-# example config ships (dead without the tools). brightness-udev ships the udev
-# rule that makes /sys/class/backlight/*/brightness writable by the video group:
-# Debian's brightnessctl is built WITHOUT logind and writes sysfs directly, and
-# that rule is only Recommended (not pulled in by default), so without it the
-# screen-brightness keys do nothing (issue #48; the owner is added to the video
-# group in create_user). All in main.
-MEDIA_KEY_PACKAGES=(
+# Fn-key backing for the XF86MonBrightness*/XF86Audio{Play,Next,Prev} binds in
+# Hyprland's example config (dead without the tools; the volume/mute keys are
+# backed by wireplumber's wpctl, in AUDIO_PACKAGES above). brightness-udev ships
+# the udev rule that makes /sys/class/backlight/*/brightness writable by the
+# video group: Debian's brightnessctl is built WITHOUT logind and writes sysfs
+# directly, and that rule is only Recommended (not pulled in by default), so
+# without it the screen-brightness keys do nothing (issue #48; the owner is added
+# to the video group in create_user). All in main.
+FNKEY_PACKAGES=(
   brightnessctl brightness-udev playerctl
 )
 
@@ -361,7 +362,7 @@ TARGET_BASE_PACKAGES=(
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   "${AUDIO_PACKAGES[@]}"
-  "${MEDIA_KEY_PACKAGES[@]}"
+  "${FNKEY_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
