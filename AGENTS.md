@@ -91,8 +91,19 @@ on GitHub is append-only — no rewrites.
 
 ## Pull requests
 
-Agents may open pull requests against `develop` and may merge them when
-the user explicitly directs it. Default to leaving the final review and
-merge to the user; do not approve or enable auto-merge on your own
-initiative. Target `develop`, never `master` directly — releases flow
-develop → master.
+Each change is landed through a short-lived leaf branch and a pull
+request, following this loop:
+
+1. The agent creates the leaf branch off `develop`, commits, pushes, and
+   opens a PR targeting `develop` (never `master`).
+2. The user reviews the PR.
+3. The user returns to the session with the verdict:
+   - **Approved** ("all good" / "ship it" / similar) — the agent merges
+     the PR into `develop` and deletes the branch on both the remote and
+     locally, so branches do not accumulate.
+   - **Changes requested** — the agent pushes fixes to the same branch
+     for re-review; the branch is not abandoned for a new one.
+
+The agent merges only on the user's explicit in-session go-ahead. It does
+not self-approve, enable auto-merge, or merge on its own initiative, and
+it never commits straight to `master` — releases flow develop → master.
