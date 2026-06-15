@@ -179,6 +179,17 @@ assert_contains "${greeter_cfg}" 'tuigreet' \
   "greeter branch uses tuigreet"
 assert_contains "${greeter_cfg}" '--sessions /etc/greetd/sessions' \
   "tuigreet --sessions points at our curated dir (no bypass menu)"
+# tuigreet's power menu must use absolute-path commands: its built-in
+# defaults exec the bare `shutdown` binary (prefixed with a bare `setsid`)
+# via a PATH lookup the greeter cannot satisfy, so both actions fail with
+# "file not found" (issue #49). --power-no-setsid + absolute systemctl
+# paths make tuigreet exec the binary directly, independent of PATH.
+assert_contains "${greeter_cfg}" '--power-no-setsid' \
+  "tuigreet skips the bare setsid prefix (unresolvable without PATH)"
+assert_contains "${greeter_cfg}" "--power-shutdown '/usr/bin/systemctl poweroff'" \
+  "tuigreet shut down uses an absolute-path command (issue #49)"
+assert_contains "${greeter_cfg}" "--power-reboot '/usr/bin/systemctl reboot'" \
+  "tuigreet reboot uses an absolute-path command (issue #49)"
 if [[ "${greeter_cfg}" == *"--cmd"* ]]; then
   echo "  FAIL: greeter must omit --cmd so the curated session is the default" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
