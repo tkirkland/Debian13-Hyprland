@@ -34,7 +34,8 @@ run_phase() {
     info "Skipping ${name} (already complete; --fresh to redo)"
     return 0
   fi
-  info "=== Phase: ${name} ==="
+  activity_start "Phase: ${name}"
   "${func}"
   mark_phase_done "${name}"
+  activity_success
 }
