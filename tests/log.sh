@@ -72,7 +72,7 @@ if bash -c '
   CONSOLE_READY=1
   CONSOLE_MODE="tty"
   activity_start "Phase: hyprland"
-  sleep 0.35
+  sleep 0.6
   renderer_pid="${ACTIVITY_PID}"
   kill -0 "${renderer_pid}"
   activity_success
@@ -90,7 +90,7 @@ assert_contains "${spinner_body}" $'\r\033[K[|] Phase: hyprland' \
   "TTY spinner clears and redraws the same row"
 assert_contains "${spinner_body}" $'\r\033[K[/] Phase: hyprland' \
   "TTY spinner advances through animation frames"
-assert_contains "${spinner_body}" "[OK] Phase: hyprland" \
+assert_contains "${spinner_body}" "[INFO] Completed: Phase: hyprland" \
   "successful phase replaces the spinner with a stable result"
 
 # Pausing for a prompt or warning is also valid in non-TTY mode. Resuming
@@ -127,7 +127,7 @@ verbose_out="$(bash -c '
   activity_success
 ' _ "${verbose_dir}" 2>&1)"
 phase_start_count="$(printf '%s\n' "${verbose_out}" |
-  grep -c '^\[INFO\] Phase: verify$' || true)"
+  grep -c '^\[INFO\] === Phase: verify ===$' || true)"
 assert_eq "1" "${phase_start_count}" \
   "verbose mode prints one phase start line"
 phase_record_count="$(printf '%s\n' "${verbose_out}" |

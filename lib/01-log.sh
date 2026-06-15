@@ -11,6 +11,7 @@ ACTIVITY_ACTIVE="${ACTIVITY_ACTIVE:-0}"
 ACTIVITY_PAUSED="${ACTIVITY_PAUSED:-0}"
 ACTIVITY_LABEL="${ACTIVITY_LABEL:-}"
 ACTIVITY_PID="${ACTIVITY_PID:-}"
+ACTIVITY_START="${ACTIVITY_START:-0}"
 
 info() {
   if ((CONSOLE_READY)) && [[ "${CONSOLE_MODE}" != "verbose" ]] &&
@@ -117,14 +118,30 @@ with_console() {
   return "${rc}"
 }
 
-_activity_spawn_renderer() {
+# Background spinner for tty mode. Beyond proving liveness it surfaces a
+# progress signal so a long compile is distinguishable from a hang: elapsed
+# seconds plus the most recent install-log line (the command stream lands
+# there in quiet mode), clipped to the terminal width.
+activity_spawn_renderer() {
   (
-    local frames=$'|/-\\' frame=0
+    local frames=$'|/-\\' frame=0 tick=0 elapsed cols last="" line
+    cols="$(stty size <&3 2>/dev/null | cut -d' ' -f2)" || cols=""
+    [[ "${cols}" =~ ^[0-9]+$ ]] || cols=100
     trap 'exit 0' HUP INT TERM
     while true; do
-      printf '\r\033[K[%s] %s' "${frames:frame:1}" "${ACTIVITY_LABEL}" >&3
+      # The frame spins every tick (fork-free); the log tail — the part that
+      # needs a subprocess — refreshes only ~once a second, so the animation
+      # stays cheap even across a long build.
+      if ((tick % 5 == 0)) && [[ -n "${LOG_FILE:-}" && -r "${LOG_FILE}" ]]; then
+        last="$(tail -n1 "${LOG_FILE}" 2>/dev/null | tr -d '\r')" || last=""
+      fi
+      elapsed=$((SECONDS - ACTIVITY_START))
+      line="[${frames:frame:1}] ${ACTIVITY_LABEL} (${elapsed}s)"
+      [[ -n "${last}" ]] && line="${line}  ${last}"
+      printf '\r\033[K%s' "${line:0:cols}" >&3 || true
       frame=$(((frame + 1) % 4))
-      sleep 0.1
+      tick=$((tick + 1))
+      sleep 0.2
     done
   ) &
   ACTIVITY_PID=$!
@@ -136,10 +153,11 @@ activity_start() {
   ACTIVITY_ACTIVE=1
   ACTIVITY_PAUSED=0
   ACTIVITY_LABEL="${label}"
-  printf '[INFO] %s\n' "${label}" || true
+  ACTIVITY_START=${SECONDS}
+  printf '[INFO] === %s ===\n' "${label}" || true
   case "${CONSOLE_MODE}" in
-    tty) _activity_spawn_renderer ;;
-    plain) printf '[INFO] %s\n' "${label}" >&3 || true ;;
+    tty) activity_spawn_renderer ;;
+    plain) printf '[INFO] === %s ===\n' "${label}" >&3 || true ;;
   esac
 }
 
@@ -161,7 +179,7 @@ activity_resume() {
   ((ACTIVITY_PAUSED)) || return 0
   ACTIVITY_PAUSED=0
   if [[ "${CONSOLE_MODE}" == "tty" ]]; then
-    _activity_spawn_renderer
+    activity_spawn_renderer
   fi
   return 0
 }
@@ -171,14 +189,14 @@ activity_success() {
   activity_pause
   case "${CONSOLE_MODE}" in
     tty)
-      printf '\r\033[K[OK] %s\n' "${ACTIVITY_LABEL}" >&3 || true
+      printf '\r\033[K[INFO] Completed: %s\n' "${ACTIVITY_LABEL}" >&3 || true
       printf '[INFO] Completed: %s\n' "${ACTIVITY_LABEL}" || true
       ;;
     plain)
-      printf '[OK] %s\n' "${ACTIVITY_LABEL}" >&3 || true
+      printf '[INFO] Completed: %s\n' "${ACTIVITY_LABEL}" >&3 || true
       printf '[INFO] Completed: %s\n' "${ACTIVITY_LABEL}" || true
       ;;
-    verbose | direct) printf '[OK] %s\n' "${ACTIVITY_LABEL}" || true ;;
+    verbose | direct) printf '[INFO] Completed: %s\n' "${ACTIVITY_LABEL}" || true ;;
   esac
   ACTIVITY_ACTIVE=0
   ACTIVITY_PAUSED=0
