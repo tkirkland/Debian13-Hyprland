@@ -104,27 +104,29 @@ pinning test with the fix.
 
 Conventional Commits, lowercase after the prefix:
 `feat:` / `fix:` / `test:` / `docs:` / `chore:` / `refactor:`.
-One concern per commit. Work on a short-lived branch and, once the gates
-pass, open a pull request against `develop` (the integration branch) —
-never commit straight to `master`. `develop` flows up to `master` for
-releases; the `sync-develop.yml` workflow keeps the two in sync. History
-on GitHub is append-only — no rewrites.
+One concern per commit. Work directly on `develop` — one fix at a time, no
+per-change "leaf" branch — and open a pull request into `master` once the
+gates pass. Never commit straight to `master` (it is protected: PR-only).
+History on GitHub is append-only — no rewrites.
 
 ## Pull requests
 
-Each change is landed through a short-lived leaf branch and a pull
-request, following this loop:
+Two long-lived branches: `develop` (where work lands, one fix at a time)
+and `master` (the reviewed line). No per-change leaf branch. The loop:
 
-1. The agent creates the leaf branch off `develop`, commits, pushes, and
-   opens a PR targeting `develop` (never `master`).
-2. The user reviews the PR.
-3. The user returns to the session with the verdict:
-   - **Approved** ("all good" / "ship it" / similar) — the agent merges
-     the PR into `develop` and deletes the branch on both the remote and
-     locally, so branches do not accumulate.
-   - **Changes requested** — the agent pushes fixes to the same branch
-     for re-review; the branch is not abandoned for a new one.
+1. Work is committed to `develop` and pushed.
+2. The agent opens a PR `develop` → `master`.
+3. The user reviews and gives the verdict in-session:
+   - **Approved** ("gtg" / "all good" / similar) — the agent merges with a
+     **merge commit** (never squash/rebase: only the merge-commit method
+     leaves `master` a fast-forward of `develop`).
+   - **Changes requested** — the agent pushes fixes to `develop` for
+     re-review.
+4. The push to `master` triggers `sync-develop.yml`, which fast-forwards
+   `develop` back up to `master` — the two re-sync automatically after
+   every merge. Squash/rebase are disabled repo-wide and `master` is
+   PR-protected precisely so that fast-forward always succeeds.
 
-The agent merges only on the user's explicit in-session go-ahead. It does
-not self-approve, enable auto-merge, or merge on its own initiative, and
-it never commits straight to `master` — releases flow develop → master.
+The agent merges only on the user's explicit in-session go-ahead — it does
+not self-approve, enable auto-merge, or merge on its own initiative — and
+never commits straight to `master`.
