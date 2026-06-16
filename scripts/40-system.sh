@@ -340,9 +340,13 @@ create_user() {
 }
 
 configure_zfs_boot_support() {
+  # Carry the live environment's hostid into the target: the pool was created
+  # under it (see create_pool_and_datasets), so the installed system must match
+  # or zfs-initramfs refuses the import at first boot. Generating a fresh hostid
+  # in the chroot (zgenhostid) guarantees a mismatch — copy the live file in.
+  cp /etc/hostid "${TARGET}/etc/hostid"
   in_target "
     set -e
-    zgenhostid -f
     systemctl enable NetworkManager
   "
   # Give the target the pool cachefile so it imports cleanly at boot.

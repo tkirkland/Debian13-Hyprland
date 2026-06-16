@@ -10,7 +10,7 @@ mkdir -p "${tmp}/bin"
 export FAKE_LOG="${tmp}/calls.log"
 
 for cmd in sgdisk mdadm zpool zfs wipefs blkdiscard partprobe udevadm \
-  mkfs.vfat mkfs.ext4 mkswap swapoff umount; do
+  mkfs.vfat mkfs.ext4 mkswap swapoff umount zgenhostid; do
   make_fake "${tmp}/bin" "${cmd}" \
     "echo \"${cmd} \$*\" >> \"\${FAKE_LOG}\"; exit 0"
 done

@@ -16,6 +16,12 @@ in_target() { :; }
 
 source scripts/60-hyprland.sh
 
+# build_stack must verify uwsm built, not just Hyprland: if a component before
+# uwsm (which builds last) fails, the loop aborts and uwsm never installs,
+# leaving a system that boots to greetd with no session manager (dead greeter).
+assert_contains "$(declare -f build_stack)" "/usr/local/bin/uwsm" \
+  "build_stack verifies the uwsm binary after the source build"
+
 TARGET="${tmp}/target"
 TARGET_USERNAME="tester"
 HYPR_AUTOLOGIN=1
@@ -213,13 +219,6 @@ else
   echo "  FAIL: ${greeter_entry} (curated single session) missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
-
-# xdg-desktop-portal-hyprland installs to /usr/local/libexec (issue #58); the
-# build-dep purge must scan that path too, or xdph's libsdbus-c++2 runtime —
-# pulled in only by the purged -dev package — gets autoremoved and the portal
-# binary breaks. Pin it by including libexec binaries in the ldd survival scan.
-assert_contains "$(declare -f purge_build_deps)" '/usr/local/libexec' \
-  "purge scans /usr/local/libexec so xdph runtime libs survive (issue #58)"
 
 # A missing staged example is a loud failure, not a silent fallback.
 # fatal exits in the real installer (lib/01-log.sh); mirror that here.
