@@ -174,7 +174,7 @@ cp "${TARGET}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
 (
   # Stub the chroot helper so `command -v tuigreet` resolves to a path;
   # stay quiet for the unrelated chown/systemctl block.
-  in_target() { [[ "$*" == *"command -v tuigreet"* ]] && echo /usr/bin/tuigreet || :; }
+  in_target() { if [[ "$*" == *"command -v tuigreet"* ]]; then echo /usr/bin/tuigreet; fi; }
   TARGET="${greeter_target}"
   HYPR_AUTOLOGIN=0
   configure_session
