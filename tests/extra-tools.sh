@@ -56,4 +56,34 @@ assert_contains "${curl_txt}" \
 assert_contains "$(<"${intgt_log}")" "apt-get install -y /var/tmp/chezmoi.deb" \
   "chezmoi .deb installed via apt inside the target"
 
+# --- LythMono: every variant zip from the latest GitHub release ------------
+# A representative 3-variant subset (incl. a NerdFont) exercises the per-variant
+# URL build, the unzip target, and fc-cache without fetching all twelve.
+LYTHMONO_REPO_URL="https://github.com/tkirkland/LythMono"
+LYTHMONO_VARIANTS=(LythMono LythMonoNerdFont LythMonoTermSquareNerdFont)
+TARGET="${tmp}/lyth"
+mkdir -p "${TARGET}/var/tmp"
+lcurl_log="${tmp}/lyth-curl.log"
+lintgt_log="${tmp}/lyth-intgt.log"
+: >"${lcurl_log}"
+: >"${lintgt_log}"
+make_curl "${lcurl_log}" "v0.10.1"
+in_target() { printf '%s\n' "$*" >>"${lintgt_log}"; }
+
+install_lythmono_fonts
+
+lcurl_txt="$(<"${lcurl_log}")"
+assert_contains "${lcurl_txt}" \
+  "api.github.com/repos/tkirkland/LythMono/releases/latest" \
+  "LythMono version resolved via the GitHub releases API"
+for variant in "${LYTHMONO_VARIANTS[@]}"; do
+  assert_contains "${lcurl_txt}" "/releases/download/v0.10.1/${variant}.zip" \
+    "LythMono fetches the ${variant} variant zip"
+done
+lintgt_txt="$(<"${lintgt_log}")"
+assert_contains "${lintgt_txt}" "/usr/local/share/fonts/LythMono" \
+  "LythMono TTFs unzip into the system font path"
+assert_contains "${lintgt_txt}" "fc-cache" \
+  "font cache refreshed after install"
+
 finish_test
