@@ -300,6 +300,11 @@ HYPR_BUILD_PACKAGES=(
 # features deliberately with `zpool upgrade` from the booted system.
 ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
 ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
+
+# chezmoi (dotfile manager) is not in Debian; installed from its official .deb
+# (latest GitHub release) so the tool is present system-wide as
+# /usr/bin/chezmoi. The .deb asset embeds the version without the leading 'v'.
+CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
 # Debian packages the upstream build replaces (skipped on networked
 # installs so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
