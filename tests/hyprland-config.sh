@@ -161,13 +161,12 @@ greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
 assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
   "greetd session command uses the wrapper"
 
-# Greeter branch (no autologin): tuigreet builds its session menu from
-# ${XDG_DATA_DIRS}/wayland-sessions, where the uwsm/Hyprland source builds
-# drop hyprland*.desktop entries that bypass the silencing wrapper and
-# reintroduce VT chatter (issue #12). --sessions must aim at our own dir
-# (replaces the scan, no fallback) holding exactly one curated entry that
-# launches the silent wrapper, and --cmd must be omitted so tuigreet
-# defaults to that lone "Hyprland" session.
+# Greeter branch (no autologin): the prompt runs inside cage (a kiosk Wayland
+# compositor) via /etc/greetd/greeter-displays.sh, not straight on VT1. The
+# greetd command is just cage + that wrapper; tuigreet and its flags now live
+# inside the wrapper, which also disables every output except the one at 0,0
+# (single-display login) and routes its console output to the journal so
+# kitty's startup chatter never flashes VT1 at the handoff.
 greeter_target="${tmp}/greeter-target"
 mkdir -p "${greeter_target}${HYPR_SRC_DIR}/hyprland/example"
 cp "${TARGET}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
@@ -175,32 +174,59 @@ cp "${TARGET}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
 (
   # Stub the chroot helper so `command -v tuigreet` resolves to a path;
   # stay quiet for the unrelated chown/systemctl block.
-  in_target() { [[ "$*" == *"command -v tuigreet"* ]] && echo /usr/bin/tuigreet || :; }
+  in_target() { if [[ "$*" == *"command -v tuigreet"* ]]; then echo /usr/bin/tuigreet; fi; }
   TARGET="${greeter_target}"
   HYPR_AUTOLOGIN=0
   configure_session
 )
 greeter_cfg="$(<"${greeter_target}/etc/greetd/config.toml")"
-assert_contains "${greeter_cfg}" 'tuigreet' \
-  "greeter branch uses tuigreet"
-assert_contains "${greeter_cfg}" '--sessions /etc/greetd/sessions' \
-  "tuigreet --sessions points at our curated dir (no bypass menu)"
-# tuigreet's power menu must use absolute-path commands: its built-in
-# defaults exec the bare `shutdown` binary (prefixed with a bare `setsid`)
-# via a PATH lookup the greeter cannot satisfy, so both actions fail with
-# "file not found" (issue #49). --power-no-setsid + absolute systemctl
-# paths make tuigreet exec the binary directly, independent of PATH.
-assert_contains "${greeter_cfg}" '--power-no-setsid' \
-  "tuigreet skips the bare setsid prefix (unresolvable without PATH)"
-assert_contains "${greeter_cfg}" "--power-shutdown '/usr/bin/systemctl poweroff'" \
-  "tuigreet shut down uses an absolute-path command (issue #49)"
-assert_contains "${greeter_cfg}" "--power-reboot '/usr/bin/systemctl reboot'" \
-  "tuigreet reboot uses an absolute-path command (issue #49)"
-if [[ "${greeter_cfg}" == *"--cmd"* ]]; then
-  echo "  FAIL: greeter must omit --cmd so the curated session is the default" >&2
+assert_contains "${greeter_cfg}" '/usr/bin/cage -s -- /etc/greetd/greeter-displays.sh' \
+  "greeter branch launches through cage + the display wrapper"
+# tuigreet must run from the wrapper, not the bare greetd command.
+if [[ "${greeter_cfg}" == *"tuigreet"* ]]; then
+  echo "  FAIL: tuigreet must run from the wrapper, not the greetd command" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
-  echo "  ok: greeter omits --cmd (lone session becomes the default)"
+  echo "  ok: greetd command is just cage + the wrapper"
+fi
+disp="${greeter_target}/etc/greetd/greeter-displays.sh"
+if [[ -x "${disp}" ]]; then
+  echo "  ok: greeter-displays.sh staged executable"
+  disp_txt="$(<"${disp}")"
+  # Console chatter -> journal (no VT1 flash). The redirect must live inside
+  # the wrapper: cage re-establishes tty1 for its child, so redirecting above
+  # cage has no effect.
+  assert_contains "${disp_txt}" "systemd-cat -t greeter" \
+    "wrapper routes greeter console output to the journal (no VT flash)"
+  # Single-display: keep the 0,0 output, switch the rest off.
+  assert_contains "${disp_txt}" "/usr/bin/wlr-randr" \
+    "wrapper sets outputs via wlr-randr"
+  assert_contains "${disp_txt}" '--off' \
+    "wrapper switches non-primary outputs off"
+  # tuigreet is a TUI, hosted inside kitty (a real Wayland client) under cage.
+  assert_contains "${disp_txt}" "/usr/bin/kitty" \
+    "wrapper hosts tuigreet inside kitty"
+  assert_contains "${disp_txt}" "tuigreet" \
+    "wrapper launches tuigreet"
+  assert_contains "${disp_txt}" '--sessions /etc/greetd/sessions' \
+    "tuigreet --sessions points at our curated dir (no bypass menu)"
+  # Power menu: absolute systemctl paths + --power-no-setsid so the actions
+  # work without a PATH (issue #49).
+  assert_contains "${disp_txt}" '--power-no-setsid' \
+    "tuigreet skips the bare setsid prefix (unresolvable without PATH)"
+  assert_contains "${disp_txt}" "--power-shutdown '/usr/bin/systemctl poweroff'" \
+    "tuigreet shut down uses an absolute-path command (issue #49)"
+  assert_contains "${disp_txt}" "--power-reboot '/usr/bin/systemctl reboot'" \
+    "tuigreet reboot uses an absolute-path command (issue #49)"
+  if [[ "${disp_txt}" == *"--cmd"* ]]; then
+    echo "  FAIL: greeter must omit --cmd so the curated session is the default" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: greeter omits --cmd (lone session becomes the default)"
+  fi
+else
+  echo "  FAIL: greeter-displays.sh missing or not executable" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 greeter_entry="${greeter_target}/etc/greetd/sessions/hyprland.desktop"
 if [[ -f "${greeter_entry}" ]]; then

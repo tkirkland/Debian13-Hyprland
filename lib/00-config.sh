@@ -300,6 +300,23 @@ HYPR_BUILD_PACKAGES=(
 # features deliberately with `zpool upgrade` from the booted system.
 ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
 ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
+
+# chezmoi (dotfile manager) is not in Debian; installed from its official .deb
+# (latest GitHub release) so the tool is present system-wide as
+# /usr/bin/chezmoi. The .deb asset embeds the version without the leading 'v'.
+CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
+# LythMono font: installed from its GitHub release (one zip of TTFs per
+# variant) into the system font path. Every variant family below is fetched —
+# the full set installed on the reference machine.
+LYTHMONO_REPO_URL="${LYTHMONO_REPO_URL:-https://github.com/tkirkland/LythMono}"
+LYTHMONO_VARIANTS=(
+  LythMono LythMonoNerdFont
+  LythMonoRound LythMonoRoundNerdFont
+  LythMonoSquare LythMonoSquareNerdFont
+  LythMonoTerm LythMonoTermNerdFont
+  LythMonoTermRound LythMonoTermRoundNerdFont
+  LythMonoTermSquare LythMonoTermSquareNerdFont
+)
 # Debian packages the upstream build replaces (skipped on networked
 # installs so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
@@ -357,7 +374,8 @@ TARGET_BASE_PACKAGES=(
   linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
-  console-setup ca-certificates curl greetd tuigreet kitty openssh-server
+  console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
+  unzip fontconfig
   psmisc
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
