@@ -357,7 +357,7 @@ TARGET_BASE_PACKAGES=(
   linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
-  console-setup ca-certificates curl greetd tuigreet kitty openssh-server
+  console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   psmisc
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
