@@ -401,6 +401,7 @@ UWSM_SILENT_START=2 exec /usr/bin/systemd-cat -t hypr-session \
   /usr/local/bin/uwsm start -- hyprland.desktop
 EOF
   chmod +x "${TARGET}/usr/local/bin/hypr-session"
+  mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
   local session_command="" session_user=""
   if ((HYPR_AUTOLOGIN)); then
     # No greeter: greetd starts the session directly as the target user.
@@ -414,38 +415,83 @@ EOF
     local greeter=""
     greeter="$(in_target "command -v tuigreet")" ||
       fatal "tuigreet not found in target (TARGET_BASE_PACKAGES should install it)."
-    # --asterisks: tuigreet's default password field echoes NOTHING,
-    # which reads as broken input on a console with redraw jitter.
+    # The greeter runs inside cage (a single-client kiosk Wayland compositor)
+    # rather than straight on VT1, so a wrapper can do two things the bare
+    # tuigreet-on-VT1 setup cannot:
     #
-    # --sessions points at our own one-entry dir on purpose. tuigreet
-    # builds its session menu from ${XDG_DATA_DIRS}/wayland-sessions
-    # (default /usr/local/share:/usr/share), where the uwsm/Hyprland
-    # source builds drop hyprland.desktop and hyprland-uwsm.desktop —
-    # both bypass the silencing wrapper and reintroduce VT chatter
-    # (issue #12). --sessions replaces that scan (no fallback), so only
-    # our curated entry is offered. We ship exactly one entry rather than
-    # an empty dir because tuigreet always renders the "Choose session"
-    # key (no flag hides it); an empty chooser is worse UX than one clean,
-    # silent, correctly-named session. We omit --cmd so tuigreet defaults
-    # to that lone session (a --cmd would otherwise win the default slot
-    # and show the bare command instead of the "Hyprland" name).
-    # tuigreet's power menu (Shut down / Reboot) shells out to fulfil the
-    # request. Its built-in defaults exec the bare `shutdown` binary
-    # (prefixed with a bare `setsid`) via a PATH lookup the greeter's
-    # environment cannot satisfy — /usr/sbin is not on its PATH — so both
-    # actions die with "file not found" (issue #49). Give tuigreet
-    # absolute-path commands and --power-no-setsid so it execs systemctl
-    # directly, independent of PATH, matching the absolute-path rule the
-    # rest of this session setup already follows. greetd runs the session
-    # command via `sh -c`, so the single-quoted values survive as one
-    # argument each.
-    session_command="${greeter} --remember --asterisks --sessions /etc/greetd/sessions"
-    session_command+=" --power-no-setsid"
-    session_command+=" --power-shutdown '/usr/bin/systemctl poweroff'"
-    session_command+=" --power-reboot '/usr/bin/systemctl reboot'"
+    #   1. Restrict the login to one display. tuigreet is a TUI, not a
+    #      Wayland client, so it is hosted inside kitty; cage gives kitty a
+    #      compositor + DRM and brings every connected output up. The wrapper
+    #      then disables (via wlr-randr) every output except the one cage
+    #      anchored at 0,0, so the prompt appears on a single screen. The rest
+    #      light up after login under Hyprland's own monitor config.
+    #   2. Keep the console clean at handoff. cage hands its child tty1 as
+    #      stdio, AND kitty writes its glfw/xkb/sRGB/portal warnings to that
+    #      controlling terminal (not fd 1/2) — so they buffer on VT1 and flash
+    #      the instant cage exits and the VT returns to text mode (issue #12's
+    #      cousin). The wrapper routes its own stdout/stderr to the journal
+    #      (journalctl -t greeter), keeping the VT text buffer empty.
+    #      Redirecting ABOVE cage does not work: cage re-establishes tty1 as
+    #      the child's controlling terminal, so the redirect must live here,
+    #      inside the wrapper.
+    #
+    # The static body (redirect + output selection) is written under a quoted
+    # heredoc so its bash stays literal; the launch line is appended under an
+    # interpolating heredoc to inject the resolved tuigreet path.
+    cat >"${TARGET}/etc/greetd/greeter-displays.sh" <<'EOF'
+#!/usr/bin/env bash
+# Staged by installer.sh: greetd greeter wrapper, run as cage's Wayland
+# client. Keeps the login on the primary display and the greeter's console
+# chatter in the journal (journalctl -t greeter), never on VT1.
+set -u
+
+# cage gives this process tty1 as stdio and kitty writes diagnostics to that
+# controlling terminal; route everything to the journal so the VT text buffer
+# stays empty and nothing flashes when cage exits at the greeter → desktop
+# handoff.
+exec > >(/usr/bin/systemd-cat -t greeter) 2>&1
+
+# Keep only the output cage anchored at 0,0; switch the rest off so the prompt
+# shows on a single display.
+current=""
+declare -a others=()
+while IFS= read -r line; do
+  if [[ "$line" =~ ^([A-Za-z0-9._-]+)[[:space:]] ]]; then
+    current="${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ Position:[[:space:]]([0-9]+),([0-9]+) ]]; then
+    if [[ "${BASH_REMATCH[1]}" != 0 || "${BASH_REMATCH[2]}" != 0 ]]; then
+      others+=("$current")
+    fi
+  fi
+done < <(/usr/bin/wlr-randr)
+for o in "${others[@]}"; do
+  /usr/bin/wlr-randr --output "$o" --off
+done
+
+EOF
+    # tuigreet flags (mirrors the bare-VT setup, now inside the wrapper):
+    # --asterisks (its default echoes nothing, reads as broken input on a
+    # console with redraw jitter); --sessions points at our curated one-entry
+    # dir so tuigreet does not scan ${XDG_DATA_DIRS}/wayland-sessions, where
+    # the uwsm/Hyprland source builds drop hyprland*.desktop entries that
+    # bypass the silencing wrapper (issue #12); --cmd is omitted so the lone
+    # curated session is the default. The power menu uses absolute systemctl
+    # paths + --power-no-setsid so it works without a PATH (issue #49).
+    cat >>"${TARGET}/etc/greetd/greeter-displays.sh" <<EOF
+exec /usr/bin/kitty --class greeter \\
+  -o background=#000000 -o foreground=#cccccc \\
+  -o cursor_blink_interval=0 -o confirm_os_window_close=0 \\
+  -- ${greeter} --remember --asterisks --sessions /etc/greetd/sessions \\
+     --power-no-setsid \\
+     --power-shutdown '/usr/bin/systemctl poweroff' \\
+     --power-reboot '/usr/bin/systemctl reboot'
+EOF
+    chmod +x "${TARGET}/etc/greetd/greeter-displays.sh"
+    # greetd launches the greeter through cage; -s allows VT switching.
+    # Absolute paths only (greetd provides no PATH to its children).
+    session_command="/usr/bin/cage -s -- /etc/greetd/greeter-displays.sh"
     session_user="_greetd"
   fi
-  mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
   # The sole greeter session: launches the silent, uwsm-managed wrapper.
   cat >"${TARGET}/etc/greetd/sessions/hyprland.desktop" <<'EOF'
 [Desktop Entry]

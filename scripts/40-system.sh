@@ -296,6 +296,60 @@ install_addon_artifacts() {
   fi
 }
 
+# chezmoi is not packaged for Debian; install its official .deb (latest
+# release) so the dotfile manager is present system-wide as /usr/bin/chezmoi.
+# The GitHub API names the latest release; the .deb asset embeds the version
+# without the leading 'v'. apt resolves the (minimal) dependencies.
+install_chezmoi() {
+  local tag="" ver="" url=""
+  tag="$(curl -fsSL --retry 3 \
+    "${CHEZMOI_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
+    2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
+  [[ -n "${tag}" ]] || fatal "Could not resolve the latest chezmoi release."
+  ver="${tag#v}"
+  url="${CHEZMOI_REPO_URL}/releases/download/${tag}/chezmoi_${ver}_linux_amd64.deb"
+  info "Installing chezmoi ${tag} (${url##*/})..."
+  rm -f "${TARGET}/var/tmp/chezmoi.deb"
+  curl -fsSL --retry 3 -o "${TARGET}/var/tmp/chezmoi.deb" "${url}" ||
+    fatal "Failed to download chezmoi (${tag})."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y /var/tmp/chezmoi.deb
+  "
+  rm -f "${TARGET}/var/tmp/chezmoi.deb"
+}
+
+# LythMono is not packaged; install every variant from its GitHub release (one
+# zip of TTFs per variant) into the system font path so all users get it. The
+# variant set (LYTHMONO_VARIANTS) mirrors the fonts on the reference machine.
+# unzip + fontconfig come from TARGET_BASE_PACKAGES; fc-cache makes the fonts
+# resolvable.
+install_lythmono_fonts() {
+  local tag="" v=""
+  tag="$(curl -fsSL --retry 3 \
+    "${LYTHMONO_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
+    2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
+  [[ -n "${tag}" ]] || fatal "Could not resolve the latest LythMono release."
+  info "Installing LythMono ${tag} fonts (${#LYTHMONO_VARIANTS[@]} variants)..."
+  rm -rf "${TARGET}/var/tmp/lythmono"
+  install -d "${TARGET}/var/tmp/lythmono"
+  for v in "${LYTHMONO_VARIANTS[@]}"; do
+    curl -fsSL --retry 3 -o "${TARGET}/var/tmp/lythmono/${v}.zip" \
+      "${LYTHMONO_REPO_URL}/releases/download/${tag}/${v}.zip" ||
+      fatal "Failed to download LythMono variant ${v} (${tag})."
+  done
+  in_target "
+    set -e
+    install -d /usr/local/share/fonts/LythMono
+    for z in /var/tmp/lythmono/*.zip; do
+      unzip -o -j -q \"\${z}\" '*.ttf' -d /usr/local/share/fonts/LythMono
+    done
+    fc-cache -f /usr/local/share/fonts/LythMono
+    rm -rf /var/tmp/lythmono
+  "
+}
+
 create_user() {
   # The Downloads dataset is created canmount=noauto (20-storage.sh) so no
   # zfs mount -a can pre-create a root-owned /home/<user>: adduser runs
@@ -383,6 +437,8 @@ phase_system() {
   install_base_packages
   install_nvidia_driver
   install_addon_artifacts
+  install_chezmoi
+  install_lythmono_fonts
   configure_locale_tz
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then

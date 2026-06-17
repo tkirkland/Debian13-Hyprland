@@ -45,7 +45,7 @@ fatal() {
   activity_abort
   if ((CONSOLE_READY)) && [[ "${CONSOLE_MODE}" != "verbose" ]]; then
     printf '[FATAL] %s\n' "$*" >&4 || true
-    [[ -n "${LOG_FILE}" ]] && printf 'Full log: %s\n' "${LOG_FILE}" >&4 || true
+    if [[ -n "${LOG_FILE}" ]]; then printf 'Full log: %s\n' "${LOG_FILE}" >&4 || true; fi
   fi
   printf '[FATAL] %s\n' "$*" >&2 || true
   exit 1
