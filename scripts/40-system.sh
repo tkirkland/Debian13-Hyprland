@@ -296,6 +296,30 @@ install_addon_artifacts() {
   fi
 }
 
+# chezmoi is not packaged for Debian; install its official .deb (latest
+# release) so the dotfile manager is present system-wide as /usr/bin/chezmoi.
+# The GitHub API names the latest release; the .deb asset embeds the version
+# without the leading 'v'. apt resolves the (minimal) dependencies.
+install_chezmoi() {
+  local tag="" ver="" url=""
+  tag="$(curl -fsSL --retry 3 \
+    "${CHEZMOI_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
+    2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
+  [[ -n "${tag}" ]] || fatal "Could not resolve the latest chezmoi release."
+  ver="${tag#v}"
+  url="${CHEZMOI_REPO_URL}/releases/download/${tag}/chezmoi_${ver}_linux_amd64.deb"
+  info "Installing chezmoi ${tag} (${url##*/})..."
+  rm -f "${TARGET}/var/tmp/chezmoi.deb"
+  curl -fsSL --retry 3 -o "${TARGET}/var/tmp/chezmoi.deb" "${url}" ||
+    fatal "Failed to download chezmoi (${tag})."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y /var/tmp/chezmoi.deb
+  "
+  rm -f "${TARGET}/var/tmp/chezmoi.deb"
+}
+
 create_user() {
   # The Downloads dataset is created canmount=noauto (20-storage.sh) so no
   # zfs mount -a can pre-create a root-owned /home/<user>: adduser runs
@@ -383,6 +407,7 @@ phase_system() {
   install_base_packages
   install_nvidia_driver
   install_addon_artifacts
+  install_chezmoi
   configure_locale_tz
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
