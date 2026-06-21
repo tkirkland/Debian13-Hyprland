@@ -395,6 +395,7 @@ TARGET_BASE_PACKAGES=(
   console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig
   psmisc
+  grim slurp wf-recorder swappy wl-clipboard
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   "${AUDIO_PACKAGES[@]}"

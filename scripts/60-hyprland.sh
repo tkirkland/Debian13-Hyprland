@@ -447,6 +447,13 @@ hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
 -- Cycle wallpapers (swww): a different random image per output (secondary
 -- action, triple chord).
 hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
+-- Screenshots (grim/slurp) and screen recording (wf-recorder), traditional
+-- Print-key cluster. grimblast is not packaged in Debian, so bind the standard
+-- tools directly. Region capture covers arbitrary windows.
+hl.bind("Print", hl.dsp.exec_cmd([[sh -c 'grim - | wl-copy']]))                              -- full screen -> clipboard
+hl.bind("SHIFT + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | wl-copy']]))        -- region -> clipboard
+hl.bind("SUPER + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | swappy -f -']]))    -- region -> annotate (swappy)
+hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd([[sh -c 'pkill -INT wf-recorder || wf-recorder -f "$HOME/recording-$(date +%s).mp4"']])) -- toggle recording
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
