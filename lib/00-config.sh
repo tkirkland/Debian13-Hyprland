@@ -423,7 +423,7 @@ TARGET_BASE_PACKAGES=(
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
-  unzip fontconfig
+  unzip fontconfig ntfs-3g
   psmisc
   grim slurp wf-recorder swappy wl-clipboard
   shim-signed mokutil sbsigntool
