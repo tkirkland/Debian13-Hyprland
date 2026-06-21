@@ -742,6 +742,24 @@ vt = 1
 command = "${session_command}"
 user = "${session_user}"
 EOF
+  # Order greetd after the GPU's DRM node. greetd starts as soon as
+  # graphical.target's deps are met; on a fast boot that can be ~2s BEFORE
+  # nvidia-drm loads and pulls the console off the EFI framebuffer (efifb ->
+  # dummy -> nvidia-drm fbcon). When that handoff lands after the greeter has
+  # started, cage's console is yanked mid-switch and the active VT can bounce
+  # to an empty tty -- the greeter is running but invisible, leaving the user
+  # in a blank console. Waiting for /dev/dri/card0 makes cage initialize
+  # directly on the DRM device, so there is no later handoff to race. (The old
+  # ~43s boot hid this: the greeter always started long after the GPU console
+  # had settled. Hyprland needs a DRM device, so card0 always appears.)
+  mkdir -p "${TARGET}/etc/systemd/system/greetd.service.d"
+  cat >"${TARGET}/etc/systemd/system/greetd.service.d/after-drm.conf" <<'EOF'
+# Managed by installer.sh: start the greeter only after the GPU DRM node
+# exists, so cage opens on nvidia-drm instead of racing its console takeover.
+[Unit]
+After=dev-dri-card0.device
+Wants=dev-dri-card0.device
+EOF
   # NVIDIA session environment (issue #4): uwsm sources ~/.config/uwsm/env
   # into the systemd user session before Hyprland starts. These are the
   # Hyprland-wiki variables for NVIDIA GPUs; the chown -R below covers the
