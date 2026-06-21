@@ -1,0 +1,5 @@
+[submodule "assets/wallpapers"]
+	path = assets/wallpapers
+	url = https://github.com/tkirkland/Wallpaper-Bank.git
+	branch = main
+	shallow = true

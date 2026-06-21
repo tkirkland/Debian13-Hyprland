@@ -8,6 +8,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 info() { :; }
+warn() { :; }
 fatal() {
   printf 'fatal: %s\n' "$*" >&2
   return 1

@@ -433,6 +433,9 @@ hl.on("hyprland.start", function()
   -- and ships no unit/.desktop, so it starts from this hook. It restores the
   -- last-set wallpaper from its per-output cache on launch.
   hl.exec_cmd("swww-daemon")
+  -- First login only: set an initial wallpaper (swww has no cache yet). After
+  -- this, swww-daemon restores the cached selection on every later login.
+  hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/local/bin/swww-cycle && touch "$m"; }']])
   hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
 end)
 
@@ -441,6 +444,9 @@ end)
 -- triple chords (SUPER+SHIFT+key).
 -- Lock the session on demand; routes through hypridle's lock_cmd -> hyprlock.
 hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
+-- Cycle wallpapers (swww): a different random image per output (secondary
+-- action, triple chord).
+hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
@@ -544,6 +550,59 @@ listener {
 HYPRIDLE_CONF
   info "User config: ${#modules[@]} upstream modules + hypr-deb.lua" \
     "(${modules[*]})"
+}
+
+# Install the distro wallpaper set (the assets/wallpapers shallow submodule) to
+# /usr/share/backgrounds/hypr-deb and stage the swww-cycle helper. swww's
+# default config sets one on first login and SUPER+SHIFT+W cycles them.
+stage_wallpapers() {
+  local src="assets/wallpapers"
+  local dest="${TARGET}/usr/share/backgrounds/hypr-deb"
+  # The set is a shallow submodule. Online clones that skipped
+  # --recurse-submodules leave it empty; init it when a network is available.
+  # Offline/ISO builds ship it already checked out.
+  if [[ -z "$(ls -A "${src}" 2>/dev/null || true)" ]]; then
+    if ((${NETWORK_AVAILABLE:-0})); then
+      info "Initializing wallpaper submodule..."
+      git submodule update --init --depth 1 "${src}" 2>/dev/null ||
+        warn "Wallpaper submodule init failed; skipping default wallpapers."
+    else
+      warn "Wallpaper submodule absent and offline; skipping default wallpapers."
+    fi
+  fi
+  if [[ -n "$(ls -A "${src}" 2>/dev/null || true)" ]]; then
+    info "Installing wallpaper set to /usr/share/backgrounds/hypr-deb..."
+    mkdir -p "${dest}"
+    # Copy images (preserve subdirs, exclude the submodule's .git pointer file).
+    (cd "${src}" && tar -cf - --exclude=.git .) | (cd "${dest}" && tar -xf -)
+  fi
+  # Wallpaper cycle helper: a different random image per connected output.
+  install -d "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/swww-cycle" <<'EOF'
+#!/usr/bin/env bash
+# swww-cycle (installer.sh): assign a different random wallpaper to each
+# connected output from the system wallpaper set. Bound to SUPER+SHIFT+W and
+# run once on first login to set an initial wallpaper. Overridable via
+# SWWW_WALLPAPER_DIR / SWWW_TRANSITION.
+set -euo pipefail
+dir="${SWWW_WALLPAPER_DIR:-/usr/share/backgrounds/hypr-deb}"
+transition="${SWWW_TRANSITION:-any}"
+if ! swww query >/dev/null 2>&1; then
+  swww-daemon >/dev/null 2>&1 &
+  for _ in $(seq 1 20); do swww query >/dev/null 2>&1 && break; sleep 0.2; done
+fi
+mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
+[ "${#outputs[@]}" -gt 0 ] || exit 0
+mapfile -t imgs < <(find "$dir" -type f \
+  \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) | shuf)
+[ "${#imgs[@]}" -gt 0 ] || exit 0
+i=0
+for out in "${outputs[@]}"; do
+  swww img -o "$out" "${imgs[$(( i % ${#imgs[@]} ))]}" --transition-type "$transition"
+  i=$(( i + 1 ))
+done
+EOF
+  chmod +x "${TARGET}/usr/local/bin/swww-cycle"
 }
 
 configure_session() {
@@ -704,6 +763,7 @@ EOF
   ln -sf /usr/local/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   write_hypr_lua_config
+  stage_wallpapers
   in_target "
     set -e
     chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
