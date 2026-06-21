@@ -81,9 +81,12 @@ manual steps and NO dependency on the user's personal dotfiles.
   `/usr/local/bin`.
 - Add `swww` to `HYPR_BUILD_ORDER` (tag `v0.11.2`),
   `HYPR_REPO_URL["swww"]="https://github.com/LGFae/swww"`.
-- Toolchain: add a Rust toolchain (`cargo`, `rustc`) — verify trixie's `rustc`
-  meets swww's `rust-version`; otherwise pull from the pinned `sid` source like
-  `gcc-15`. Package delta: `liblz4-dev` (swww links system lz4 via pkg-config).
+- Toolchain: add `cargo` from **trixie-backports** (cargo/rustc 1.90 >= swww's
+  rust-version 1.89; trixie main ships 1.85, too old). Deliberately NOT sid:
+  sid is reserved for `gcc-15` (never backported), and backports packages are
+  rebuilt against trixie so they add no unstable surface. Wired via a pinned,
+  opt-in `write_backports_sources` mirroring the sid mechanism; `HYPR_BACKPORTS_PACKAGES`.
+  Package delta: `liblz4-dev` (swww links system lz4 via pkg-config).
 - **frozen-attribute scanner patch (REQUIRED):** the installer builds `wayland`
   from release tags (>= 1.24 ships the `frozen="true"` interface attribute),
   and swww `v0.11.2` pins `waybackend-scanner 0.6.2`, which panics on it. Stage

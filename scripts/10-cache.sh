@@ -41,9 +41,11 @@ cache_populate_debs() {
 
   info "Resolving full package closure in a scratch chroot..."
   debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
-  # The pinned sid source supplies gcc-15 (absent from trixie), so the
-  # offline cache carries the toolchain debs too.
+  # The pinned sid source supplies gcc-15 (absent from trixie) and
+  # trixie-backports supplies the Rust toolchain (cargo/rustc) for swww, so the
+  # offline cache carries both toolchain sets too.
   write_sid_toolchain_sources "${work}/closure"
+  write_backports_sources "${work}/closure"
   chroot "${work}/closure" /usr/bin/env bash -c "
     set -e
     echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
@@ -55,6 +57,8 @@ cache_populate_debs() {
       systemd-boot os-prober
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
       -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+      -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"

@@ -133,17 +133,19 @@ install_build_deps() {
   # serves both versions and the resolver picks what gcc-15 requires.
   if ((NETWORK_AVAILABLE)); then
     write_sid_toolchain_sources "${TARGET}"
+    write_backports_sources "${TARGET}"
     in_target "apt-get update"
     in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
       apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
     "
   else
     in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]} ${HYPR_BACKPORTS_PACKAGES[*]}
     "
   fi
   in_target "
@@ -162,6 +164,7 @@ install_build_deps() {
   # Record exactly what we may purge later (toolchain included; the
   # upgraded runtime libs are upgrades, not purge candidates).
   printf '%s\n' "${HYPR_BUILD_PACKAGES[@]}" "${HYPR_TOOLCHAIN_PACKAGES[@]}" \
+    "${HYPR_BACKPORTS_PACKAGES[@]}" \
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
 }
 

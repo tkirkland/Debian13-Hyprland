@@ -250,11 +250,16 @@ SID_MIRROR="${SID_MIRROR:-http://deb.debian.org/debian}"
 # from sid; the 100-pin alone would refuse those upgrades and everything
 # else stays on trixie. Kept out of HYPR_BUILD_PACKAGES so the general
 # build-deps install never resolves against sid.
-# cargo (pulls rustc) is here too: swww's cargo build needs rust-version 1.89,
-# above trixie's rustc, so it is sourced from sid like gcc-15. Build-time only
-# (purged with the rest of the toolchain). NOTE: verify sid's rustc still meets
-# swww's rust-version at install time; if it lags, swww needs rustup instead.
-HYPR_TOOLCHAIN_PACKAGES=(gcc-15 g++-15 cargo)
+HYPR_TOOLCHAIN_PACKAGES=(gcc-15 g++-15)
+
+# Rust for swww's cargo build. swww needs rust-version 1.89; trixie ships 1.85
+# (too old) but trixie-backports has cargo/rustc >= 1.90. Sourced from BACKPORTS
+# (not sid) on purpose: sid exists ONLY for gcc-15 (never backported), and
+# backports packages are rebuilt against trixie, so they widen no unstable
+# surface. Build-time only (purged with the rest of the toolchain). The cargo
+# binary is built from src:rustc, so this one package pulls the matching rustc.
+BACKPORTS_MIRROR="${BACKPORTS_MIRROR:-http://deb.debian.org/debian}"
+HYPR_BACKPORTS_PACKAGES=(cargo)
 
 # write_sid_toolchain_sources <root>
 #   Adds a sid source pinned to priority 100 under <root>: apt only takes
@@ -279,6 +284,31 @@ EOF
 # sid candidates are used only where trixie offers none.
 Package: *
 Pin: release a=unstable
+Pin-Priority: 100
+EOF
+}
+
+# trixie-backports source for the Rust toolchain (cargo/rustc >= 1.90 for
+# swww). Same controlled, pinned, opt-in shape as the sid source, but backports
+# is rebuilt against trixie, so it adds no unstable surface. Priority 100 means
+# nothing pulls from it unless asked with `-t trixie-backports`.
+write_backports_sources() {
+  local root="${1:-}"
+  mkdir -p "${root%/}/etc/apt/sources.list.d" \
+    "${root%/}/etc/apt/preferences.d"
+  cat >"${root%/}/etc/apt/sources.list.d/backports.sources" <<EOF
+Types: deb
+URIs: ${BACKPORTS_MIRROR}
+Suites: trixie-backports
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+  cat >"${root%/}/etc/apt/preferences.d/backports" <<'EOF'
+# Managed by hypr-deb: trixie-backports exists ONLY to supply a Rust toolchain
+# (cargo/rustc) new enough for swww. Priority 100 = never auto-upgrade; used
+# only when requested with `-t trixie-backports`.
+Package: *
+Pin: release a=trixie-backports
 Pin-Priority: 100
 EOF
 }
