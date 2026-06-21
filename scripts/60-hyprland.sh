@@ -365,6 +365,19 @@ write_hypr_lua_config() {
   ((${#modules[@]} > 0)) ||
     fatal "No section headers found in ${example} — upstream changed the" \
       "example format; the section splitter needs updating."
+  # Default app launcher: repoint the upstream example's `$menu` (bound to
+  # SUPER+R) at the hyprlauncher we build, instead of the example's default.
+  # Done by rewriting the assignment in whichever split module defines it,
+  # since the bind captures `menu`'s value at require() time (a later
+  # reassignment in hypr-deb.lua would not affect the already-registered bind).
+  local menu_mod=""
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    if grep -qE '^menu[[:space:]]*=' "${menu_mod}"; then
+      sed -i 's/^menu\([[:space:]]*=[[:space:]]*\).*/menu\1"hyprlauncher"/' \
+        "${menu_mod}"
+      break
+    fi
+  done
   for slug in "${modules[@]}"; do
     printf 'require("%s")\n' "${slug}" >>"${entry}"
   done

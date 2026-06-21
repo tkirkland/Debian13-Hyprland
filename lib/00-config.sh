@@ -188,6 +188,7 @@ HYPR_BUILD_ORDER=(
   hyprland
   hyprtoolkit
   hyprland-guiutils
+  hyprlauncher
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -212,6 +213,8 @@ declare -A HYPR_REPO_URL=(
   # is the qtutils successor, built on hyprwm's native hyprtoolkit.
   ["hyprtoolkit"]="${HYPR_GIT_BASE}/hyprtoolkit"
   ["hyprland-guiutils"]="${HYPR_GIT_BASE}/hyprland-guiutils"
+  # hyprlauncher: the hyprtoolkit-based application launcher (default SUPER+R).
+  ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Release-tag pattern per component when it differs from the default
@@ -283,6 +286,7 @@ HYPR_BUILD_PACKAGES=(
   libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
   libffi-dev libexpat1-dev libiniparser-dev
   libpugixml-dev libre2-dev
+  libicu-dev libqalculate-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
