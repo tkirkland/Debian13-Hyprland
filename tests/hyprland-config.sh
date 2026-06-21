@@ -133,6 +133,17 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
     "welcome exec registered on the hyprland.start autostart event"
   assert_contains "${deb}" "uwsm finalize" \
     "compositor finalizes the UWSM session on start"
+  # Default desktop keybinds + autostart (desktop-defaults batch).
+  assert_contains "${deb}" "swww-daemon" \
+    "swww-daemon autostarts on session start"
+  assert_contains "${deb}" "loginctl lock-session" \
+    "SUPER+L locks the session (hyprlock via hypridle)"
+  assert_contains "${deb}" "/usr/local/bin/swww-cycle" \
+    "SUPER+SHIFT+W cycles wallpapers"
+  assert_contains "${deb}" "grim -g" \
+    "screenshot region bind present (grim/slurp)"
+  assert_contains "${deb}" "wf-recorder" \
+    "screen-record toggle bind present (wf-recorder)"
 else
   echo "  FAIL: hypr-deb.lua module missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
