@@ -212,9 +212,31 @@ EOF
   fi
 }
 
+build_custom_swww() {
+  info "Building swww ${HYPR_RESOLVED_TAG[swww]} (cargo)..."
+  in_target "
+    set -e
+    cd '${HYPR_SRC_DIR}/swww'
+    # swww v0.11.x pins waybackend-scanner 0.6.2, whose code generator panics
+    # on the informational frozen=\"true\" interface attribute present in
+    # wayland >= 1.24 (we build wayland from release tags). The attribute has
+    # no codegen meaning, so strip it from the core wayland.xml the scanner
+    # reads — simpler than vendoring a patched scanner crate, and it leaves the
+    # committed Cargo.lock usable with --locked.
+    if [[ -f /usr/local/share/wayland/wayland.xml ]]; then
+      sed -i 's/ frozen=\"true\"//g' /usr/local/share/wayland/wayland.xml
+    fi
+    export CARGO_HOME=/tmp/swww-cargo
+    cargo build --release --locked
+    install -Dm755 target/release/swww target/release/swww-daemon \
+      -t /usr/local/bin/
+    rm -rf /tmp/swww-cargo
+  "
+}
+
 # Builds CMake projects (the hyprwm stack), meson projects (xkbcommon,
 # wayland-protocols, uwsm), and components with a build_custom_<name>
-# override (lua).
+# override (lua's static lib, swww's cargo build).
 build_one() {
   local name="$1" custom_fn="build_custom_${1//-/_}"
   if declare -f "${custom_fn}" >/dev/null; then
@@ -378,6 +400,15 @@ write_hypr_lua_config() {
       break
     fi
   done
+  # swww manages the wallpaper, so disable Hyprland's built-in default wallpaper
+  # and logo (else the mascot flashes before swww draws). Patch the values in
+  # whichever upstream-split module sets them inside its misc config table.
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i -E \
+      -e 's/(force_default_wallpaper[[:space:]]*=[[:space:]]*)-?[0-9]+/\10/' \
+      -e 's/(disable_hyprland_logo[[:space:]]*=[[:space:]]*)(false|true)/\1true/' \
+      "${menu_mod}"
+  done
   for slug in "${modules[@]}"; do
     printf 'require("%s")\n' "${slug}" >>"${entry}"
   done
@@ -398,6 +429,10 @@ hl.on("hyprland.start", function()
   -- session is launched by uwsm but never actually managed by it. Harmless
   -- no-op if the session was not started through uwsm.
   hl.exec_cmd("uwsm finalize")
+  -- Wallpaper daemon (swww). Needs the compositor's Wayland session as parent
+  -- and ships no unit/.desktop, so it starts from this hook. It restores the
+  -- last-set wallpaper from its per-output cache on launch.
+  hl.exec_cmd("swww-daemon")
   hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
 end)
 
