@@ -191,6 +191,7 @@ HYPR_BUILD_ORDER=(
   hyprlock
   hypridle
   hyprlauncher
+  swww
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -220,6 +221,8 @@ declare -A HYPR_REPO_URL=(
   ["hypridle"]="${HYPR_GIT_BASE}/hypridle"
   # hyprlauncher: the hyprtoolkit-based application launcher (default SUPER+R).
   ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
+  # swww: animated wallpaper daemon (cargo build via build_custom_swww).
+  ["swww"]="https://github.com/LGFae/swww"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Release-tag pattern per component when it differs from the default
@@ -247,7 +250,11 @@ SID_MIRROR="${SID_MIRROR:-http://deb.debian.org/debian}"
 # from sid; the 100-pin alone would refuse those upgrades and everything
 # else stays on trixie. Kept out of HYPR_BUILD_PACKAGES so the general
 # build-deps install never resolves against sid.
-HYPR_TOOLCHAIN_PACKAGES=(gcc-15 g++-15)
+# cargo (pulls rustc) is here too: swww's cargo build needs rust-version 1.89,
+# above trixie's rustc, so it is sourced from sid like gcc-15. Build-time only
+# (purged with the rest of the toolchain). NOTE: verify sid's rustc still meets
+# swww's rust-version at install time; if it lags, swww needs rustup instead.
+HYPR_TOOLCHAIN_PACKAGES=(gcc-15 g++-15 cargo)
 
 # write_sid_toolchain_sources <root>
 #   Adds a sid source pinned to priority 100 under <root>: apt only takes
@@ -293,6 +300,7 @@ HYPR_BUILD_PACKAGES=(
   libpugixml-dev libre2-dev
   libicu-dev libqalculate-dev
   libsdbus-c++-dev libpam0g-dev
+  liblz4-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
