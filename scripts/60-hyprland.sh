@@ -400,7 +400,113 @@ hl.on("hyprland.start", function()
   hl.exec_cmd("uwsm finalize")
   hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
 end)
+
+-- Default keybinds (installer baseline; the user's chezmoi dotfiles override
+-- these). Primary actions are dual chords (SUPER+key), secondary actions are
+-- triple chords (SUPER+SHIFT+key).
+-- Lock the session on demand; routes through hypridle's lock_cmd -> hyprlock.
+hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
 EOF
+
+  # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
+  # PAM (/etc/pam.d/hyprlock, staged in configure_session); hypridle drives the
+  # dim -> DPMS-off -> lock idle chain and locks before suspend. Quoted heredocs
+  # keep hyprlock's $TIME/$FAIL/$font variables literal.
+  cat >"${cfg_dir}/hyprlock.conf" <<'HYPRLOCK_CONF'
+# hyprlock — screen locker (issue #71)
+# Auth uses PAM via /etc/pam.d/hyprlock (auth include common-auth).
+
+$font = Monospace
+
+general {
+    hide_cursor = true
+}
+
+# Animations disabled: the fadeIn keeps presenting frames after lock, and each
+# frame re-powers the display against hypridle's post-lock `dpms off`, causing a
+# visible on/off/on flicker before it settles. Painting once keeps it clean.
+animations {
+    enabled = false
+}
+
+background {
+    monitor =
+    color = rgb(20, 24, 32)
+}
+
+# Clock.
+label {
+    monitor =
+    text = $TIME
+    font_size = 64
+    font_family = $font
+    color = rgba(216, 222, 233, 0.95)
+    position = 0, 120
+    halign = center
+    valign = center
+}
+
+input-field {
+    monitor =
+    size = 280, 50
+    outline_thickness = 3
+    dots_size = 0.25
+    dots_spacing = 0.3
+    inner_color = rgba(0, 0, 0, 0.35)
+    outer_color = rgba(33ccffee) rgba(00ff99ee) 45deg
+    check_color = rgba(00ff99ee) rgba(ff6633ee) 120deg
+    fail_color = rgba(ff6633ee) rgba(ff0066ee) 40deg
+    font_color = rgb(200, 200, 200)
+    fade_on_empty = false
+    rounding = 12
+    font_family = $font
+    placeholder_text = <i>Password…</i>
+    fail_text = <i>$FAIL ($ATTEMPTS)</i>
+    position = 0, -40
+    halign = center
+    valign = center
+}
+HYPRLOCK_CONF
+  cat >"${cfg_dir}/hypridle.conf" <<'HYPRIDLE_CONF'
+# hypridle — idle management (issue #72)
+# Chain: dim 5m -> DPMS off 7m -> lock 8m. Suspend is left disabled (see below).
+# DPMS-off intentionally precedes lock: waking the screen between 7-8min returns
+# to the unlocked desktop by design (single-user machine).
+
+general {
+    lock_cmd = pidof hyprlock || hyprlock       # never start a second hyprlock
+    before_sleep_cmd = loginctl lock-session     # lock before any suspend
+    after_sleep_cmd = sleep 2 && hyprctl dispatch 'hl.dsp.dpms("on")'
+}
+
+# 5 min — dim the panel (saves+restores current brightness).
+listener {
+    timeout = 300
+    on-timeout = brightnessctl -s set 10%
+    on-resume = brightnessctl -r
+}
+
+# 7 min — power the screen off (DPMS). Before lock, on purpose.
+listener {
+    timeout = 420
+    on-timeout = hyprctl dispatch 'hl.dsp.dpms("off")'
+    on-resume = hyprctl dispatch 'hl.dsp.dpms("on")'
+}
+
+# 8 min — lock the session (routes through general.lock_cmd -> hyprlock), then
+# re-assert DPMS off (hyprlock wakes the display to draw its surface).
+listener {
+    timeout = 480
+    on-timeout = loginctl lock-session && sleep 1 && hyprctl dispatch 'hl.dsp.dpms("off")'
+}
+
+# Suspend is left disabled: many laptops only offer s2idle (no deep S3) and may
+# fail to resume. Re-enable deliberately once resume is verified on the machine.
+# listener {
+#     timeout = 1800
+#     on-timeout = systemctl suspend
+# }
+HYPRIDLE_CONF
   info "User config: ${#modules[@]} upstream modules + hypr-deb.lua" \
     "(${modules[*]})"
 }
@@ -546,6 +652,22 @@ export __GLX_VENDOR_LIBRARY_NAME=nvidia
 export GBM_BACKEND=nvidia-drm
 EOF
   fi
+  # hyprlock PAM service (issue #71): authenticate the lock screen against the
+  # system stack. hypridle (issue #72) is enabled for the user by linking its
+  # unit into graphical-session.target.wants — a plain symlink (not `systemctl
+  # --global enable`) so it works even when the stack is built at first boot:
+  # the link dangles until the unit lands and resolves at session start.
+  mkdir -p "${TARGET}/etc/pam.d"
+  cat >"${TARGET}/etc/pam.d/hyprlock" <<'EOF'
+# PAM config for hyprlock (installer.sh, issue #71).
+auth     include common-auth
+account  include common-account
+password include common-password
+session  include common-session
+EOF
+  mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
+  ln -sf /usr/local/lib/systemd/user/hypridle.service \
+    "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   write_hypr_lua_config
   in_target "
     set -e

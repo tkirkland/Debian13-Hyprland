@@ -188,6 +188,8 @@ HYPR_BUILD_ORDER=(
   hyprland
   hyprtoolkit
   hyprland-guiutils
+  hyprlock
+  hypridle
   hyprlauncher
   uwsm
 )
@@ -213,6 +215,9 @@ declare -A HYPR_REPO_URL=(
   # is the qtutils successor, built on hyprwm's native hyprtoolkit.
   ["hyprtoolkit"]="${HYPR_GIT_BASE}/hyprtoolkit"
   ["hyprland-guiutils"]="${HYPR_GIT_BASE}/hyprland-guiutils"
+  # hyprlock (screen lock, PAM) + hypridle (idle manager) — issues #71/#72.
+  ["hyprlock"]="${HYPR_GIT_BASE}/hyprlock"
+  ["hypridle"]="${HYPR_GIT_BASE}/hypridle"
   # hyprlauncher: the hyprtoolkit-based application launcher (default SUPER+R).
   ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
@@ -287,6 +292,7 @@ HYPR_BUILD_PACKAGES=(
   libffi-dev libexpat1-dev libiniparser-dev
   libpugixml-dev libre2-dev
   libicu-dev libqalculate-dev
+  libsdbus-c++-dev libpam0g-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
