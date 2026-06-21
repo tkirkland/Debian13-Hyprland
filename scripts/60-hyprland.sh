@@ -272,9 +272,17 @@ purge_build_deps() {
     return 0
   fi
   info "Pinning runtime libraries of built binaries..."
+  # Scan every kept /usr/local/bin tool, not just Hyprland: the protocol
+  # code generators hyprwayland-scanner and hyprwire-scanner link
+  # libpugixml.so.1 (package libpugixml1v5), whose only -dev provider
+  # (libpugixml-dev) is a purged build dep. Pinning solely off Hyprland +
+  # libs leaves those scanners' runtime libs unprotected, so the purge
+  # strips libpugixml1v5 and the kept scanners break for every later
+  # source build (hyprlock/hypridle/hyprlauncher/swww add-ons). ldd on a
+  # non-ELF entry just warns to stderr (suppressed).
   in_target "
     set -e
-    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* 2>/dev/null |
+    ldd /usr/local/bin/* /usr/local/lib/lib*.so* 2>/dev/null |
       grep -oE '/[^ ]+\.so[^ ]*' | sort -u |
       xargs -r -n1 -- realpath 2>/dev/null | sort -u |
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
@@ -302,8 +310,8 @@ purge_build_deps() {
       apt-get autoremove --purge -y
     "
   fi
-  in_target "! ldd /usr/local/bin/Hyprland | grep -q 'not found'" ||
-    fatal "Purge removed libraries Hyprland needs (ldd reports 'not found')."
+  in_target "! ldd /usr/local/bin/* 2>/dev/null | grep -q 'not found'" ||
+    fatal "Purge removed libraries a /usr/local/bin tool needs (ldd reports 'not found')."
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
 }
 
