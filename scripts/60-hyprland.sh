@@ -520,9 +520,17 @@ input-field {
 HYPRLOCK_CONF
   cat >"${cfg_dir}/hypridle.conf" <<'HYPRIDLE_CONF'
 # hypridle — idle management (issue #72)
-# Chain: dim 5m -> DPMS off 7m -> lock 8m. Suspend is left disabled (see below).
-# DPMS-off intentionally precedes lock: waking the screen between 7-8min returns
-# to the unlocked desktop by design (single-user machine).
+# Chain: dim 5m -> lock 7m -> DPMS off 8m. Suspend left disabled (see below).
+#
+# Ordering is load-bearing and evidence-backed (hyprlock display-wedge
+# investigation, 2026-06-21). LOCK must come BEFORE DPMS-off: if DPMS powers the
+# output off while/before hyprlock owns it, the compositor cannot reconcile the
+# unlock repaint against a powered-down output — the session authenticates but
+# never repaints, a black "frozen" screen recoverable only by a VT switch (input
+# and PAM keep working the whole time; it is purely a display/present wedge).
+# Locking while the panel is lit lets hyprlock composite cleanly; the DPMS-off
+# then carries a balanced on-resume to re-power on wake. No DPMS-off before the
+# lock, and no `&& sleep 1 && dpms off` re-assert against a live hyprlock.
 
 general {
     lock_cmd = pidof hyprlock || hyprlock       # never start a second hyprlock
@@ -537,18 +545,19 @@ listener {
     on-resume = brightnessctl -r
 }
 
-# 7 min — power the screen off (DPMS). Before lock, on purpose.
+# 7 min — lock the session while the panel is still lit, so hyprlock composites
+# its surface before anything goes dark.
 listener {
     timeout = 420
-    on-timeout = hyprctl dispatch 'hl.dsp.dpms("off")'
-    on-resume = hyprctl dispatch 'hl.dsp.dpms("on")'
+    on-timeout = loginctl lock-session
 }
 
-# 8 min — lock the session (routes through general.lock_cmd -> hyprlock), then
-# re-assert DPMS off (hyprlock wakes the display to draw its surface).
+# 8 min — power the screen off, after the lock is up. The paired on-resume wakes
+# the panel on return, with hyprlock already present to take the password.
 listener {
     timeout = 480
-    on-timeout = loginctl lock-session && sleep 1 && hyprctl dispatch 'hl.dsp.dpms("off")'
+    on-timeout = hyprctl dispatch 'hl.dsp.dpms("off")'
+    on-resume = hyprctl dispatch 'hl.dsp.dpms("on")'
 }
 
 # Suspend is left disabled: many laptops only offer s2idle (no deep S3) and may
