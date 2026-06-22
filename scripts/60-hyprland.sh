@@ -427,6 +427,15 @@ write_hypr_lua_config() {
 -- keeps appearing until actually acknowledged. Lua long brackets keep the
 -- sh quoting sane.
 hl.on("hyprland.start", function()
+  -- Recover external displays the greeter left HPD-dark. The greetd wrapper
+  -- disables non-primary outputs with `wlr-randr --off`; on NVIDIA that drops
+  -- the connector's hot-plug detect (kernel marks it `disconnected`), so
+  -- Hyprland skips it at start. Forcing a sysfs re-probe makes the kernel
+  -- re-detect the sink and the compositor applies the monitor config live.
+  -- Needs root (sysfs status write) -> fixed-command NOPASSWD helper, staged by
+  -- the installer at /usr/local/bin/drm-reprobe. Fired first so the external
+  -- comes up as early as possible.
+  hl.exec_cmd("sudo /usr/local/bin/drm-reprobe")
   -- Finalize the UWSM session: activates graphical-session.target, imports
   -- the session environment, and runs XDG autostart. Without this the
   -- session is launched by uwsm but never actually managed by it. Harmless
@@ -765,6 +774,43 @@ export __GLX_VENDOR_LIBRARY_NAME=nvidia
 export GBM_BACKEND=nvidia-drm
 EOF
   fi
+  # External-display recovery (DP-3 HPD-dark after login). The greeter wrapper
+  # disables every non-primary output with `wlr-randr --output <conn> --off`.
+  # On NVIDIA that disable leaves the connector hot-plug-detect dark: the kernel
+  # reports it `disconnected`, so Hyprland enumerates nothing on it at session
+  # start and the external stays off (the wrapper's "Hyprland re-enables them"
+  # assumption is false here). Force a sysfs re-probe at hyprland.start (wired in
+  # write_hypr_lua_config); the running compositor consumes the resulting uevent
+  # live. Proven on the live box: a single `echo detect` recovered the LG
+  # ultrawide on DP-3 in ~2s with no restart. The status write needs root, so
+  # ship a fixed-command NOPASSWD helper.
+  install -d "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/drm-reprobe" <<'EOF'
+#!/usr/bin/env bash
+# Staged by installer.sh: force a DRM hot-plug re-probe of external connectors
+# the greeter left HPD-dark, so Hyprland re-detects them at login. eDP (the
+# built-in panel) is skipped — it is never disabled. No-op on a connector that
+# already reads `connected`, so it never disturbs a healthy display.
+set -u
+for path in /sys/class/drm/card*-*/status; do
+  name=${path%/status}; name=${name##*/}
+  case "$name" in *eDP*) continue ;; esac
+  if [[ "$(cat "$path" 2>/dev/null)" == disconnected ]]; then
+    echo detect > "$path" 2>/dev/null || true
+  fi
+done
+EOF
+  chmod 755 "${TARGET}/usr/local/bin/drm-reprobe"
+  # NOPASSWD for the single fixed command (no args) -> minimal privilege; the
+  # hyprland.start hook runs it as ${TARGET_USERNAME} via sudo (user is in the
+  # sudo group, and Debian's /etc/sudoers @includedir's /etc/sudoers.d).
+  install -d -m 755 "${TARGET}/etc/sudoers.d"
+  cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
+# Managed by installer.sh: let the desktop user force a DRM connector re-probe
+# at Hyprland start, recovering an external display the greeter disabled.
+${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/local/bin/drm-reprobe
+EOF
+  chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
   # hyprlock PAM service (issue #71): authenticate the lock screen against the
   # system stack. hypridle (issue #72) is enabled for the user by linking its
   # unit into graphical-session.target.wants — a plain symlink (not `systemctl
@@ -785,6 +831,9 @@ EOF
   stage_wallpapers
   in_target "
     set -e
+    # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
+    # shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
     chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
     # tuigreet --remember writes its cache as _greetd; the Debian package
     # does not create the directory, and a greeter that cannot write it
