@@ -429,36 +429,6 @@ options snd_intel_dspcfg dsp_driver=3
 EOF
 }
 
-# USB mass storage is never boot-critical here: root is ZFS-on-NVMe and the
-# ESP is on the RAID1 set, so nothing the initramfs needs lives on USB. A USB
-# SSD/enclosure cold-plugged during the initramfs can still stall boot, though
-# -- e.g. the SK hynix Tube T31 (152e:7003) browns out at cold power-up and its
-# first SCSI read times out for ~30s (uas_eh_abort -> device reset) before the
-# initramfs continues. Omitting uas/usb-storage from the initramfs defers that
-# probe to userspace, where the same flaky device is harmless (not in fstab or
-# the pool). Like configure_audio_quirks, the next update-initramfs -u -k all
-# (configure_zfs_boot_support) bakes this in without a second rebuild.
-configure_initramfs_storage_quirks() {
-  mkdir -p "${TARGET}/etc/initramfs-tools/hooks"
-  cat >"${TARGET}/etc/initramfs-tools/hooks/zz-omit-usbstorage" <<'EOF'
-#!/bin/sh
-# Managed by installer.sh: omit USB mass-storage drivers from the initramfs.
-# Root is ZFS-on-NVMe so USB storage is never needed to boot; excluding it
-# stops a flaky USB SSD/enclosure (e.g. SK hynix Tube T31, 152e:7003) from
-# stalling early boot with a ~30s uas command timeout during cold-plug. The
-# device still comes up normally in userspace. Reverse: delete this file +
-# update-initramfs -u.
-PREREQ=""
-prereqs() { echo "$PREREQ"; }
-case "$1" in prereqs) prereqs; exit 0 ;; esac
-. /usr/share/initramfs-tools/hook-functions
-for mod in uas usb-storage; do
-  find "${DESTDIR}/usr/lib/modules" -name "${mod}.ko*" -type f -delete 2>/dev/null || true
-done
-EOF
-  chmod +x "${TARGET}/etc/initramfs-tools/hooks/zz-omit-usbstorage"
-}
-
 phase_system() {
   write_identity
   write_fstab
@@ -472,9 +442,7 @@ phase_system() {
   configure_locale_tz
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
-  # captures the modprobe.d drop-in and the initramfs hook without a second
-  # rebuild.
+  # captures the modprobe.d drop-in without a second rebuild.
   configure_audio_quirks
-  configure_initramfs_storage_quirks
   configure_zfs_boot_support
 }
