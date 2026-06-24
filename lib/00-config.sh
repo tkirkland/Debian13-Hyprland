@@ -89,10 +89,14 @@ USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
-# --local-rtc: the hardware clock keeps LOCAL time instead of UTC. Only
-# useful when dual booting Windows (which assumes a local-time RTC and
-# would otherwise skew the clock on every reboot); leave at UTC otherwise.
-RTC_LOCAL_TIME="${RTC_LOCAL_TIME:-0}"
+# Hardware clock (RTC) interpretation. No default: the user must choose, via
+# --rtc=<utc|local> or the interactive prompt (require_rtc_choice). Neither is
+# assumed — an unset value is an error before the system phase runs.
+#   utc   = RTC holds UTC (Linux-only, or Windows configured for UTC)
+#   local = RTC holds local time (dual boot with Windows, which assumes a
+#           local-time RTC and would otherwise skew the clock on every reboot)
+# Written to the target's /etc/adjtime by configure_locale_tz (40-system.sh).
+RTC_MODE="${RTC_MODE:-}"
 
 # --- Cache (network-preferred, offline-complete) -----------------------------
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
