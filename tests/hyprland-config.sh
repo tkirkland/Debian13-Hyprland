@@ -165,6 +165,20 @@ if [[ -x "${wrapper}" ]]; then
     "wrapper routes session output to the journal"
   assert_contains "$(<"${wrapper}")" "UWSM_SILENT_START=2" \
     "wrapper suppresses uwsm startup chatter"
+  # Consumer-path guard (dead-greeter regression): uwsm is part of the
+  # source-compiled stack, now shipped as a .deb at prefix /usr, so the
+  # wrapper must exec /usr/bin/uwsm. A stale /usr/local/bin/uwsm reference
+  # would fail to launch the session ("failed to execute .../uwsm").
+  assert_contains "$(<"${wrapper}")" "exec /usr/bin/systemd-cat -t hypr-session" \
+    "wrapper routes through systemd-cat at its real /usr/bin path"
+  assert_contains "$(<"${wrapper}")" "/usr/bin/uwsm start -- hyprland.desktop" \
+    "wrapper execs the compiled uwsm at its /usr prefix (not /usr/local)"
+  if [[ "$(<"${wrapper}")" == */usr/local/bin/uwsm* ]]; then
+    echo "  FAIL: wrapper still references the pre-move /usr/local/bin/uwsm" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: wrapper has no stale /usr/local/bin/uwsm reference"
+  fi
 else
   echo "  FAIL: hypr-session wrapper missing or not executable" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))

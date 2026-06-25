@@ -689,7 +689,7 @@ configure_session() {
 # Staged by installer.sh: greetd session entry. Session output goes to
 # the journal (journalctl -t hypr-session), never to the VT.
 UWSM_SILENT_START=2 exec /usr/bin/systemd-cat -t hypr-session \
-  /usr/local/bin/uwsm start -- hyprland.desktop
+  /usr/bin/uwsm start -- hyprland.desktop
 EOF
   chmod +x "${TARGET}/usr/local/bin/hypr-session"
   mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
@@ -1138,7 +1138,11 @@ RestartSec=1
 WantedBy=graphical-session.target
 HYPR_DIM_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
-  ln -sf /usr/local/lib/systemd/user/hypridle.service \
+  # hypridle is part of the source-compiled stack, now shipped as a .deb with
+  # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
+  # hand-written hypr-dim.service below stays in /usr/local (installer glue,
+  # not owned by any .deb).
+  ln -sf /usr/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   ln -sf /usr/local/lib/systemd/user/hypr-dim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypr-dim.service"

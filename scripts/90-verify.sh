@@ -55,15 +55,15 @@ phase_verify() {
       install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
       runuser -u '${TARGET_USERNAME}' -- \
         env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
-        /usr/local/bin/Hyprland --version
+        /usr/bin/Hyprland --version
       rm -rf /tmp/hypr-verify-rt
     "
     vcheck "Hyprland links resolve" in_target \
-      "! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
+      "! ldd /usr/bin/Hyprland | grep -q 'not found'"
     # guiutils builds every util from its root CMakeLists; if a future tag
     # drops or renames the welcome util, fail loudly here (issue #11).
     vcheck "welcome app installed" \
-      test -x "${TARGET}/usr/local/bin/hyprland-welcome"
+      test -x "${TARGET}/usr/bin/hyprland-welcome"
   fi
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
@@ -75,8 +75,8 @@ phase_verify() {
     "${TARGET}/etc/greetd/config.toml" 2>/dev/null || true)"
   vcheck "greetd session command binary exists (${greeter_bin:-none})" bash -c \
     "[[ -n '${greeter_bin}' && -x '${TARGET}${greeter_bin}' ]]"
-  vcheck "session launcher at /usr/local/bin/uwsm" \
-    test -x "${TARGET}/usr/local/bin/uwsm"
+  vcheck "session launcher at /usr/bin/uwsm" \
+    test -x "${TARGET}/usr/bin/uwsm"
   # The quiet-VT wrapper both session modes launch through (issue #12).
   vcheck "session wrapper at /usr/local/bin/hypr-session" \
     test -x "${TARGET}/usr/local/bin/hypr-session"
