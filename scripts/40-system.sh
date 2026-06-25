@@ -390,7 +390,12 @@ create_user() {
     # video: brightnessctl writes the backlight through sysfs (Debian builds it
     # without logind); the brightness-udev rule makes that file group-writable
     # by 'video', so the brightness keys are dead without this membership (#48).
-    usermod -aG sudo,adm,systemd-journal,video '${TARGET_USERNAME}'
+    # i2c: external-display brightness over DDC/CI talks to /dev/i2c-* (the i2c-dev
+    # nodes are group i2c via udev); membership lets brightness-sync/ddcutil drive
+    # external monitors without root (#66). groupadd it first — i2c-tools' postinst
+    # usually creates it, but on a resumed run the package may already be stamped.
+    getent group i2c >/dev/null || groupadd i2c
+    usermod -aG sudo,adm,systemd-journal,video,i2c '${TARGET_USERNAME}'
     # Persistent journal (journald Storage=auto): without this directory,
     # per-user journals are volatile and unreadable by their own user.
     install -d -m 2755 -g systemd-journal /var/log/journal
@@ -457,6 +462,24 @@ options snd_intel_dspcfg dsp_driver=3
 EOF
 }
 
+# External-display brightness over DDC/CI (issue #66). ddcci-dkms builds the
+# `ddcci` backlight driver (exposing external monitors as /sys/class/backlight
+# nodes that brightnessctl can set), and `i2c-dev` exposes the /dev/i2c-* buses
+# DDC/CI rides on. Neither is auto-loaded at boot, so drop a modules-load.d file
+# to load both early. Unconditional: harmless on a machine with no DDC/CI-capable
+# external display (the modules just find nothing to attach to).
+configure_ddcci() {
+  info "Enabling ddcci + i2c-dev kernel modules for external-display brightness."
+  install -d "${TARGET}/etc/modules-load.d"
+  cat >"${TARGET}/etc/modules-load.d/ddcci.conf" <<'EOF'
+# Managed by installer.sh (issue #66): load the modules backing external-display
+# brightness over DDC/CI. ddcci exposes external monitors as /sys/class/backlight
+# nodes (brightnessctl-settable); i2c-dev exposes the /dev/i2c-* buses DDC/CI uses.
+ddcci
+i2c-dev
+EOF
+}
+
 phase_system() {
   write_identity
   write_fstab
@@ -471,7 +494,8 @@ phase_system() {
   configure_time_sync
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
-  # captures the modprobe.d drop-in without a second rebuild.
+  # captures the modprobe.d/modules-load.d drop-ins without a second rebuild.
   configure_audio_quirks
+  configure_ddcci
   configure_zfs_boot_support
 }
