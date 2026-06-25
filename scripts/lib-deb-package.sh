@@ -3,6 +3,8 @@
 # upstream-vs-cached freshness check. Sourced by tools/build-iso.sh on a
 # networked trixie/amd64 build host. NOT used at install time.
 
+if ! declare -f info >/dev/null; then info(){ printf '%s\n' "$*" >&2; }; fi
+
 # Release tag (vX.Y.Z | X.Y.Z) -> Debian version X.Y.Z-1.
 tag_to_debver() {
   local tag="${1#v}"
@@ -65,4 +67,26 @@ package_to_deb() {
   local out="${pool}/${name}_${version}_${arch}.deb"
   dpkg-deb --root-owner-group --build "${destdir}" "${out}" >/dev/null
   printf '%s\n' "${out}"
+}
+
+# Build-time: compile component $1 into a .deb in pool $2, skipping the compile
+# when a cached .deb is already at/above upstream. Relies on
+# resolve_latest_release_tag/stage_source/build_one (scripts/60-hyprland.sh) and
+# config maps HYPR_REPO_URL/HYPR_TAG_PATTERN/HYPR_DEB_DEPENDS/ARCH. Chroot/DESTDIR
+# wiring for the build root is completed in Phase 3.
+build_component_to_deb() {
+  local name="$1" pool="$2" tag debver destdir out
+  tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
+  debver="$(tag_to_debver "${tag}")"
+  if ! deb_needs_rebuild "${pool}" "${name}" "${debver}"; then
+    info "reuse cached ${name} ${debver} (upstream not newer)"
+    return 0
+  fi
+  HYPR_RESOLVED_TAG["${name}"]="${tag}"
+  stage_source "${name}"
+  destdir="$(mktemp -d)"
+  HYPR_DESTDIR="${destdir}" build_one "${name}"
+  out="$(package_to_deb "${destdir}" "${name}" "${debver}" "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${pool}")"
+  rm -rf "${destdir}"
+  info "packaged ${out}"
 }
