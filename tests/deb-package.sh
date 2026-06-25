@@ -49,4 +49,25 @@ else
   echo "  skip: dpkg-deb not installed"
 fi
 
+if command -v dpkg-deb >/dev/null; then
+  gtmp="$(mktemp -d)"; gpool="${gtmp}/pool"; mkdir -p "${gpool}"
+  : >"${gpool}/foo_1.2.0-1_amd64.deb"
+  declare -gA HYPR_REPO_URL=([foo]="https://example/foo") HYPR_TAG_PATTERN=() HYPR_DEB_DEPENDS=([foo]="libc6") HYPR_RESOLVED_TAG=()
+  ARCH=amd64
+  resolve_latest_release_tag() { echo "v1.2.0"; }     # upstream == cached -> skip
+  stage_source() { :; }
+  build_one() { echo called >>"${gtmp}/calls"; }
+  build_component_to_deb foo "${gpool}" >/dev/null 2>&1
+  [[ ! -f "${gtmp}/calls" ]] && echo "  ok: gate skips build when upstream not newer" \
+    || { echo "  FAIL: built despite not newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  resolve_latest_release_tag() { echo "v1.3.0"; }      # upstream newer -> build
+  build_one() { mkdir -p "${HYPR_DESTDIR}/usr/bin"; : >"${HYPR_DESTDIR}/usr/bin/foo"; }
+  build_component_to_deb foo "${gpool}" >/dev/null 2>&1
+  [[ -f "${gpool}/foo_1.3.0-1_amd64.deb" ]] && echo "  ok: gate builds+packages when newer" \
+    || { echo "  FAIL: no new deb when upstream newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  rm -rf "${gtmp}"
+else
+  echo "  skip: dpkg-deb not installed (gate test)"
+fi
+
 finish_test
