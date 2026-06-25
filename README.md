@@ -170,6 +170,11 @@ Common flags (see `--help` for the full list):
                                        pinned installs are apt-mark held
 --jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
+--ntp="<servers>"                      space-separated NTP servers for the
+                                       installed system's systemd-timesyncd
+                                       (optional; empty keeps Debian's stock
+                                       pool/DHCP servers). Time sync is
+                                       installed and enabled either way
 --cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
 --fresh                                discard phase state and start over
 --yes                                  unattended mode; requires USER_PASSWORD
@@ -180,8 +185,13 @@ Common flags (see `--help` for the full list):
 
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
-`TIMEZONE`, `LOCALE`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and more — see
-`lib/00-config.sh`.
+`TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and
+more — see `lib/00-config.sh`.
+
+The installed system has time synchronization enabled by default: `systemd-timesyncd`
+is installed and enabled in the target, so the clock stays disciplined after
+boot (Debian's stock NTP pool unless `--ntp`/`NTP_SERVERS` pins specific
+servers). timesyncd is a client only and never serves time to a LAN.
 
 With `--bootloader=grub`, the installer runs `os-prober` and adds chainloader
 menu entries for other detected OSes (e.g. Windows) — GRUB writes a static
