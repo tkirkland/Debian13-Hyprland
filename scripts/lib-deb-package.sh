@@ -13,6 +13,10 @@ tag_to_debver() {
 # for package $2. Empty string if none. Uses dpkg --compare-versions so the
 # ordering is correct (not lexical).
 cached_deb_version() {
+  command -v dpkg >/dev/null 2>&1 || {
+    echo "cached_deb_version: dpkg not found (build-time/trixie-host only)" >&2
+    return 1
+  }
   local pool="$1" name="$2" best="" ver=""
   local f base
   for f in "${pool}/${name}"_*.deb; do
