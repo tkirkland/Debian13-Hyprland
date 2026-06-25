@@ -18,4 +18,13 @@ assert_eq "0.10.0-1" "$(cached_deb_version "${tmp}" swww)" "cached_deb_version p
 assert_eq ""         "$(cached_deb_version "${tmp}" nope)" "cached_deb_version empty when absent"
 rm -rf "${tmp}"
 
+tmp="$(mktemp -d)"
+: >"${tmp}/swww_0.11.0-1_amd64.deb"
+assert_fails "no rebuild when upstream == cached" deb_needs_rebuild "${tmp}" swww 0.11.0-1
+deb_needs_rebuild "${tmp}" swww 0.12.0-1 && echo "  ok: rebuild when upstream newer" \
+  || { echo "  FAIL: should rebuild when newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+deb_needs_rebuild "${tmp}" newpkg 1.0.0-1 && echo "  ok: rebuild when absent" \
+  || { echo "  FAIL: should rebuild when absent" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+rm -rf "${tmp}"
+
 finish_test
