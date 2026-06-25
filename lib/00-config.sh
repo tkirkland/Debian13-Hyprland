@@ -89,10 +89,14 @@ USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
-# --local-rtc: the hardware clock keeps LOCAL time instead of UTC. Only
-# useful when dual booting Windows (which assumes a local-time RTC and
-# would otherwise skew the clock on every reboot); leave at UTC otherwise.
-RTC_LOCAL_TIME="${RTC_LOCAL_TIME:-0}"
+# Hardware clock (RTC) interpretation. No default: the user must choose, via
+# --rtc=<utc|local> or the interactive prompt (require_rtc_choice). Neither is
+# assumed — an unset value is an error before the system phase runs.
+#   utc   = RTC holds UTC (Linux-only, or Windows configured for UTC)
+#   local = RTC holds local time (dual boot with Windows, which assumes a
+#           local-time RTC and would otherwise skew the clock on every reboot)
+# Written to the target's /etc/adjtime by configure_locale_tz (40-system.sh).
+RTC_MODE="${RTC_MODE:-}"
 
 # --- Cache (network-preferred, offline-complete) -----------------------------
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
@@ -188,6 +192,10 @@ HYPR_BUILD_ORDER=(
   hyprland
   hyprtoolkit
   hyprland-guiutils
+  hyprlock
+  hypridle
+  hyprlauncher
+  swww
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -212,6 +220,13 @@ declare -A HYPR_REPO_URL=(
   # is the qtutils successor, built on hyprwm's native hyprtoolkit.
   ["hyprtoolkit"]="${HYPR_GIT_BASE}/hyprtoolkit"
   ["hyprland-guiutils"]="${HYPR_GIT_BASE}/hyprland-guiutils"
+  # hyprlock (screen lock, PAM) + hypridle (idle manager) — issues #71/#72.
+  ["hyprlock"]="${HYPR_GIT_BASE}/hyprlock"
+  ["hypridle"]="${HYPR_GIT_BASE}/hypridle"
+  # hyprlauncher: the hyprtoolkit-based application launcher (default SUPER+R).
+  ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
+  # swww: animated wallpaper daemon (cargo build via build_custom_swww).
+  ["swww"]="https://github.com/LGFae/swww"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Release-tag pattern per component when it differs from the default
@@ -241,6 +256,15 @@ SID_MIRROR="${SID_MIRROR:-http://deb.debian.org/debian}"
 # build-deps install never resolves against sid.
 HYPR_TOOLCHAIN_PACKAGES=(gcc-15 g++-15)
 
+# Rust for swww's cargo build. swww needs rust-version 1.89; trixie ships 1.85
+# (too old) but trixie-backports has cargo/rustc >= 1.90. Sourced from BACKPORTS
+# (not sid) on purpose: sid exists ONLY for gcc-15 (never backported), and
+# backports packages are rebuilt against trixie, so they widen no unstable
+# surface. Build-time only (purged with the rest of the toolchain). The cargo
+# binary is built from src:rustc, so this one package pulls the matching rustc.
+BACKPORTS_MIRROR="${BACKPORTS_MIRROR:-http://deb.debian.org/debian}"
+HYPR_BACKPORTS_PACKAGES=(cargo)
+
 # write_sid_toolchain_sources <root>
 #   Adds a sid source pinned to priority 100 under <root>: apt only takes
 #   packages from sid when trixie has no candidate at all (gcc-15/g++-15
@@ -267,6 +291,31 @@ Pin: release a=unstable
 Pin-Priority: 100
 EOF
 }
+
+# trixie-backports source for the Rust toolchain (cargo/rustc >= 1.90 for
+# swww). Same controlled, pinned, opt-in shape as the sid source, but backports
+# is rebuilt against trixie, so it adds no unstable surface. Priority 100 means
+# nothing pulls from it unless asked with `-t trixie-backports`.
+write_backports_sources() {
+  local root="${1:-}"
+  mkdir -p "${root%/}/etc/apt/sources.list.d" \
+    "${root%/}/etc/apt/preferences.d"
+  cat >"${root%/}/etc/apt/sources.list.d/backports.sources" <<EOF
+Types: deb
+URIs: ${BACKPORTS_MIRROR}
+Suites: trixie-backports
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+  cat >"${root%/}/etc/apt/preferences.d/backports" <<'EOF'
+# Managed by hypr-deb: trixie-backports exists ONLY to supply a Rust toolchain
+# (cargo/rustc) new enough for swww. Priority 100 = never auto-upgrade; used
+# only when requested with `-t trixie-backports`.
+Package: *
+Pin: release a=trixie-backports
+Pin-Priority: 100
+EOF
+}
 # Filled by the hyprland phase: name -> resolved tag.
 declare -A HYPR_RESOLVED_TAG=()
 
@@ -283,6 +332,9 @@ HYPR_BUILD_PACKAGES=(
   libxcursor-dev libmuparser-dev liblcms2-dev bison libxcb-xkb-dev
   libffi-dev libexpat1-dev libiniparser-dev
   libpugixml-dev libre2-dev
+  libicu-dev libqalculate-dev
+  libsdbus-c++-dev libpam0g-dev
+  liblz4-dev
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
@@ -375,8 +427,9 @@ TARGET_BASE_PACKAGES=(
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
   console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
-  unzip fontconfig
+  unzip fontconfig ntfs-3g
   psmisc
+  grim slurp wf-recorder swappy wl-clipboard
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   "${AUDIO_PACKAGES[@]}"
