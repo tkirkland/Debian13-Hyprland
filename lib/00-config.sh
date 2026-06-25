@@ -169,6 +169,10 @@ nvidia_install_requested() {
 
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
+# hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
+# Not in the Debian archive nor the hyprwm namespace — built from source with
+# the Hyprland stack (cargo, like swww), pinned to its latest release tag.
+HYPRDIM_REPO_URL="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
 # Build order satisfies the dependency graph; hyprland after its deps.
 # wayland, wayland-protocols, and xkbcommon are built first because
 # Debian 13's packages are too old for current Hyprland (wayland-protocols
@@ -196,6 +200,7 @@ HYPR_BUILD_ORDER=(
   hypridle
   hyprlauncher
   swww
+  hypr-dim
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -227,6 +232,10 @@ declare -A HYPR_REPO_URL=(
   ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   # swww: animated wallpaper daemon (cargo build via build_custom_swww).
   ["swww"]="https://github.com/LGFae/swww"
+  # hypr-dim: per-display gamma brightness daemon for external outputs
+  # (cargo build via build_custom_hypr_dim). Drives external-display brightness
+  # via D-Bus dev.hyprdim for the brightness-sync wrapper (issue #66).
+  ["hypr-dim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Release-tag pattern per component when it differs from the default
@@ -422,6 +431,14 @@ FNKEY_PACKAGES=(
 # zfs-zed is pinned explicitly (normally only a Recommends of
 # zfsutils-linux): it is the daemon that reports device faults and scrub
 # results on the raidz1 pool.
+# ddcci-dkms/ddcutil/i2c-tools back external-display brightness (issue #66):
+# ddcci-dkms is a contrib DKMS package (contrib is already enabled) that builds
+# the ddcci backlight driver against linux-headers-amd64 (already present), the
+# same way zfs-dkms does — it is NOT source-replaced, so it stays out of
+# ZFS_DEBIAN_PACKAGES. It exposes external monitors as /sys/class/backlight nodes
+# (driven via brightnessctl over DDC/CI on the i2c bus); ddcutil/i2c-tools provide
+# the userspace DDC/CI tooling. The ddcci + i2c-dev modules are loaded by
+# configure_ddcci (40-system.sh) and the owner joins the i2c group in create_user.
 TARGET_BASE_PACKAGES=(
   linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   zfs-zed
@@ -431,6 +448,7 @@ TARGET_BASE_PACKAGES=(
   unzip fontconfig ntfs-3g
   psmisc
   grim slurp wf-recorder swappy wl-clipboard
+  ddcci-dkms ddcutil i2c-tools
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   "${AUDIO_PACKAGES[@]}"
