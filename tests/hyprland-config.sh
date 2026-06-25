@@ -20,7 +20,7 @@ source scripts/60-hyprland.sh
 # build_stack must verify uwsm built, not just Hyprland: if a component before
 # uwsm (which builds last) fails, the loop aborts and uwsm never installs,
 # leaving a system that boots to greetd with no session manager (dead greeter).
-assert_contains "$(declare -f build_stack)" "/usr/local/bin/uwsm" \
+assert_contains "$(declare -f build_stack)" "/usr/bin/uwsm" \
   "build_stack verifies the uwsm binary after the source build"
 
 TARGET="${tmp}/target"

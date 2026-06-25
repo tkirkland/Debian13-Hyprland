@@ -188,12 +188,12 @@ build_custom_lua() {
       '${HYPR_CC}' -O2 -fPIC -DLUA_USE_LINUX -c \"\${f}\"
     done
     ar rcs liblua.a ./*.o
-    install -d /usr/local/include /usr/local/lib/pkgconfig
-    install -m644 lua.h luaconf.h lualib.h lauxlib.h /usr/local/include/
-    install -m644 liblua.a /usr/local/lib/
+    install -d \"${HYPR_DESTDIR:-}/usr/include\" \"${HYPR_DESTDIR:-}/usr/lib/pkgconfig\"
+    install -m644 lua.h luaconf.h lualib.h lauxlib.h \"${HYPR_DESTDIR:-}/usr/include/\"
+    install -m644 liblua.a \"${HYPR_DESTDIR:-}/usr/lib/\"
   "
-  cat >"${TARGET}/usr/local/lib/pkgconfig/lua.pc" <<EOF
-prefix=/usr/local
+  cat >"${HYPR_DESTDIR:-}${TARGET}/usr/lib/pkgconfig/lua.pc" <<EOF
+prefix=/usr
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
 
@@ -203,8 +203,8 @@ Version: ${ver}
 Libs: -L\${libdir} -llua -lm -ldl
 Cflags: -I\${includedir}
 EOF
-  if [[ ! -f "${TARGET}/usr/local/include/lua.hpp" ]]; then
-    cat >"${TARGET}/usr/local/include/lua.hpp" <<'EOF'
+  if [[ ! -f "${HYPR_DESTDIR:-}${TARGET}/usr/include/lua.hpp" ]]; then
+    cat >"${HYPR_DESTDIR:-}${TARGET}/usr/include/lua.hpp" <<'EOF'
 // lua.hpp shim: upstream stopped shipping it after Lua 5.3.
 extern "C" {
 #include "lua.h"
@@ -226,13 +226,13 @@ build_custom_swww() {
     # no codegen meaning, so strip it from the core wayland.xml the scanner
     # reads — simpler than vendoring a patched scanner crate, and it leaves the
     # committed Cargo.lock usable with --locked.
-    if [[ -f /usr/local/share/wayland/wayland.xml ]]; then
-      sed -i 's/ frozen=\"true\"//g' /usr/local/share/wayland/wayland.xml
+    if [[ -f \"${HYPR_DESTDIR:-}/usr/share/wayland/wayland.xml\" ]]; then
+      sed -i 's/ frozen=\"true\"//g' \"${HYPR_DESTDIR:-}/usr/share/wayland/wayland.xml\"
     fi
     export CARGO_HOME=/tmp/swww-cargo
     cargo build --release --locked
     install -Dm755 target/release/swww target/release/swww-daemon \
-      -t /usr/local/bin/
+      -t \"${HYPR_DESTDIR:-}/usr/bin/\"
     rm -rf /tmp/swww-cargo
   "
 }
@@ -249,7 +249,7 @@ build_custom_hypr_dim() {
     cd '${HYPR_SRC_DIR}/hypr-dim'
     export CARGO_HOME=/tmp/hypr-dim-cargo
     cargo build --release --locked
-    install -Dm755 target/release/hypr-dim -t /usr/local/bin/
+    install -Dm755 target/release/hypr-dim -t \"${HYPR_DESTDIR:-}/usr/bin/\"
     rm -rf /tmp/hypr-dim-cargo
   "
 }
@@ -274,13 +274,13 @@ build_one() {
     cd '${HYPR_SRC_DIR}/${name}'
     if [[ -f CMakeLists.txt ]]; then
       cmake -B build -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local
+        -DCMAKE_INSTALL_PREFIX=/usr
       cmake --build build -j\"${jobs}\"
-      cmake --install build
+      DESTDIR=\"${HYPR_DESTDIR:-}\" cmake --install build
     elif [[ -f meson.build ]]; then
-      meson setup build --prefix=/usr/local --buildtype=release ${meson_args}
+      meson setup build --prefix=/usr --buildtype=release ${meson_args}
       meson compile -C build -j \"${jobs}\"
-      meson install -C build
+      DESTDIR=\"${HYPR_DESTDIR:-}\" meson install -C build
     else
       echo 'No CMakeLists.txt or meson.build in ${name}' >&2
       exit 1
@@ -297,14 +297,14 @@ build_stack() {
     stage_source "${name}"
     build_one "${name}"
   done
-  in_target "test -x /usr/local/bin/Hyprland" ||
+  in_target "test -x /usr/bin/Hyprland" ||
     fatal "Hyprland binary missing after build."
   # uwsm builds LAST and is the session entrypoint (greetd -> hypr-session ->
   # uwsm). If any earlier component fails, the loop aborts and uwsm never
   # builds, leaving a system that boots to greetd with no session manager — a
   # dead greeter ("failed to execute process: .../uwsm"). Verify it so a
   # half-finished build fails the install instead of shipping broken.
-  in_target "test -x /usr/local/bin/uwsm" ||
+  in_target "test -x /usr/bin/uwsm" ||
     fatal "uwsm binary missing after build (the session would not launch)."
 }
 
