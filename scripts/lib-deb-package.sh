@@ -8,3 +8,21 @@ tag_to_debver() {
   local tag="${1#v}"
   printf '%s-1\n' "${tag}"
 }
+
+# Highest Debian version of <name>_<ver>_<arch>.deb present in pool dir $1
+# for package $2. Empty string if none. Uses dpkg --compare-versions so the
+# ordering is correct (not lexical).
+cached_deb_version() {
+  local pool="$1" name="$2" best="" ver=""
+  local f base
+  for f in "${pool}/${name}"_*.deb; do
+    [[ -e "${f}" ]] || continue
+    base="$(basename "${f}")"
+    ver="${base#"${name}"_}"
+    ver="${ver%_*.deb}"
+    if [[ -z "${best}" ]] || dpkg --compare-versions "${ver}" gt "${best}"; then
+      best="${ver}"
+    fi
+  done
+  printf '%s\n' "${best}"
+}
