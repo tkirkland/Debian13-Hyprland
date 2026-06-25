@@ -50,6 +50,11 @@ Options:
                         the repo's production branch, tracked across
                         NVIDIA's branch promotions
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
+  --ntp="<servers>"     Space-separated NTP servers for the installed system's
+                        systemd-timesyncd (e.g. "0.pool.ntp.org
+                        time.cloudflare.com"). Optional: empty (default) keeps
+                        timesyncd on Debian's stock pool/DHCP servers. Time sync
+                        is installed and enabled regardless.
   --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
   --yes                 Unattended mode: skips the destructive confirmation
@@ -106,6 +111,7 @@ parse_args() {
             "got '${NVIDIA_DRIVER_VERSION}'"
         ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
+      --ntp=*) NTP_SERVERS="${arg#*=}" ;;
       --cache-dir=*) CACHE_DIR="${arg#*=}" ;;
       --fresh) FRESH=1 ;;
       --yes) ASSUME_YES=1 ;;

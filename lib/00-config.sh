@@ -426,6 +426,7 @@ TARGET_BASE_PACKAGES=(
   linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
+  systemd-timesyncd
   console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
@@ -471,6 +472,11 @@ ASSUME_YES="${ASSUME_YES:-0}"
 # --skip-cache: no offline cache is populated or embedded (saves several
 # GB — important in live sessions where CACHE_DIR is RAM-backed).
 SKIP_CACHE="${SKIP_CACHE:-0}"
+# --ntp: space-separated NTP servers written into the target's
+# systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
+# Empty (the default) leaves timesyncd on Debian's stock pool/DHCP behaviour;
+# the service is installed and enabled either way.
+NTP_SERVERS="${NTP_SERVERS:-}"
 # --autologin: greetd starts the Hyprland session directly as
 # TARGET_USERNAME on VT1 (no greeter, no console password). Default is the
 # tuigreet login prompt; ssh/sudo remain the authenticated paths either way.

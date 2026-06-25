@@ -82,4 +82,17 @@ assert_fails "--jobs rejects non-numeric values" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
   parse_args --jobs=many'
 
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args --ntp="0.pool.ntp.org time.cloudflare.com"
+  echo "${NTP_SERVERS}"')"
+assert_eq "0.pool.ntp.org time.cloudflare.com" "${out}" \
+  "--ntp sets NTP_SERVERS (space-separated, optional value-flag)"
+
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args
+  echo "[${NTP_SERVERS}]"')"
+assert_eq "[]" "${out}" "NTP_SERVERS is empty by default (Debian-stock timesyncd)"
+
 finish_test
