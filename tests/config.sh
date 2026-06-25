@@ -129,4 +129,9 @@ out="$(bash -c 'source lib/00-config.sh
 assert_contains "${out}" "lsb-release" \
   "zfs build deps include lsb-release (openzfs Build-Depends)"
 
+source lib/00-config.sh
+assert_eq "amd64" "${ARCH}" "ARCH is amd64"
+[[ -n "${HYPR_DEB_DEPENDS[swww]+x}" ]] && echo "  ok: swww Depends declared" \
+  || { echo "  FAIL: HYPR_DEB_DEPENDS[swww] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+
 finish_test

@@ -238,6 +238,14 @@ declare -A HYPR_REPO_URL=(
   ["hypr-dim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
+# Runtime Depends per source-built package, used to generate .deb control
+# files at ISO-build time. Keep conservative: list runtime libs that live in
+# the closure pool so apt-get install --simulate resolves fully offline.
+declare -gA HYPR_DEB_DEPENDS=(
+  [swww]="libc6, libwayland-client0, libgcc-s1"
+  [hypr-dim]="libc6, libgcc-s1"
+)
+ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default
 # v-prefixed semver (xkbcommon tags 'xkbcommon-X.Y.Z'; wayland-protocols
 # tags plain 'X.YY').
