@@ -8,4 +8,12 @@ source "${HERE}/../scripts/lib-deb-package.sh"
 assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0)" "tag_to_debver strips v, adds -1"
 assert_eq "1.2.3-1"  "$(tag_to_debver 1.2.3)"   "tag_to_debver bare version"
 
+tmp="$(mktemp -d)"
+: >"${tmp}/swww_0.10.0-1_amd64.deb"
+: >"${tmp}/swww_0.11.0-1_amd64.deb"
+: >"${tmp}/hyprland_0.49.0-1_amd64.deb"
+assert_eq "0.11.0-1" "$(cached_deb_version "${tmp}" swww)" "cached_deb_version picks highest"
+assert_eq ""         "$(cached_deb_version "${tmp}" nope)" "cached_deb_version empty when absent"
+rm -rf "${tmp}"
+
 finish_test
