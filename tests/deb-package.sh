@@ -27,4 +27,13 @@ deb_needs_rebuild "${tmp}" newpkg 1.0.0-1 && echo "  ok: rebuild when absent" \
   || { echo "  FAIL: should rebuild when absent" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 rm -rf "${tmp}"
 
+tmp="$(mktemp -d)"
+write_control "${tmp}" swww 0.11.0-1 amd64 "libc6, libwayland-client0"
+ctrl="$(cat "${tmp}/DEBIAN/control")"
+assert_contains "${ctrl}" "Package: swww" "control has Package"
+assert_contains "${ctrl}" "Version: 0.11.0-1" "control has Version"
+assert_contains "${ctrl}" "Architecture: amd64" "control has Architecture"
+assert_contains "${ctrl}" "Depends: libc6, libwayland-client0" "control has Depends"
+rm -rf "${tmp}"
+
 finish_test

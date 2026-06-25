@@ -39,3 +39,19 @@ deb_needs_rebuild() {
   [[ -n "${cached}" ]] || return 0
   dpkg --compare-versions "${upstream}" gt "${cached}"
 }
+
+# Write a minimal DEBIAN/control under DESTDIR ($1). Depends ($5) may be empty.
+write_control() {
+  local destdir="$1" name="$2" version="$3" arch="$4" depends="$5"
+  mkdir -p "${destdir}/DEBIAN"
+  {
+    printf 'Package: %s\n' "${name}"
+    printf 'Version: %s\n' "${version}"
+    printf 'Architecture: %s\n' "${arch}"
+    printf 'Maintainer: Debian13-Hyprland build <build@localhost>\n'
+    [[ -n "${depends}" ]] && printf 'Depends: %s\n' "${depends}"
+    printf 'Section: x11\n'
+    printf 'Priority: optional\n'
+    printf 'Description: %s (built from source by the offline-ISO pipeline)\n' "${name}"
+  } >"${destdir}/DEBIAN/control"
+}
