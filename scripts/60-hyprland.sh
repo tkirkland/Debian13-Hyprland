@@ -133,17 +133,19 @@ install_build_deps() {
   # serves both versions and the resolver picks what gcc-15 requires.
   if ((NETWORK_AVAILABLE)); then
     write_sid_toolchain_sources "${TARGET}"
+    write_backports_sources "${TARGET}"
     in_target "apt-get update"
     in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
       apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
     "
   else
     in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]} ${HYPR_BACKPORTS_PACKAGES[*]}
     "
   fi
   in_target "
@@ -162,6 +164,7 @@ install_build_deps() {
   # Record exactly what we may purge later (toolchain included; the
   # upgraded runtime libs are upgrades, not purge candidates).
   printf '%s\n' "${HYPR_BUILD_PACKAGES[@]}" "${HYPR_TOOLCHAIN_PACKAGES[@]}" \
+    "${HYPR_BACKPORTS_PACKAGES[@]}" \
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
 }
 
@@ -212,9 +215,31 @@ EOF
   fi
 }
 
+build_custom_swww() {
+  info "Building swww ${HYPR_RESOLVED_TAG[swww]} (cargo)..."
+  in_target "
+    set -e
+    cd '${HYPR_SRC_DIR}/swww'
+    # swww v0.11.x pins waybackend-scanner 0.6.2, whose code generator panics
+    # on the informational frozen=\"true\" interface attribute present in
+    # wayland >= 1.24 (we build wayland from release tags). The attribute has
+    # no codegen meaning, so strip it from the core wayland.xml the scanner
+    # reads — simpler than vendoring a patched scanner crate, and it leaves the
+    # committed Cargo.lock usable with --locked.
+    if [[ -f /usr/local/share/wayland/wayland.xml ]]; then
+      sed -i 's/ frozen=\"true\"//g' /usr/local/share/wayland/wayland.xml
+    fi
+    export CARGO_HOME=/tmp/swww-cargo
+    cargo build --release --locked
+    install -Dm755 target/release/swww target/release/swww-daemon \
+      -t /usr/local/bin/
+    rm -rf /tmp/swww-cargo
+  "
+}
+
 # Builds CMake projects (the hyprwm stack), meson projects (xkbcommon,
 # wayland-protocols, uwsm), and components with a build_custom_<name>
-# override (lua).
+# override (lua's static lib, swww's cargo build).
 build_one() {
   local name="$1" custom_fn="build_custom_${1//-/_}"
   if declare -f "${custom_fn}" >/dev/null; then
@@ -272,9 +297,17 @@ purge_build_deps() {
     return 0
   fi
   info "Pinning runtime libraries of built binaries..."
+  # Scan every kept /usr/local/bin tool, not just Hyprland: the protocol
+  # code generators hyprwayland-scanner and hyprwire-scanner link
+  # libpugixml.so.1 (package libpugixml1v5), whose only -dev provider
+  # (libpugixml-dev) is a purged build dep. Pinning solely off Hyprland +
+  # libs leaves those scanners' runtime libs unprotected, so the purge
+  # strips libpugixml1v5 and the kept scanners break for every later
+  # source build (hyprlock/hypridle/hyprlauncher/swww add-ons). ldd on a
+  # non-ELF entry just warns to stderr (suppressed).
   in_target "
     set -e
-    ldd /usr/local/bin/Hyprland /usr/local/lib/lib*.so* 2>/dev/null |
+    ldd /usr/local/bin/* /usr/local/lib/lib*.so* 2>/dev/null |
       grep -oE '/[^ ]+\.so[^ ]*' | sort -u |
       xargs -r -n1 -- realpath 2>/dev/null | sort -u |
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
@@ -302,8 +335,8 @@ purge_build_deps() {
       apt-get autoremove --purge -y
     "
   fi
-  in_target "! ldd /usr/local/bin/Hyprland | grep -q 'not found'" ||
-    fatal "Purge removed libraries Hyprland needs (ldd reports 'not found')."
+  in_target "! ldd /usr/local/bin/* 2>/dev/null | grep -q 'not found'" ||
+    fatal "Purge removed libraries a /usr/local/bin tool needs (ldd reports 'not found')."
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
 }
 
@@ -357,6 +390,28 @@ write_hypr_lua_config() {
   ((${#modules[@]} > 0)) ||
     fatal "No section headers found in ${example} — upstream changed the" \
       "example format; the section splitter needs updating."
+  # Default app launcher: repoint the upstream example's `$menu` (bound to
+  # SUPER+R) at the hyprlauncher we build, instead of the example's default.
+  # Done by rewriting the assignment in whichever split module defines it,
+  # since the bind captures `menu`'s value at require() time (a later
+  # reassignment in hypr-deb.lua would not affect the already-registered bind).
+  local menu_mod=""
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    if grep -qE '^menu[[:space:]]*=' "${menu_mod}"; then
+      sed -i 's/^menu\([[:space:]]*=[[:space:]]*\).*/menu\1"hyprlauncher"/' \
+        "${menu_mod}"
+      break
+    fi
+  done
+  # swww manages the wallpaper, so disable Hyprland's built-in default wallpaper
+  # and logo (else the mascot flashes before swww draws). Patch the values in
+  # whichever upstream-split module sets them inside its misc config table.
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i -E \
+      -e 's/(force_default_wallpaper[[:space:]]*=[[:space:]]*)-?[0-9]+/\10/' \
+      -e 's/(disable_hyprland_logo[[:space:]]*=[[:space:]]*)(false|true)/\1true/' \
+      "${menu_mod}"
+  done
   for slug in "${modules[@]}"; do
     printf 'require("%s")\n' "${slug}" >>"${entry}"
   done
@@ -372,16 +427,210 @@ write_hypr_lua_config() {
 -- keeps appearing until actually acknowledged. Lua long brackets keep the
 -- sh quoting sane.
 hl.on("hyprland.start", function()
+  -- Recover external displays the greeter left HPD-dark. The greetd wrapper
+  -- disables non-primary outputs with `wlr-randr --off`; on NVIDIA that drops
+  -- the connector's hot-plug detect (kernel marks it `disconnected`), so
+  -- Hyprland skips it at start. Forcing a sysfs re-probe makes the kernel
+  -- re-detect the sink and the compositor applies the monitor config live.
+  -- Needs root (sysfs status write) -> fixed-command NOPASSWD helper, staged by
+  -- the installer at /usr/local/bin/drm-reprobe. Fired first so the external
+  -- comes up as early as possible.
+  hl.exec_cmd("sudo /usr/local/bin/drm-reprobe")
   -- Finalize the UWSM session: activates graphical-session.target, imports
   -- the session environment, and runs XDG autostart. Without this the
   -- session is launched by uwsm but never actually managed by it. Harmless
   -- no-op if the session was not started through uwsm.
   hl.exec_cmd("uwsm finalize")
+  -- Wallpaper daemon (swww). Needs the compositor's Wayland session as parent
+  -- and ships no unit/.desktop, so it starts from this hook. It restores the
+  -- last-set wallpaper from its per-output cache on launch.
+  hl.exec_cmd("swww-daemon")
+  -- First login only: set an initial wallpaper (swww has no cache yet). After
+  -- this, swww-daemon restores the cached selection on every later login.
+  hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/local/bin/swww-cycle && touch "$m"; }']])
   hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
 end)
+
+-- Default keybinds (installer baseline; the user's chezmoi dotfiles override
+-- these). Primary actions are dual chords (SUPER+key), secondary actions are
+-- triple chords (SUPER+SHIFT+key).
+-- Lock the session on demand; routes through hypridle's lock_cmd -> hyprlock.
+hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
+-- Cycle wallpapers (swww): a different random image per output (secondary
+-- action, triple chord).
+hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
+-- Screenshots (grim/slurp) and screen recording (wf-recorder), traditional
+-- Print-key cluster. grimblast is not packaged in Debian, so bind the standard
+-- tools directly. Region capture covers arbitrary windows.
+hl.bind("Print", hl.dsp.exec_cmd([[sh -c 'grim - | wl-copy']]))                              -- full screen -> clipboard
+hl.bind("SHIFT + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | wl-copy']]))        -- region -> clipboard
+hl.bind("SUPER + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | swappy -f -']]))    -- region -> annotate (swappy)
+hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd([[sh -c 'pkill -INT wf-recorder || wf-recorder -f "$HOME/recording-$(date +%s).mp4"']])) -- toggle recording
 EOF
+
+  # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
+  # PAM (/etc/pam.d/hyprlock, staged in configure_session); hypridle drives the
+  # dim -> DPMS-off -> lock idle chain and locks before suspend. Quoted heredocs
+  # keep hyprlock's $TIME/$FAIL/$font variables literal.
+  cat >"${cfg_dir}/hyprlock.conf" <<'HYPRLOCK_CONF'
+# hyprlock — screen locker (issue #71)
+# Auth uses PAM via /etc/pam.d/hyprlock (auth include common-auth).
+
+$font = Monospace
+
+general {
+    hide_cursor = true
+}
+
+# Animations disabled: the fadeIn keeps presenting frames after lock, and each
+# frame re-powers the display against hypridle's post-lock `dpms off`, causing a
+# visible on/off/on flicker before it settles. Painting once keeps it clean.
+animations {
+    enabled = false
+}
+
+background {
+    monitor =
+    color = rgb(20, 24, 32)
+}
+
+# Clock.
+label {
+    monitor =
+    text = $TIME
+    font_size = 64
+    font_family = $font
+    color = rgba(216, 222, 233, 0.95)
+    position = 0, 120
+    halign = center
+    valign = center
+}
+
+input-field {
+    monitor =
+    size = 280, 50
+    outline_thickness = 3
+    dots_size = 0.25
+    dots_spacing = 0.3
+    inner_color = rgba(0, 0, 0, 0.35)
+    outer_color = rgba(33ccffee) rgba(00ff99ee) 45deg
+    check_color = rgba(00ff99ee) rgba(ff6633ee) 120deg
+    fail_color = rgba(ff6633ee) rgba(ff0066ee) 40deg
+    font_color = rgb(200, 200, 200)
+    fade_on_empty = false
+    rounding = 12
+    font_family = $font
+    placeholder_text = <i>Password…</i>
+    fail_text = <i>$FAIL ($ATTEMPTS)</i>
+    position = 0, -40
+    halign = center
+    valign = center
+}
+HYPRLOCK_CONF
+  cat >"${cfg_dir}/hypridle.conf" <<'HYPRIDLE_CONF'
+# hypridle — idle management (issue #72)
+# Chain: dim 5m -> lock 7m -> DPMS off 8m. Suspend left disabled (see below).
+#
+# Ordering is load-bearing and evidence-backed (hyprlock display-wedge
+# investigation, 2026-06-21). LOCK must come BEFORE DPMS-off: if DPMS powers the
+# output off while/before hyprlock owns it, the compositor cannot reconcile the
+# unlock repaint against a powered-down output — the session authenticates but
+# never repaints, a black "frozen" screen recoverable only by a VT switch (input
+# and PAM keep working the whole time; it is purely a display/present wedge).
+# Locking while the panel is lit lets hyprlock composite cleanly; the DPMS-off
+# then carries a balanced on-resume to re-power on wake. No DPMS-off before the
+# lock, and no `&& sleep 1 && dpms off` re-assert against a live hyprlock.
+
+general {
+    lock_cmd = pidof hyprlock || hyprlock       # never start a second hyprlock
+    before_sleep_cmd = loginctl lock-session     # lock before any suspend
+    after_sleep_cmd = sleep 2 && hyprctl dispatch 'hl.dsp.dpms("on")'
+}
+
+# 5 min — dim the panel (saves+restores current brightness).
+listener {
+    timeout = 300
+    on-timeout = brightnessctl -s set 10%
+    on-resume = brightnessctl -r
+}
+
+# 7 min — lock the session while the panel is still lit, so hyprlock composites
+# its surface before anything goes dark.
+listener {
+    timeout = 420
+    on-timeout = loginctl lock-session
+}
+
+# 8 min — power the screen off, after the lock is up. The paired on-resume wakes
+# the panel on return, with hyprlock already present to take the password.
+listener {
+    timeout = 480
+    on-timeout = hyprctl dispatch 'hl.dsp.dpms("off")'
+    on-resume = hyprctl dispatch 'hl.dsp.dpms("on")'
+}
+
+# Suspend is left disabled: many laptops only offer s2idle (no deep S3) and may
+# fail to resume. Re-enable deliberately once resume is verified on the machine.
+# listener {
+#     timeout = 1800
+#     on-timeout = systemctl suspend
+# }
+HYPRIDLE_CONF
   info "User config: ${#modules[@]} upstream modules + hypr-deb.lua" \
     "(${modules[*]})"
+}
+
+# Install the distro wallpaper set (the assets/wallpapers shallow submodule) to
+# /usr/share/backgrounds/hypr-deb and stage the swww-cycle helper. swww's
+# default config sets one on first login and SUPER+SHIFT+W cycles them.
+stage_wallpapers() {
+  local src="assets/wallpapers"
+  local dest="${TARGET}/usr/share/backgrounds/hypr-deb"
+  # The set is a shallow submodule. Online clones that skipped
+  # --recurse-submodules leave it empty; init it when a network is available.
+  # Offline/ISO builds ship it already checked out.
+  if [[ -z "$(ls -A "${src}" 2>/dev/null || true)" ]]; then
+    if ((${NETWORK_AVAILABLE:-0})); then
+      info "Initializing wallpaper submodule..."
+      git submodule update --init --depth 1 "${src}" 2>/dev/null ||
+        warn "Wallpaper submodule init failed; skipping default wallpapers."
+    else
+      warn "Wallpaper submodule absent and offline; skipping default wallpapers."
+    fi
+  fi
+  if [[ -n "$(ls -A "${src}" 2>/dev/null || true)" ]]; then
+    info "Installing wallpaper set to /usr/share/backgrounds/hypr-deb..."
+    mkdir -p "${dest}"
+    # Copy images (preserve subdirs, exclude the submodule's .git pointer file).
+    (cd "${src}" && tar -cf - --exclude=.git .) | (cd "${dest}" && tar -xf -)
+  fi
+  # Wallpaper cycle helper: a different random image per connected output.
+  install -d "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/swww-cycle" <<'EOF'
+#!/usr/bin/env bash
+# swww-cycle (installer.sh): assign a different random wallpaper to each
+# connected output from the system wallpaper set. Bound to SUPER+SHIFT+W and
+# run once on first login to set an initial wallpaper. Overridable via
+# SWWW_WALLPAPER_DIR / SWWW_TRANSITION.
+set -euo pipefail
+dir="${SWWW_WALLPAPER_DIR:-/usr/share/backgrounds/hypr-deb}"
+transition="${SWWW_TRANSITION:-any}"
+if ! swww query >/dev/null 2>&1; then
+  swww-daemon >/dev/null 2>&1 &
+  for _ in $(seq 1 20); do swww query >/dev/null 2>&1 && break; sleep 0.2; done
+fi
+mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
+[ "${#outputs[@]}" -gt 0 ] || exit 0
+mapfile -t imgs < <(find "$dir" -type f \
+  \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) | shuf)
+[ "${#imgs[@]}" -gt 0 ] || exit 0
+i=0
+for out in "${outputs[@]}"; do
+  swww img -o "$out" "${imgs[$(( i % ${#imgs[@]} ))]}" --transition-type "$transition"
+  i=$(( i + 1 ))
+done
+EOF
+  chmod +x "${TARGET}/usr/local/bin/swww-cycle"
 }
 
 configure_session() {
@@ -525,9 +774,66 @@ export __GLX_VENDOR_LIBRARY_NAME=nvidia
 export GBM_BACKEND=nvidia-drm
 EOF
   fi
+  # External-display recovery (DP-3 HPD-dark after login). The greeter wrapper
+  # disables every non-primary output with `wlr-randr --output <conn> --off`.
+  # On NVIDIA that disable leaves the connector hot-plug-detect dark: the kernel
+  # reports it `disconnected`, so Hyprland enumerates nothing on it at session
+  # start and the external stays off (the wrapper's "Hyprland re-enables them"
+  # assumption is false here). Force a sysfs re-probe at hyprland.start (wired in
+  # write_hypr_lua_config); the running compositor consumes the resulting uevent
+  # live. Proven on the live box: a single `echo detect` recovered the LG
+  # ultrawide on DP-3 in ~2s with no restart. The status write needs root, so
+  # ship a fixed-command NOPASSWD helper.
+  install -d "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/drm-reprobe" <<'EOF'
+#!/usr/bin/env bash
+# Staged by installer.sh: force a DRM hot-plug re-probe of external connectors
+# the greeter left HPD-dark, so Hyprland re-detects them at login. eDP (the
+# built-in panel) is skipped — it is never disabled. No-op on a connector that
+# already reads `connected`, so it never disturbs a healthy display.
+set -u
+for path in /sys/class/drm/card*-*/status; do
+  name=${path%/status}; name=${name##*/}
+  case "$name" in *eDP*) continue ;; esac
+  if [[ "$(cat "$path" 2>/dev/null)" == disconnected ]]; then
+    echo detect > "$path" 2>/dev/null || true
+  fi
+done
+EOF
+  chmod 755 "${TARGET}/usr/local/bin/drm-reprobe"
+  # NOPASSWD for the single fixed command (no args) -> minimal privilege; the
+  # hyprland.start hook runs it as ${TARGET_USERNAME} via sudo (user is in the
+  # sudo group, and Debian's /etc/sudoers @includedir's /etc/sudoers.d).
+  install -d -m 755 "${TARGET}/etc/sudoers.d"
+  cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
+# Managed by installer.sh: let the desktop user force a DRM connector re-probe
+# at Hyprland start, recovering an external display the greeter disabled.
+${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/local/bin/drm-reprobe
+EOF
+  chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
+  # hyprlock PAM service (issue #71): authenticate the lock screen against the
+  # system stack. hypridle (issue #72) is enabled for the user by linking its
+  # unit into graphical-session.target.wants — a plain symlink (not `systemctl
+  # --global enable`) so it works even when the stack is built at first boot:
+  # the link dangles until the unit lands and resolves at session start.
+  mkdir -p "${TARGET}/etc/pam.d"
+  cat >"${TARGET}/etc/pam.d/hyprlock" <<'EOF'
+# PAM config for hyprlock (installer.sh, issue #71).
+auth     include common-auth
+account  include common-account
+password include common-password
+session  include common-session
+EOF
+  mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
+  ln -sf /usr/local/lib/systemd/user/hypridle.service \
+    "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   write_hypr_lua_config
+  stage_wallpapers
   in_target "
     set -e
+    # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
+    # shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
     chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
     # tuigreet --remember writes its cache as _greetd; the Debian package
     # does not create the directory, and a greeter that cannot write it

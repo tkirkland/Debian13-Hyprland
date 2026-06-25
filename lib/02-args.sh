@@ -28,9 +28,11 @@ Options:
                         rebuild capability)
   --autologin           Boot straight into the Hyprland session as the
                         target user (no tuigreet console login)
-  --local-rtc           Keep the hardware clock in LOCAL time instead of
-                        UTC (for dual boot with Windows, which assumes a
-                        local-time RTC)
+  --rtc=<utc|local>     Hardware clock interpretation. Required: neither is
+                        assumed. Prompted interactively if omitted; required
+                        with --yes / non-interactive runs. utc = clock keeps
+                        UTC; local = clock keeps local time, for dual boot
+                        with Windows (which assumes a local-time RTC)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
   --nvidia=<open|debian|none|package>
@@ -80,7 +82,13 @@ parse_args() {
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
       --skip-cache) SKIP_CACHE=1 ;;
       --autologin) HYPR_AUTOLOGIN=1 ;;
-      --local-rtc) RTC_LOCAL_TIME=1 ;;
+      --rtc=*)
+        RTC_MODE="${arg#*=}"
+        case "${RTC_MODE}" in
+          utc | local) ;;
+          *) fatal "Invalid --rtc '${RTC_MODE}' (utc|local)" ;;
+        esac
+        ;;
       --jobs=*)
         HYPR_BUILD_JOBS="${arg#*=}"
         [[ "${HYPR_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] ||
@@ -134,6 +142,30 @@ require_bootloader_choice() {
     break
   done
   info "Bootloader: ${BOOTLOADER}"
+}
+
+# Ensure RTC_MODE is set: prompt when interactive, fail fast otherwise.
+# Neither UTC nor local time is assumed — the user must pick one.
+require_rtc_choice() {
+  [[ -n "${RTC_MODE}" ]] && return 0
+  if ((!IS_INTERACTIVE)) || ((ASSUME_YES)); then
+    fatal "--rtc=<utc|local> is required in non-interactive runs"
+  fi
+  local choice=""
+  console "Hardware clock (RTC) interpretation:"
+  console "  1) utc    Clock keeps UTC — Linux-only, or Windows set to UTC."
+  console "  2) local  Clock keeps local time — dual boot with Windows."
+  while true; do
+    prompt "Choice [1-2]: " || fatal "No input (EOF) while selecting the RTC mode."
+    choice="${REPLY}"
+    case "${choice}" in
+      1) RTC_MODE="utc" ;;
+      2) RTC_MODE="local" ;;
+      *) continue ;;
+    esac
+    break
+  done
+  info "Hardware clock: ${RTC_MODE}"
 }
 
 # Decide the NVIDIA driver source when a GPU is present (issue #4):
