@@ -185,7 +185,8 @@ Common flags (see `--help` for the full list):
 
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
-`TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and
+`TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
+`HYPRDIM_REPO_URL` (source for the hypr-dim brightness daemon), and
 more — see `lib/00-config.sh`.
 
 The installed system has time synchronization enabled by default: `systemd-timesyncd`
@@ -378,6 +379,21 @@ wallpaper cycle, and the traditional `Print` screenshot cluster
 as the `assets/wallpapers` submodule, installed to
 `/usr/share/backgrounds/hypr-deb`.
 
+**External-display brightness** (issue #66): the `XF86MonBrightness` keys, the
+idle dim, and the lock screen all drive one logical brightness level across
+*every* connected display via the `brightness-sync` wrapper
+(`/usr/local/bin/brightness-sync`). Where a real hardware backlight exists it is
+set directly with `brightnessctl` — the internal panel, and external monitors
+exposed as `/sys/class/backlight` nodes by the `ddcci-dkms` driver over DDC/CI
+(`ddcutil`/`i2c-tools` provide the DDC/CI tooling; the `ddcci` and `i2c-dev`
+kernel modules are auto-loaded via `/etc/modules-load.d/ddcci.conf`, and the
+owner joins the `i2c` group). Displays with no controllable backlight fall back
+to **gamma** dimming via **hypr-dim**, a small Rust daemon (D-Bus `dev.hyprdim`)
+built from source like swww and run as a `graphical-session.target` user unit
+(`HYPRDIM_REPO_URL` overrides its source). There is no separate brightness flag:
+the subsystem is always installed and is a no-op on hardware with nothing to
+control.
+
 Source policy:
 
 - The **latest release tag** (semver-highest, pre-releases excluded — not
@@ -386,8 +402,9 @@ Source policy:
   latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
   hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
-  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, then UWSM.
-  (swww is a Rust/cargo build via a custom hook; the rest are CMake/meson.)
+  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hypr-dim, then
+  UWSM. (swww and hypr-dim are Rust/cargo builds via custom hooks; the rest are
+  CMake/meson.)
 - **Compatibility gate:** Hyprland's CMake version requirements at the
   resolved tag are parsed, and every dependency's resolved tag must satisfy
   them. On any mismatch the run aborts with a requirement-vs.-resolved
