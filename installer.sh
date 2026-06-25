@@ -113,6 +113,12 @@ main() {
   case "${RUN_PHASE}" in
     full | boot | verify) require_bootloader_choice ;;
   esac
+  # The RTC interpretation (utc|local) is written to the target's
+  # /etc/adjtime in the system phase; settle it before preflight so an
+  # unattended run without --rtc fails fast instead of mid-install.
+  case "${RUN_PHASE}" in
+    full | system) require_rtc_choice ;;
+  esac
 
   # --yes promises an unattended run, but create_user would still block on
   # an interactive password prompt deep in the system phase (and skipping
