@@ -30,3 +30,12 @@ cached_deb_version() {
   done
   printf '%s\n' "${best}"
 }
+
+# Exit 0 (rebuild) when no cached .deb exists or upstream ($3) is strictly
+# greater than the cached version; exit 1 (reuse cached) otherwise.
+deb_needs_rebuild() {
+  local pool="$1" name="$2" upstream="$3" cached
+  cached="$(cached_deb_version "${pool}" "${name}")"
+  [[ -n "${cached}" ]] || return 0
+  dpkg --compare-versions "${upstream}" gt "${cached}"
+}
