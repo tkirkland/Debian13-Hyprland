@@ -59,6 +59,8 @@ assert_contains "${out}" "brightnessctl"  "brightness key binary in base set"
 # brightness keys are dead (issue #48).
 assert_contains "${out}" "brightness-udev" "brightness udev-rule package in base set (issue #48)"
 assert_contains "${out}" "playerctl"      "media key binary in base set"
+assert_contains "${out}" "systemd-timesyncd" \
+  "NTP client in base set so the installed clock stays disciplined"
 
 # addons/*.list files are appended to the target package set (comments
 # and whitespace stripped); the .sample template must NOT load.

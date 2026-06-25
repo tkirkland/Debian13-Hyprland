@@ -67,6 +67,7 @@ phase_verify() {
   fi
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
+  vcheck "systemd-timesyncd enabled" in_target "systemctl is-enabled systemd-timesyncd"
   vcheck "uwsm present" in_target "command -v uwsm"
   # greetd spawns the greeter with no PATH (PAM env only): the binary the
   # config names must exist at exactly that absolute path.

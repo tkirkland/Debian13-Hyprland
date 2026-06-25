@@ -60,6 +60,27 @@ configure_locale_tz() {
   esac
 }
 
+# systemd-timesyncd (in TARGET_BASE_PACKAGES) keeps the installed system's
+# clock disciplined after boot — without an NTP client nothing corrects drift.
+# Debian's preset enables it on install, but enable it explicitly here for the
+# same reason greetd/NetworkManager are: the chroot's apt run cannot rely on a
+# live systemd to apply presets. timesyncd is a CLIENT only; it never serves a
+# LAN. NTP_SERVERS (--ntp) optionally pins specific servers via a drop-in;
+# empty leaves it on Debian's stock pool/DHCP behaviour.
+configure_time_sync() {
+  in_target "
+    set -e
+    systemctl enable systemd-timesyncd
+  "
+  [[ -n "${NTP_SERVERS}" ]] || return 0
+  mkdir -p "${TARGET}/etc/systemd/timesyncd.conf.d"
+  cat >"${TARGET}/etc/systemd/timesyncd.conf.d/10-installer.conf" <<EOF
+[Time]
+NTP=${NTP_SERVERS}
+EOF
+  info "timesyncd pinned to NTP servers: ${NTP_SERVERS}"
+}
+
 # dkms signs every module it builds with this keypair and the boot phase
 # signs loader EFI binaries with it. Debian's dkms would generate it on
 # demand, but the zfs-dkms postinst (during install_base_packages) is the
@@ -447,6 +468,7 @@ phase_system() {
   install_chezmoi
   install_lythmono_fonts
   configure_locale_tz
+  configure_time_sync
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
   # captures the modprobe.d drop-in without a second rebuild.
