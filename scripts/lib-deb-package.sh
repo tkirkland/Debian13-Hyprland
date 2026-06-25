@@ -55,3 +55,14 @@ write_control() {
     printf 'Description: %s (built from source by the offline-ISO pipeline)\n' "${name}"
   } >"${destdir}/DEBIAN/control"
 }
+
+# Stage a control file into DESTDIR and build pool/<name>_<ver>_<arch>.deb.
+# Echoes the resulting .deb path. DESTDIR must already contain the installed tree.
+package_to_deb() {
+  local destdir="$1" name="$2" version="$3" arch="$4" depends="$5" pool="$6"
+  write_control "${destdir}" "${name}" "${version}" "${arch}" "${depends}"
+  mkdir -p "${pool}"
+  local out="${pool}/${name}_${version}_${arch}.deb"
+  dpkg-deb --root-owner-group --build "${destdir}" "${out}" >/dev/null
+  printf '%s\n' "${out}"
+}

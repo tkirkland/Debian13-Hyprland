@@ -36,4 +36,17 @@ assert_contains "${ctrl}" "Architecture: amd64" "control has Architecture"
 assert_contains "${ctrl}" "Depends: libc6, libwayland-client0" "control has Depends"
 rm -rf "${tmp}"
 
+if command -v dpkg-deb >/dev/null; then
+  tmp="$(mktemp -d)"; pool="${tmp}/pool"; dest="${tmp}/stage"; mkdir -p "${pool}" "${dest}/usr/local/bin"
+  printf '#!/bin/sh\n' >"${dest}/usr/local/bin/swww"; chmod +x "${dest}/usr/local/bin/swww"
+  out="$(package_to_deb "${dest}" swww 0.11.0-1 amd64 "libc6" "${pool}")"
+  assert_eq "${pool}/swww_0.11.0-1_amd64.deb" "${out}" "package_to_deb returns deb path"
+  [[ -f "${pool}/swww_0.11.0-1_amd64.deb" ]] && echo "  ok: deb created" \
+    || { echo "  FAIL: deb not created" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  assert_eq "swww" "$(dpkg-deb -f "${pool}/swww_0.11.0-1_amd64.deb" Package)" "deb Package field"
+  rm -rf "${tmp}"
+else
+  echo "  skip: dpkg-deb not installed"
+fi
+
 finish_test
