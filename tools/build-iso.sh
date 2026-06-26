@@ -190,6 +190,17 @@ step_zfs() {
   # to the no-chroot host fallback must not slip ZFS compiles onto the host.
   assert_chrooted_in_target \
     || fatal "in_target is not chroot-backed after sourcing 40-system.sh; refusing to build on host."
+  # OpenZFS ./configure (even for native-deb-utils, which does NOT compile the
+  # module) probes for a kernel build dir at /lib/modules/<ver>/build. The
+  # original installer builds ZFS in the target, which already carries
+  # linux-headers-amd64 via TARGET_BASE_PACKAGES; the buildroot does not, so
+  # install it here. The metapackage matches linux-image-amd64 in the pool.
+  info "[build] installing kernel headers for the OpenZFS configure probe"
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y linux-headers-amd64
+  "
   info "[build] building OpenZFS into the pool ${POOL}"
   ZFS_DEB_POOL="${POOL}" install_zfs_from_source
 }
