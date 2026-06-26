@@ -221,7 +221,8 @@ run_heavy_build() {
   step_reindex              # 5
   step_depsim               # 6
   step_assemble             # 7
-  teardown_chroot_binds     # 8 (also via trap)
+  kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
+  teardown_chroot_binds     # 9 (also via trap)
   info "[build] done: ${OUT_ISO}"
 }
 
