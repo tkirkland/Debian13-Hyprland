@@ -147,8 +147,20 @@ step_build_stack() {
       HYPR_DESTDIR="${stagerel}" build_one "${name}"
       package_to_deb "${TARGET}${stagerel}" "${name}" "${debver}" \
         "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${POOL}"
+      # Install the just-built component INTO the buildroot so later stack
+      # components compile/link against it (e.g. wayland-protocols needs the
+      # freshly-built wayland-scanner >= 1.25, not trixie's 1.23). The original
+      # installer installs each build into the real prefix; here we stage to a
+      # DESTDIR for the .deb, so we must also populate the buildroot /usr. Copy
+      # only the staged /usr (the DESTDIR also carries a DEBIAN/ control dir).
+      cp -a "${TARGET}${stagerel}/usr/." "${TARGET}/usr/"
+      in_target "ldconfig"
     else
       info "reuse cached ${name}"
+      # Even on reuse the buildroot needs the files for later components to
+      # build against (dpkg-deb -x unpacks the data tree only, no maint scripts).
+      dpkg-deb -x "${POOL}/${name}_${debver}_${ARCH}.deb" "${TARGET}"
+      in_target "ldconfig"
     fi
   done
 }
