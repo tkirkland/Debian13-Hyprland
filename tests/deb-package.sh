@@ -7,6 +7,7 @@ source "${HERE}/../scripts/lib-deb-package.sh"
 
 assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0)" "tag_to_debver strips v, adds -1"
 assert_eq "1.2.3-1"  "$(tag_to_debver 1.2.3)"   "tag_to_debver bare version"
+assert_eq "1.13.2-1" "$(tag_to_debver xkbcommon-1.13.2)" "tag_to_debver strips name- prefix"
 
 tmp="$(mktemp -d)"
 # 0.9.0 vs 0.10.0 discriminates dpkg ordering from bash lexical '>':
