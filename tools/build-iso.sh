@@ -68,6 +68,12 @@ POOL="${CACHE_DIR}/repo/pool"
 # ${TARGET}${BUILD_STAGE_REL}; chroot-visible at ${BUILD_STAGE_REL}).
 BUILD_STAGE_REL="${BUILD_STAGE_REL:-/var/tmp/hypr-stage}"
 
+# The build host is online by definition (we are populating the offline cache
+# FROM the network). The installer sets this in its preflight phase; build-iso
+# has no preflight, so declare it here. stage_source/install_build_deps branch
+# on it to clone sources and add the sid/backports toolchain over the network.
+export NETWORK_AVAILABLE=1
+
 # --- Testable seam: print the resolved plan, mutate nothing ------------------
 plan_summary() {
   cat <<EOF
