@@ -5,6 +5,11 @@
 
 if ! declare -f info >/dev/null; then info(){ printf '%s\n' "$*" >&2; }; fi
 
+# Optional per-package control metadata, looked up by package_to_deb. Declared
+# here (no-op if 00-config.sh already populated them) so referencing a missing
+# key is safe under `set -u` even when this lib is used standalone.
+declare -gA HYPR_DEB_CONFLICTS HYPR_DEB_REPLACES HYPR_DEB_PROVIDES
+
 # Release tag (vX.Y.Z | X.Y.Z) -> Debian version X.Y.Z-1.
 tag_to_debver() {
   local tag="${1#v}"
@@ -43,8 +48,12 @@ deb_needs_rebuild() {
 }
 
 # Write a minimal DEBIAN/control under DESTDIR ($1). Depends ($5) may be empty.
+# conflicts ($6), replaces ($7), provides ($8) are optional; each emits its line
+# only when non-empty. Used so source-compiled wayland/xkbcommon can own /usr
+# with the same soname paths as (and supersede) the Debian library packages.
 write_control() {
   local destdir="$1" name="$2" version="$3" arch="$4" depends="$5"
+  local conflicts="${6:-}" replaces="${7:-}" provides="${8:-}"
   mkdir -p "${destdir}/DEBIAN"
   {
     printf 'Package: %s\n' "${name}"
@@ -52,6 +61,9 @@ write_control() {
     printf 'Architecture: %s\n' "${arch}"
     printf 'Maintainer: Debian13-Hyprland build <build@localhost>\n'
     [[ -n "${depends}" ]] && printf 'Depends: %s\n' "${depends}"
+    [[ -n "${conflicts}" ]] && printf 'Conflicts: %s\n' "${conflicts}"
+    [[ -n "${replaces}" ]] && printf 'Replaces: %s\n' "${replaces}"
+    [[ -n "${provides}" ]] && printf 'Provides: %s\n' "${provides}"
     printf 'Section: x11\n'
     printf 'Priority: optional\n'
     printf 'Description: %s (built from source by the offline-ISO pipeline)\n' "${name}"
@@ -62,7 +74,9 @@ write_control() {
 # Echoes the resulting .deb path. DESTDIR must already contain the installed tree.
 package_to_deb() {
   local destdir="$1" name="$2" version="$3" arch="$4" depends="$5" pool="$6"
-  write_control "${destdir}" "${name}" "${version}" "${arch}" "${depends}"
+  write_control "${destdir}" "${name}" "${version}" "${arch}" "${depends}" \
+    "${HYPR_DEB_CONFLICTS[${name}]:-}" "${HYPR_DEB_REPLACES[${name}]:-}" \
+    "${HYPR_DEB_PROVIDES[${name}]:-}"
   mkdir -p "${pool}"
   local out="${pool}/${name}_${version}_${arch}.deb"
   dpkg-deb --root-owner-group --build "${destdir}" "${out}" >/dev/null

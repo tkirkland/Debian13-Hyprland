@@ -134,4 +134,11 @@ assert_eq "amd64" "${ARCH}" "ARCH is amd64"
 [[ -n "${HYPR_DEB_DEPENDS[swww]+x}" ]] && echo "  ok: swww Depends declared" \
   || { echo "  FAIL: HYPR_DEB_DEPENDS[swww] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 
+# Source-compiled wayland/xkbcommon own /usr with Debian's soname paths, so they
+# must Provides/Conflicts/Replaces the Debian library packages.
+[[ -n "${HYPR_DEB_PROVIDES[wayland]+x}" ]] && echo "  ok: wayland Provides declared" \
+  || { echo "  FAIL: HYPR_DEB_PROVIDES[wayland] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+[[ -n "${HYPR_DEB_CONFLICTS[xkbcommon]+x}" ]] && echo "  ok: xkbcommon Conflicts declared" \
+  || { echo "  FAIL: HYPR_DEB_CONFLICTS[xkbcommon] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+
 finish_test

@@ -245,6 +245,21 @@ declare -gA HYPR_DEB_DEPENDS=(
   [swww]="libc6, libwayland-client0, libgcc-s1"
   [hypr-dim]="libc6, libgcc-s1"
 )
+# Our compiled wayland/xkbcommon install to /usr with the same soname paths as
+# Debian's library packages; Provides lets reverse-deps resolve to ours, while
+# Conflicts+Replaces let ours cleanly supersede the Debian packages.
+declare -gA HYPR_DEB_PROVIDES=(
+  [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+)
+declare -gA HYPR_DEB_CONFLICTS=(
+  [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+)
+declare -gA HYPR_DEB_REPLACES=(
+  [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+)
 ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default
 # v-prefixed semver (xkbcommon tags 'xkbcommon-X.Y.Z'; wayland-protocols

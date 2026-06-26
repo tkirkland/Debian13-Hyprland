@@ -28,12 +28,28 @@ deb_needs_rebuild "${tmp}" newpkg 1.0.0-1 && echo "  ok: rebuild when absent" \
 rm -rf "${tmp}"
 
 tmp="$(mktemp -d)"
-write_control "${tmp}" swww 0.11.0-1 amd64 "libc6, libwayland-client0"
+write_control "${tmp}" swww 0.11.0-1 amd64 "libc6, libwayland-client0" \
+  "libwayland-client0" "libwayland-client0" "libwayland-client0"
 ctrl="$(cat "${tmp}/DEBIAN/control")"
 assert_contains "${ctrl}" "Package: swww" "control has Package"
 assert_contains "${ctrl}" "Version: 0.11.0-1" "control has Version"
 assert_contains "${ctrl}" "Architecture: amd64" "control has Architecture"
 assert_contains "${ctrl}" "Depends: libc6, libwayland-client0" "control has Depends"
+assert_contains "${ctrl}" "Conflicts: libwayland-client0" "control has Conflicts"
+assert_contains "${ctrl}" "Replaces: libwayland-client0" "control has Replaces"
+assert_contains "${ctrl}" "Provides: libwayland-client0" "control has Provides"
+rm -rf "${tmp}"
+
+# When conflicts/replaces/provides are empty, the lines must be absent.
+tmp="$(mktemp -d)"
+write_control "${tmp}" swww 0.11.0-1 amd64 "libc6"
+ctrl="$(cat "${tmp}/DEBIAN/control")"
+if [[ "${ctrl}" == *"Conflicts:"* || "${ctrl}" == *"Replaces:"* || "${ctrl}" == *"Provides:"* ]]; then
+  echo "  FAIL: empty conflicts/replaces/provides should not emit lines" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: empty conflicts/replaces/provides omit lines"
+fi
 rm -rf "${tmp}"
 
 if command -v dpkg-deb >/dev/null; then
@@ -47,6 +63,22 @@ if command -v dpkg-deb >/dev/null; then
   rm -rf "${tmp}"
 else
   echo "  skip: dpkg-deb not installed"
+fi
+
+# package_to_deb looks up the optional global maps by name and threads them to
+# write_control without changing its argument list.
+if command -v dpkg-deb >/dev/null; then
+  tmp="$(mktemp -d)"; pool="${tmp}/pool"; dest="${tmp}/stage"; mkdir -p "${pool}" "${dest}/usr/lib"
+  : >"${dest}/usr/lib/libfoo.so.0"
+  declare -gA HYPR_DEB_PROVIDES=([foo]="libfoo0") HYPR_DEB_CONFLICTS=([foo]="libfoo0") HYPR_DEB_REPLACES=([foo]="libfoo0")
+  out="$(package_to_deb "${dest}" foo 1.0.0-1 amd64 "libc6" "${pool}")"
+  assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Provides)" "package_to_deb threads Provides from map"
+  assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Conflicts)" "package_to_deb threads Conflicts from map"
+  assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Replaces)" "package_to_deb threads Replaces from map"
+  HYPR_DEB_PROVIDES=() HYPR_DEB_CONFLICTS=() HYPR_DEB_REPLACES=()
+  rm -rf "${tmp}"
+else
+  echo "  skip: dpkg-deb not installed (maps test)"
 fi
 
 if command -v dpkg-deb >/dev/null; then
