@@ -19,6 +19,9 @@ Options:
                         omitted; required with --yes / non-interactive runs)
   --build-on-firstboot  Defer the Hyprland build to first boot of the target
   --offline             Force offline mode (install only from the cache)
+  --online              Force online mode (use the network mirror even when
+                        the on-ISO package store is present; the default is
+                        offline-from-store when that store is found)
   --phase=<name>        Run a single phase:
                         preflight cache storage bootstrap system boot
                         hyprland verify cleanup
@@ -79,6 +82,7 @@ parse_args() {
         ;;
       --build-on-firstboot) BUILD_ON_FIRSTBOOT=1 ;;
       --offline) OFFLINE=1 ;;
+      --online) ONLINE=1 ;;
       --phase=*)
         RUN_PHASE="${arg#*=}"
         [[ " ${VALID_PHASES} " == *" ${RUN_PHASE} "* ]] ||

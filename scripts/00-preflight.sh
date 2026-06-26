@@ -201,12 +201,54 @@ select_disks() {
   info "Targets: DISK1=${DISK1} DISK2=${DISK2} DISK3=${DISK3}"
 }
 
+# Whether the on-ISO package store was found (set by discover_iso_repo).
+ISO_STORE_PRESENT=0
+
+# Discover the on-ISO package store. When booted from our offline ISO the
+# medium (mounted at /run/live/medium) carries an apt-ftparchive repo
+# (dists/ + pool/) at ISO_MEDIUM_REPO. Its presence — a Packages index under
+# dists/ — points the offline machinery at the medium (CACHE_REPO_DIR) and
+# makes offline-from-store the DEFAULT mode (see check_network). This runs
+# regardless of the --offline/--online flags so a forced-offline install also
+# installs from the store.
+discover_iso_repo() {
+  ISO_STORE_PRESENT=0
+  local idx=""
+  idx="$(find "${ISO_MEDIUM_REPO}/dists" -type f -name Packages -print -quit \
+    2>/dev/null || true)"
+  [[ -n "${idx}" ]] || return 0
+  ISO_STORE_PRESENT=1
+  CACHE_REPO_DIR="${ISO_MEDIUM_REPO}"
+  info "On-ISO package store found: ${CACHE_REPO_DIR}"
+}
+
+# Decide the install mode. Precedence:
+#   --offline  -> forced offline (no network), install from CACHE_REPO_DIR
+#   --online   -> forced online, probe the mirror even if the store is present
+#   otherwise  -> offline when the on-ISO store is present, online (probe)
+#                 when it is absent
 check_network() {
   if ((OFFLINE)); then
     NETWORK_AVAILABLE=0
-    info "Offline mode forced (--offline)."
+    info "Mode: offline forced (--offline); repo ${CACHE_REPO_DIR}"
     return 0
   fi
+  if ((ONLINE)); then
+    probe_network
+    info "Mode: online forced (--online); network ${NETWORK_AVAILABLE}"
+    return 0
+  fi
+  if ((ISO_STORE_PRESENT)); then
+    NETWORK_AVAILABLE=0
+    info "Mode: offline by default (on-ISO store present; --online to override);" \
+      "repo ${CACHE_REPO_DIR}"
+    return 0
+  fi
+  probe_network
+}
+
+# Probe the configured mirror; sets NETWORK_AVAILABLE.
+probe_network() {
   if curl -fsI --max-time 10 "${MIRROR}/dists/${SUITE}/Release" >/dev/null 2>&1; then
     NETWORK_AVAILABLE=1
     info "Network: mirror reachable (${MIRROR})"
@@ -353,6 +395,7 @@ phase_preflight() {
       "to run in target, ${run_count} .run to stage"
   detect_virt
   detect_live_environment
+  discover_iso_repo
   check_network
   select_disks
   bootstrap_live_tools

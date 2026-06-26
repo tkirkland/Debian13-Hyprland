@@ -102,6 +102,15 @@ RTC_MODE="${RTC_MODE:-}"
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
 # Inside the installed target the embedded copy always lives here:
 TARGET_CACHE_DIR="/var/cache/hypr-deb"
+# Location of the apt repo (pool/ + dists/) the offline machinery installs
+# from. Defaults under CACHE_DIR, but preflight redirects it to the on-ISO
+# store (ISO_MEDIUM_REPO) when booted from our offline ISO — so the store can
+# be used without moving CACHE_DIR itself.
+CACHE_REPO_DIR="${CACHE_REPO_DIR:-${CACHE_DIR}/repo}"
+# Where the on-ISO package store is mounted in the booted live environment.
+# The medium is mounted at /run/live/medium; our apt-ftparchive repo
+# (dists/ + pool/) lives under hypr-repo there.
+ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
 
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
@@ -590,6 +599,9 @@ HYPR_BUILD_JOBS="${HYPR_BUILD_JOBS:-}"
 FRESH="${FRESH:-0}"
 VERBOSE="${VERBOSE:-0}"
 OFFLINE="${OFFLINE:-0}"
+# --online: force network mode even when the on-ISO store is present (the
+# mirror is used instead of the offline default). Mirror of --offline.
+ONLINE="${ONLINE:-0}"
 BUILD_ON_FIRSTBOOT="${BUILD_ON_FIRSTBOOT:-0}"
 KEEP_BUILD_DEPS="${KEEP_BUILD_DEPS:-0}"
 NETWORK_AVAILABLE="" # set by preflight: 1 or 0
