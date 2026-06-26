@@ -17,6 +17,13 @@ set -euo pipefail
 ISO_DATA_SUBDIR="${ISO_DATA_SUBDIR:-hypr-repo}"
 # Top-level directory for the installer tree (when HYPR_INSTALLER_DIR is set).
 ISO_INSTALLER_SUBDIR="${ISO_INSTALLER_SUBDIR:-hypr-installer}"
+# Stock paths to drop from the output ISO: Debian's own live-installer (d-i)
+# pool + metadata, which this distro never uses (it installs via our own
+# installer + /hypr-repo). Removing them reclaims the ~200 base .debs that would
+# otherwise be duplicated in /hypr-repo/pool. The live session (booted from
+# /live/filesystem.squashfs) is untouched; only d-i boot-menu entries break.
+# Space-separated; override via HYPR_ISO_STRIP, empty to keep everything.
+ISO_STRIP_PATHS="${HYPR_ISO_STRIP-/pool /pool-udeb /install /dists}"
 
 # Minimal logging shims so the lib can be sourced standalone in tests without
 # the project logging lib (same idiom as tools/lib-build-guard.sh).
@@ -54,8 +61,16 @@ add_repo_to_iso() {
     -outdev "${out_iso}"
     -boot_image any replay
     -volid 'HYPR_OFFLINE'
-    -map "${repo_dir%/}" "/${ISO_DATA_SUBDIR}"
   )
+  # Strip the unused Debian d-i pool/metadata. -abort_on NEVER makes a missing
+  # path non-fatal (a different stock layout just strips less); restore strict
+  # aborting immediately after.
+  if [[ -n "${ISO_STRIP_PATHS}" ]]; then
+    local -a strip
+    read -r -a strip <<<"${ISO_STRIP_PATHS}"
+    args+=(-abort_on NEVER -rm_r "${strip[@]}" -- -abort_on FAILURE)
+  fi
+  args+=(-map "${repo_dir%/}" "/${ISO_DATA_SUBDIR}")
   # Optionally graft the installer tree so the booted live ISO can run the
   # installer fully offline (no git clone). HYPR_INSTALLER_DIR is a prepared,
   # filtered copy (no tools/docs/tests/.git) staged by build-iso.
