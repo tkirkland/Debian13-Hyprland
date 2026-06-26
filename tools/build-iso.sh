@@ -190,6 +190,12 @@ step_zfs() {
   # to the no-chroot host fallback must not slip ZFS compiles onto the host.
   assert_chrooted_in_target \
     || fatal "in_target is not chroot-backed after sourcing 40-system.sh; refusing to build on host."
+  # Resume support: skip the (slow) OpenZFS source build if its debs are already
+  # pooled. rm the openzfs-*.deb from the pool to force a rebuild.
+  if compgen -G "${POOL}/openzfs-zfs-dkms_*.deb" >/dev/null; then
+    info "[build] reusing pooled OpenZFS debs (skip ZFS source build)"
+    return 0
+  fi
   # OpenZFS ./configure (even for native-deb-utils, which does NOT compile the
   # module) probes for a kernel build dir at /lib/modules/<ver>/build. The
   # original installer builds ZFS in the target, which already carries
