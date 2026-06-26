@@ -99,10 +99,17 @@ EOF
 # 1) Bootstrap the build chroot, bind the kernel filesystems, and PROVE the
 #    in-effect in_target is chroot-backed (not the host fallback).
 step_bootstrap_chroot() {
-  info "[build] debootstrap ${SUITE} -> ${TARGET}"
-  mkdir -p "${TARGET}"
-  debootstrap "${SUITE}" "${TARGET}" "${MIRROR}" \
-    || fatal "debootstrap failed for ${SUITE} -> ${TARGET}"
+  # Resume support: a populated buildroot from a prior run is reused so retries
+  # skip the ~minutes-long debootstrap. /etc/os-release exists only after a
+  # successful bootstrap. (rm -rf the workspace for a clean rebuild.)
+  if [[ -e "${TARGET}/etc/os-release" ]]; then
+    info "[build] reusing existing buildroot ${TARGET} (skip debootstrap)"
+  else
+    info "[build] debootstrap ${SUITE} -> ${TARGET}"
+    mkdir -p "${TARGET}"
+    debootstrap "${SUITE}" "${TARGET}" "${MIRROR}" \
+      || fatal "debootstrap failed for ${SUITE} -> ${TARGET}"
+  fi
   # CRITICAL host-safety: mount_chroot_binds binds the host's live /run (systemd
   # + dbus sockets) into the buildroot. Without policy-rc.d exit 101, a package
   # postinst's deb-systemd-invoke/invoke-rc.d would start/restart/reload services
@@ -120,8 +127,14 @@ step_bootstrap_chroot() {
 
 # 2) Populate the offline .deb closure and index the file:// repo.
 step_cache() {
-  info "[build] populating offline .deb cache in ${CACHE_DIR}"
-  cache_populate_debs
+  # Resume support: skip the ~minutes-long closure download if the cache repo's
+  # Packages index already exists (cache_repo_exists, from 10-cache.sh).
+  if cache_repo_exists; then
+    info "[build] reusing existing .deb closure in ${CACHE_DIR} (skip download)"
+  else
+    info "[build] populating offline .deb cache in ${CACHE_DIR}"
+    cache_populate_debs
+  fi
   cache_index_repo
 }
 

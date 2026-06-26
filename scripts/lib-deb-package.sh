@@ -10,9 +10,12 @@ if ! declare -f info >/dev/null; then info(){ printf '%s\n' "$*" >&2; }; fi
 # key is safe under `set -u` even when this lib is used standalone.
 declare -gA HYPR_DEB_CONFLICTS HYPR_DEB_REPLACES HYPR_DEB_PROVIDES
 
-# Release tag (vX.Y.Z | X.Y.Z) -> Debian version X.Y.Z-1.
+# Release tag -> Debian version X.Y.Z-1. Strips any leading non-digit prefix so
+# the version starts with a digit (dpkg requirement). Tags seen: v0.49.0,
+# 1.2.3, xkbcommon-1.13.2 (prefixed). Same prefix-strip idiom as check_compat.
 tag_to_debver() {
-  local tag="${1#v}"
+  local tag="$1"
+  tag="${tag#"${tag%%[0-9]*}"}"
   printf '%s-1\n' "${tag}"
 }
 
