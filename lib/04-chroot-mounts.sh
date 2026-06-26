@@ -34,7 +34,10 @@ mount_chroot_binds() {
     mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
   fi
   track_mount "${t}/run"
-  if [[ -d /sys/firmware/efi/efivars ]]; then
+  # The ISO builder (HYPR_PRIVATE_RUN=1) never installs a bootloader into the
+  # buildroot, so it must NOT expose host EFI NVRAM (a writable host-mutation
+  # surface). Only the installer (flag unset) binds efivars, where it is needed.
+  if ((${HYPR_PRIVATE_RUN:-0} == 0)) && [[ -d /sys/firmware/efi/efivars ]]; then
     mount --bind /sys/firmware/efi/efivars "${t}/sys/firmware/efi/efivars" ||
       fatal "Failed to bind-mount ${t}/sys/firmware/efi/efivars"
     track_mount "${t}/sys/firmware/efi/efivars"
