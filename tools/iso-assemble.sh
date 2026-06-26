@@ -38,37 +38,26 @@ validate_repo_layout() {
   return 0
 }
 
-# extract_stock_iso STOCK_ISO WORKDIR
-# Extract the entire stock ISO tree into WORKDIR via xorriso osirrox.
-extract_stock_iso() {
-  local stock_iso="$1" workdir="$2"
-  xorriso -osirrox on -indev "${stock_iso}" -extract / "${workdir}"
-}
-
-# inject_repo REPO_DIR WORKDIR
-# Copy REPO_DIR into WORKDIR as a top-level dir named by ISO_DATA_SUBDIR.
-inject_repo() {
-  local repo_dir="$1" workdir="$2"
-  local dest="${workdir%/}/${ISO_DATA_SUBDIR}"
-  rm -rf "${dest}"
-  cp -a "${repo_dir%/}/." "${dest}/"
-}
-
-# repack_iso STOCK_ISO WORKDIR OUT_ISO
-# Repack WORKDIR into OUT_ISO, replaying the stock ISO's boot images so the
-# resulting ISO keeps the original BIOS El-Torito + EFI boot configuration.
-repack_iso() {
-  local stock_iso="$1" workdir="$2" out_iso="$3"
-  xorriso -as mkisofs \
+# add_repo_to_iso STOCK_ISO REPO_DIR OUT_ISO
+# Copy STOCK_ISO to OUT_ISO with REPO_DIR added as the top-level /ISO_DATA_SUBDIR,
+# replaying the stock ISO's El-Torito BIOS + EFI boot images so OUT_ISO stays
+# bootable. Uses NATIVE xorriso (NOT `-as mkisofs`, which rejects -indev): -indev
+# loads the stock image, -outdev targets a NEW file, -boot_image any replay
+# preserves the original boot setup, -map grafts the repo tree, -commit writes it.
+# No full extraction needed.
+add_repo_to_iso() {
+  local stock_iso="$1" repo_dir="$2" out_iso="$3"
+  xorriso \
     -indev "${stock_iso}" \
     -outdev "${out_iso}" \
     -boot_image any replay \
-    -volid "HYPR_OFFLINE" \
-    "${workdir}"
+    -volid 'HYPR_OFFLINE' \
+    -map "${repo_dir%/}" "/${ISO_DATA_SUBDIR}" \
+    -commit
 }
 
 # assemble STOCK_ISO REPO_DIR OUT_ISO
-# Orchestrates validation, extract, inject, repack. Echoes OUT_ISO on success.
+# Validate, then write OUT_ISO = STOCK_ISO + /ISO_DATA_SUBDIR. Echoes OUT_ISO.
 assemble() {
   local stock_iso="${1:-}" repo_dir="${2:-}" out_iso="${3:-}"
 
@@ -80,17 +69,8 @@ assemble() {
     || fatal "repo dir lacks dists/ and pool/: ${repo_dir}"
   [[ -e "${out_iso}" ]] && fatal "refusing to clobber existing OUT_ISO: ${out_iso}"
 
-  local workdir
-  workdir="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '${workdir}'" RETURN
-
-  info "iso-assemble: extracting ${stock_iso} -> ${workdir}"
-  extract_stock_iso "${stock_iso}" "${workdir}"
-  info "iso-assemble: injecting ${repo_dir} as /${ISO_DATA_SUBDIR}"
-  inject_repo "${repo_dir}" "${workdir}"
-  info "iso-assemble: repacking -> ${out_iso}"
-  repack_iso "${stock_iso}" "${workdir}" "${out_iso}"
+  info "iso-assemble: writing ${out_iso} = stock ISO + /${ISO_DATA_SUBDIR}"
+  add_repo_to_iso "${stock_iso}" "${repo_dir}" "${out_iso}"
 
   printf '%s\n' "${out_iso}"
 }
