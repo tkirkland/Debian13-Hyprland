@@ -43,7 +43,11 @@ cache_populate_debs() {
   debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
   # The pinned sid source supplies gcc-15 (absent from trixie) and
   # trixie-backports supplies the Rust toolchain (cargo/rustc) for swww, so the
-  # offline cache carries both toolchain sets too.
+  # offline cache carries both toolchain sets too. The scoped allow-pins these
+  # writers install let the toolchain resolve by NAME (no `-t`), so the closure
+  # downloads exactly the versions the build will install (see install_build_deps
+  # in 60-hyprland.sh): `-t` would override the pins and pull collateral sid/
+  # backports upgrades (libmpfr6/libnghttp3-9/libngtcp2-16) the build never uses.
   write_sid_toolchain_sources "${work}/closure"
   write_backports_sources "${work}/closure"
   chroot "${work}/closure" /usr/bin/env bash -c "
@@ -56,9 +60,9 @@ cache_populate_debs() {
       ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 grub-efi-amd64-signed \
       systemd-boot os-prober
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      ${HYPR_TOOLCHAIN_PACKAGES[*]}
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
+      ${HYPR_BACKPORTS_PACKAGES[*]}
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"

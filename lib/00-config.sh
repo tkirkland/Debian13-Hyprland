@@ -303,6 +303,20 @@ HYPR_BACKPORTS_PACKAGES=(cargo)
 #   and their toolchain dependencies), and never upgrades anything else
 #   to unstable. Only used when the network is available; offline installs
 #   get the toolchain debs from the cache repo instead.
+#
+#   The blanket 100-pin alone is NOT enough to INSTALL gcc-15: its versioned
+#   runtime deps (libstdc++6/libgcc-s1 >= 15, libcc1-0, the libasan8/libgomp1
+#   sanitizer set, and the libc6 they need) live only in sid, and apt will not
+#   pull a priority-100 candidate to satisfy a versioned dep when a (too-old)
+#   trixie candidate sits at 500. The old code worked around this with
+#   `apt-get -t sid`, but `-t` sets the TARGET RELEASE for the whole
+#   transaction (priority 990), overriding the 100-pin and dragging unrelated
+#   sid upgrades (e.g. libmpfr6) that then conflict with trixie -dev packages.
+#   Instead we keep the blanket 100-pin as a safety net and add a SCOPED
+#   allow-pin (priority 500) for exactly the gcc-15 closure, so it installs by
+#   name with no `-t` and nothing else leaks from sid. cpp-15 needs only
+#   libmpfr6 (>= 3.1.3), which trixie's 4.2.2-1 satisfies, so libmpfr6 stays
+#   on trixie and libmpfr-dev resolves cleanly.
 write_sid_toolchain_sources() {
   local root="${1:-}"
   if [[ -z "${root}" ]]; then
@@ -327,12 +341,26 @@ Package: *
 Pin: release a=unstable
 Pin-Priority: 100
 EOF
+  cat >"${root%/}/etc/apt/preferences.d/sid-toolchain-allow" <<'EOF'
+# Managed by hypr-deb: raise ONLY the gcc-15 toolchain closure above the
+# blanket 100-pin so `apt-get install gcc-15 g++-15` (no -t) can pull these
+# from sid. This is the gcc-15 binaries plus the runtime libs whose sid
+# versions GCC 15 strictly requires (libstdc++6/libgcc-s1 >= 15, libcc1-0,
+# the sanitizer/quadmath/gomp set, and the libc6 they pull). Everything NOT
+# listed here stays governed by the 100-pin, so collateral upgrades such as
+# libmpfr6/libnghttp3-9/libngtcp2-16 cannot leak in from sid.
+Package: gcc-15* g++-15* cpp-15* libgcc-15-dev libstdc++-15-dev libstdc++6 libgcc-s1 libcc1-0 libgomp1 libitm1 libatomic1 libasan8 liblsan0 libtsan2 libubsan1 libhwasan0 libquadmath0 libc6 libc6-dev libc-bin libc-dev-bin
+Pin: release a=unstable
+Pin-Priority: 500
+EOF
 }
 
 # trixie-backports source for the Rust toolchain (cargo/rustc >= 1.90 for
 # swww). Same controlled, pinned, opt-in shape as the sid source, but backports
-# is rebuilt against trixie, so it adds no unstable surface. Priority 100 means
-# nothing pulls from it unless asked with `-t trixie-backports`.
+# is rebuilt against trixie, so it adds no unstable surface. The blanket pin
+# keeps backports at priority 100; a scoped allow-pin then raises only the Rust
+# toolchain so it installs by name (no `-t`, which would drag the backports
+# libcurl/libnghttp3-9/libngtcp2-16 chain and break the trixie -dev packages).
 write_backports_sources() {
   local root="${1:-}"
   if [[ -z "${root}" ]]; then
@@ -351,11 +379,24 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
   cat >"${root%/}/etc/apt/preferences.d/backports" <<'EOF'
 # Managed by hypr-deb: trixie-backports exists ONLY to supply a Rust toolchain
-# (cargo/rustc) new enough for swww. Priority 100 = never auto-upgrade; used
-# only when requested with `-t trixie-backports`.
+# (cargo/rustc) new enough for swww. Backports is NotAutomatic, so it already
+# defaults to priority 100; this pin makes that explicit.
 Package: *
-Pin: release a=trixie-backports
+Pin: release n=trixie-backports
 Pin-Priority: 100
+EOF
+  cat >"${root%/}/etc/apt/preferences.d/backports-rust-allow" <<'EOF'
+# Managed by hypr-deb: raise ONLY the Rust toolchain above the blanket
+# backports pin so `apt-get install cargo` (no -t) pulls cargo/rustc >= 1.90
+# from backports. NOTE the codename selector n=trixie-backports: the backports
+# archive identifies as a=stable-backports, so a=trixie-backports would NOT
+# match and the pin would silently fail (leaving cargo on trixie's too-old
+# 1.85). cargo needs only libcurl4t64 (>= 7.28.0) which trixie satisfies, so
+# the backports libcurl/libnghttp3-9/libngtcp2-16 are never pulled and the
+# trixie *-dev packages resolve cleanly.
+Package: cargo rustc rust-llvm libstd-rust-dev libstd-rust-*
+Pin: release n=trixie-backports
+Pin-Priority: 500
 EOF
 }
 # Filled by the hyprland phase: name -> resolved tag.
