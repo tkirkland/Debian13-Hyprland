@@ -141,29 +141,77 @@ MOK_KEY="/var/lib/dkms/mok.key" # PEM private key, passphrase-less
 MOK_CRT="/var/lib/dkms/mok.pub" # DER certificate (dkms + mokutil format)
 MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
 
-# --- NVIDIA driver (issue #4) --------------------------------------------------
+# --- NVIDIA driver (issue #4; Phase 5: fully offline, both flavors) ------------
 # Detection happens BEFORE preflight (sysfs only, no tools), so prompts can
-# fail fast. NVIDIA_DRIVER selects the source:
-#   ""       decide interactively (unattended runs default to "open")
-#   open     NVIDIA's Debian 13 CUDA repo: open kernel modules
-#            (nvidia-open + nvidia-driver + nvidia-kernel-open-dkms),
-#            pinned to NVIDIA_DRIVER_VERSION and apt-mark held. Open
-#            modules support Turing and newer GPUs only — older cards
-#            must use "debian".
-#   debian   Debian 13's non-free nvidia-driver (550-series proprietary)
-#   none     skip — keep the kernel's nouveau driver
-#   <pkg>    any other value: a literal package name from Debian non-free
+# fail fast. As of Phase 5 BOTH flavors come from NVIDIA's CUDA debian13 repo
+# and are baked into the offline on-ISO store /hypr-repo, so NVIDIA installs
+# work with no network. The old Debian non-free "debian" path is RETIRED:
+# proprietary now also means NVIDIA's repo (nvidia-driver + nvidia-kernel-dkms),
+# giving a single source and a single offline pool for everything.
+#
+# NVIDIA_DRIVER selects the flavor:
+#   ""           decide interactively (unattended runs default to "open")
+#   open         open kernel modules (nvidia-open + nvidia-kernel-open-dkms);
+#                Turing (RTX/GTX 16xx) and newer GPUs only — older cards must
+#                use "proprietary".
+#   proprietary  proprietary kernel modules (nvidia-driver + nvidia-kernel-dkms);
+#                supports every NVIDIA GPU (REPLACES the old "debian" option).
+#   none         skip — keep the kernel's nouveau driver
 HAS_NVIDIA_GPU=0
 NVIDIA_DRIVER="${NVIDIA_DRIVER:-}"
-NVIDIA_REPO_KEYRING_URL="${NVIDIA_REPO_KEYRING_URL:-https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb}"
-# Exact version for "open" mode, e.g. 610.43.02-1 (--nvidia-version=...).
-# Empty = repo default: NVIDIA pins its production branch (R595 at the
-# time of writing) via a nvidia-driver-pinning-* package, and the install
-# tracks branch promotions automatically. A pinned version purges that
-# pinning package (it would outrank the request) and apt-mark holds the
-# driver packages so unattended upgrades cannot mix branches. 610.43.02-1
-# (the R610 feature branch: HDR, DRM color pipeline) is validated with
-# Hyprland on this machine.
+
+# NVIDIA CUDA debian13 repo. This is a FLAT (non-suite/component) repo: the
+# deb822 source uses "Suites: /" with no Components — matching the .list the
+# cuda-keyring deb installs. Trust is established by the cuda-keyring package
+# (fetched from the repo root), which drops the trusted key at
+# /usr/share/keyrings/cuda-archive-keyring.gpg. Offline, the .list cuda-keyring
+# installs points at the unreachable HTTPS URL, so the target rewrites the
+# repo to file:///hypr-repo while keeping that keyring for trust.
+NVIDIA_REPO_URL="${NVIDIA_REPO_URL:-https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/}"
+NVIDIA_REPO_KEYRING_URL="${NVIDIA_REPO_KEYRING_URL:-${NVIDIA_REPO_URL}cuda-keyring_1.1-1_all.deb}"
+
+# Driver branch. The branch is selected by an apt PIN package, NOT by versioned
+# package names (there is no nvidia-open-595; the metapackages are
+# branch-agnostic). Install exactly one nvidia-driver-pinning-<branch>:
+#   595  production/certified branch (DEFAULT) -> newest 595.x (595.71.05-1)
+#   610  newer feature branch (HDR, DRM color) -> newest 610.x (610.43.02-1)
+# The two pinning packages share /etc/apt/preferences.d/nvidia-driver-pin and
+# Conflict (Provides: nvidia-driver-pinning), so only one may be installed at a
+# time; switching branches purges the old one first. Per-target this is a
+# non-issue: one target picks one branch.
+NVIDIA_BRANCH="${NVIDIA_BRANCH:-595}"
+# Branch-pinning package per branch (selects the branch; see NVIDIA_BRANCH).
+declare -gA NVIDIA_PINNING_PACKAGE=(
+  [595]="nvidia-driver-pinning-595"
+  [610]="nvidia-driver-pinning-610"
+)
+
+# Flavor-specific kernel-module package sets. The branch is selected separately
+# (NVIDIA_PINNING_PACKAGE above, or an exact NVIDIA_DRIVER_VERSION). nvidia-open
+# already drags in the nvidia-driver userspace; nvidia-kernel-open-dkms is
+# listed explicitly (belt-and-suspenders) and additionally hard-Depends g++ and
+# firmware-nvidia-gsp.
+NVIDIA_OPEN_PACKAGES=(nvidia-open nvidia-kernel-open-dkms)
+NVIDIA_PROP_PACKAGES=(nvidia-driver nvidia-kernel-dkms)
+# Shared userspace pulled in by nvidia-driver / nvidia-driver-libs. Listed
+# explicitly so the offline /hypr-repo pool closure is unambiguous; the
+# libnvidia-*/libnv* userspace libs (libcuda1, libnvoptix1, libnvidia-ml, etc.)
+# follow automatically as dependencies.
+NVIDIA_SHARED_PACKAGES=(
+  nvidia-driver nvidia-driver-libs nvidia-driver-cuda
+  nvidia-kernel-common nvidia-kernel-support nvidia-kernel-source
+  firmware-nvidia-gsp
+  nvidia-settings nvidia-xconfig xserver-xorg-video-nvidia
+  nvidia-vdpau-driver nvidia-powerd nvidia-suspend-common
+)
+
+# Exact version override (e.g. 610.43.02-1, via --nvidia-version=...), applied
+# to BOTH flavors. Empty = repo default: the NVIDIA_PINNING_PACKAGE for
+# NVIDIA_BRANCH selects the newest in that branch and tracks branch promotions.
+# A pinned version instead purges the pinning package (its priority-1000 pin
+# would outrank the request) and apt-mark holds the driver packages so
+# unattended upgrades cannot mix branches. 610.43.02-1 (the R610 feature
+# branch: HDR, DRM color pipeline) is validated with Hyprland on this machine.
 NVIDIA_DRIVER_VERSION="${NVIDIA_DRIVER_VERSION:-}"
 # Overridable for tests (fake sysfs trees).
 SYS_PCI_PATH="${SYS_PCI_PATH:-/sys/bus/pci/devices}"
