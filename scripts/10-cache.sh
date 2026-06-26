@@ -36,15 +36,24 @@ cache_populate_debs() {
   rm -rf "${work}"
   mkdir -p "${pool}" "${work}"
 
-  info "Downloading debootstrap base packages..."
-  debootstrap --download-only --arch="${ARCH}" "${SUITE}" \
-    "${work}/bootstrap" "${MIRROR}"
-  if compgen -G "${work}/bootstrap/var/cache/apt/archives/*.deb" >/dev/null; then
-    cp -n "${work}/bootstrap/var/cache/apt/archives/"*.deb "${pool}/"
+  # Shared debootstrap deb cache, set+exported by build-iso.sh. Referenced
+  # DEFENSIVELY: the installer phase_cache leaves it UNSET, so this expands to
+  # empty and NO --cache-dir is passed (installer path byte-for-byte unchanged).
+  # For the build-iso path it points at the cache the buildroot debootstrap
+  # already filled, so the closure debootstrap reuses the base instead of
+  # re-downloading it. (The dedicated --download-only bootstrap pass that used
+  # to run here is dropped: the buildroot debootstrap is now THE single base
+  # download, and its base .debs are harvested into the pool by build-iso.sh.
+  # The closure debootstrap below ALSO leaves the base in its archives, which
+  # the cp -n harvest at the end of this function copies into the pool — so the
+  # full base set still reaches the pool for the installer path too.)
+  local -a cache_args=()
+  if [[ -n "${DEBOOTSTRAP_CACHE:-}" ]]; then
+    cache_args=(--cache-dir="${DEBOOTSTRAP_CACHE}")
   fi
 
   info "Resolving full package closure in a scratch chroot..."
-  debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
+  debootstrap "${cache_args[@]}" --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
   # The pinned sid source supplies gcc-15 (absent from trixie) and
   # trixie-backports supplies the Rust toolchain (cargo/rustc) for swww, so the
   # offline cache carries both toolchain sets too. The scoped allow-pins these
