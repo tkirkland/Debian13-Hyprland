@@ -126,11 +126,17 @@ stage_source() {
 }
 
 install_build_deps() {
-  # gcc-15 lives only in sid. When networked, add the pinned source and
-  # install the toolchain in its own `-t sid` transaction so its versioned
-  # runtime deps (libstdc++6 >= 15 etc.) may follow from sid while the
-  # 100-pin keeps every other package on trixie. Offline, the cache repo
-  # serves both versions and the resolver picks what gcc-15 requires.
+  # gcc-15 lives only in sid, the Rust toolchain only in trixie-backports.
+  # write_sid_toolchain_sources / write_backports_sources add those suites at
+  # a blanket priority 100 PLUS a scoped allow-pin (priority 500) for exactly
+  # the gcc-15 closure and the Rust toolchain. That lets us install by NAME
+  # with no `-t`: `-t` sets the target release for the whole transaction
+  # (priority 990), overriding the 100-pin and dragging unrelated upgrades
+  # (libmpfr6 off sid; libnghttp3-9/libngtcp2-16/libcurl4t64 off backports via
+  # cargo) that then conflict with the trixie -dev packages. By name, the
+  # 100-pin keeps everything on trixie except the allow-pinned toolchain.
+  # Offline, the cache repo serves both versions and the resolver picks what
+  # gcc-15/cargo require.
   if ((NETWORK_AVAILABLE)); then
     write_sid_toolchain_sources "${TARGET}"
     write_backports_sources "${TARGET}"
@@ -138,8 +144,8 @@ install_build_deps() {
     in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
-      apt-get install -y -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
+      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y ${HYPR_BACKPORTS_PACKAGES[*]}
     "
   else
     in_target "
