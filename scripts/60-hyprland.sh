@@ -20,6 +20,11 @@ fi
 
 HYPR_SRC_DIR="/var/tmp/hypr-deb-build"
 
+# Custom-stack components already satisfied by a prebuilt deb (populated by
+# online_install_prebuilt on the --online path). build_stack consults it to
+# source-build only the components NOT covered by the ISO's prebuilt debs.
+declare -gA HYPR_PREBUILT_INSTALLED=()
+
 # Latest stable release tag. Default pattern: vX.Y.Z or X.Y.Z
 # (rc/alpha/nightly excluded). $2 overrides the pattern for repos with
 # other schemes (see HYPR_TAG_PATTERN).
@@ -126,11 +131,17 @@ stage_source() {
 }
 
 install_build_deps() {
-  # gcc-15 lives only in sid. When networked, add the pinned source and
-  # install the toolchain in its own `-t sid` transaction so its versioned
-  # runtime deps (libstdc++6 >= 15 etc.) may follow from sid while the
-  # 100-pin keeps every other package on trixie. Offline, the cache repo
-  # serves both versions and the resolver picks what gcc-15 requires.
+  # gcc-15 lives only in sid, the Rust toolchain only in trixie-backports.
+  # write_sid_toolchain_sources / write_backports_sources add those suites at
+  # a blanket priority 100 PLUS a scoped allow-pin (priority 500) for exactly
+  # the gcc-15 closure and the Rust toolchain. That lets us install by NAME
+  # with no `-t`: `-t` sets the target release for the whole transaction
+  # (priority 990), overriding the 100-pin and dragging unrelated upgrades
+  # (libmpfr6 off sid; libnghttp3-9/libngtcp2-16/libcurl4t64 off backports via
+  # cargo) that then conflict with the trixie -dev packages. By name, the
+  # 100-pin keeps everything on trixie except the allow-pinned toolchain.
+  # Offline, the cache repo serves both versions and the resolver picks what
+  # gcc-15/cargo require.
   if ((NETWORK_AVAILABLE)); then
     write_sid_toolchain_sources "${TARGET}"
     write_backports_sources "${TARGET}"
@@ -138,8 +149,8 @@ install_build_deps() {
     in_target "
       set -e
       export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
-      apt-get install -y -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
+      apt-get install -y ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      apt-get install -y ${HYPR_BACKPORTS_PACKAGES[*]}
     "
   else
     in_target "
@@ -188,12 +199,12 @@ build_custom_lua() {
       '${HYPR_CC}' -O2 -fPIC -DLUA_USE_LINUX -c \"\${f}\"
     done
     ar rcs liblua.a ./*.o
-    install -d /usr/local/include /usr/local/lib/pkgconfig
-    install -m644 lua.h luaconf.h lualib.h lauxlib.h /usr/local/include/
-    install -m644 liblua.a /usr/local/lib/
+    install -d \"${HYPR_DESTDIR:-}/usr/include\" \"${HYPR_DESTDIR:-}/usr/lib/pkgconfig\"
+    install -m644 lua.h luaconf.h lualib.h lauxlib.h \"${HYPR_DESTDIR:-}/usr/include/\"
+    install -m644 liblua.a \"${HYPR_DESTDIR:-}/usr/lib/\"
   "
-  cat >"${TARGET}/usr/local/lib/pkgconfig/lua.pc" <<EOF
-prefix=/usr/local
+  cat >"${TARGET:-}${HYPR_DESTDIR:-}/usr/lib/pkgconfig/lua.pc" <<EOF
+prefix=/usr
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
 
@@ -203,8 +214,8 @@ Version: ${ver}
 Libs: -L\${libdir} -llua -lm -ldl
 Cflags: -I\${includedir}
 EOF
-  if [[ ! -f "${TARGET}/usr/local/include/lua.hpp" ]]; then
-    cat >"${TARGET}/usr/local/include/lua.hpp" <<'EOF'
+  if [[ ! -f "${TARGET:-}${HYPR_DESTDIR:-}/usr/include/lua.hpp" ]]; then
+    cat >"${TARGET:-}${HYPR_DESTDIR:-}/usr/include/lua.hpp" <<'EOF'
 // lua.hpp shim: upstream stopped shipping it after Lua 5.3.
 extern "C" {
 #include "lua.h"
@@ -225,21 +236,23 @@ build_custom_swww() {
     # wayland >= 1.24 (we build wayland from release tags). The attribute has
     # no codegen meaning, so strip it from the core wayland.xml the scanner
     # reads — simpler than vendoring a patched scanner crate, and it leaves the
-    # committed Cargo.lock usable with --locked.
-    if [[ -f /usr/local/share/wayland/wayland.xml ]]; then
-      sed -i 's/ frozen=\"true\"//g' /usr/local/share/wayland/wayland.xml
+    # committed Cargo.lock usable with --locked. This patches the INSTALLED
+    # wayland.xml in the build environment (from our compiled wayland), NOT
+    # swww's DESTDIR output — so it is intentionally not HYPR_DESTDIR-prefixed.
+    if [[ -f /usr/share/wayland/wayland.xml ]]; then
+      sed -i 's/ frozen=\"true\"//g' /usr/share/wayland/wayland.xml
     fi
     export CARGO_HOME=/tmp/swww-cargo
     cargo build --release --locked
     install -Dm755 target/release/swww target/release/swww-daemon \
-      -t /usr/local/bin/
+      -t \"${HYPR_DESTDIR:-}/usr/bin/\"
     rm -rf /tmp/swww-cargo
   "
 }
 
 # hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
 # Cargo build, mirroring build_custom_swww (its own CARGO_HOME, --release
-# --locked, install to /usr/local/bin, then drop the cargo home). The
+# --locked, install to /usr/bin, then drop the cargo home). The
 # hypr-dim.service user unit (staged in configure_session) starts the installed
 # binary; the brightness-sync wrapper drives it over D-Bus dev.hyprdim.
 build_custom_hypr_dim() {
@@ -249,7 +262,7 @@ build_custom_hypr_dim() {
     cd '${HYPR_SRC_DIR}/hypr-dim'
     export CARGO_HOME=/tmp/hypr-dim-cargo
     cargo build --release --locked
-    install -Dm755 target/release/hypr-dim -t /usr/local/bin/
+    install -Dm755 target/release/hypr-dim -t \"${HYPR_DESTDIR:-}/usr/bin/\"
     rm -rf /tmp/hypr-dim-cargo
   "
 }
@@ -274,13 +287,13 @@ build_one() {
     cd '${HYPR_SRC_DIR}/${name}'
     if [[ -f CMakeLists.txt ]]; then
       cmake -B build -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local
+        -DCMAKE_INSTALL_PREFIX=/usr
       cmake --build build -j\"${jobs}\"
-      cmake --install build
+      DESTDIR=\"${HYPR_DESTDIR:-}\" cmake --install build
     elif [[ -f meson.build ]]; then
-      meson setup build --prefix=/usr/local --buildtype=release ${meson_args}
+      meson setup build --prefix=/usr --buildtype=release ${meson_args}
       meson compile -C build -j \"${jobs}\"
-      meson install -C build
+      DESTDIR=\"${HYPR_DESTDIR:-}\" meson install -C build
     else
       echo 'No CMakeLists.txt or meson.build in ${name}' >&2
       exit 1
@@ -294,17 +307,23 @@ build_stack() {
   mkdir -p "${TARGET}${HYPR_SRC_DIR}"
   install_build_deps
   for name in "${HYPR_BUILD_ORDER[@]}"; do
+    # --online: a component already installed from the ISO's prebuilt deb
+    # (online_install_prebuilt) needs no source build.
+    if [[ -n "${HYPR_PREBUILT_INSTALLED[${name}]:-}" ]]; then
+      info "Skipping source build of ${name} (installed from prebuilt deb)."
+      continue
+    fi
     stage_source "${name}"
     build_one "${name}"
   done
-  in_target "test -x /usr/local/bin/Hyprland" ||
+  in_target "test -x /usr/bin/Hyprland" ||
     fatal "Hyprland binary missing after build."
   # uwsm builds LAST and is the session entrypoint (greetd -> hypr-session ->
   # uwsm). If any earlier component fails, the loop aborts and uwsm never
   # builds, leaving a system that boots to greetd with no session manager — a
   # dead greeter ("failed to execute process: .../uwsm"). Verify it so a
   # half-finished build fails the install instead of shipping broken.
-  in_target "test -x /usr/local/bin/uwsm" ||
+  in_target "test -x /usr/bin/uwsm" ||
     fatal "uwsm binary missing after build (the session would not launch)."
 }
 
@@ -314,17 +333,22 @@ purge_build_deps() {
     return 0
   fi
   info "Pinning runtime libraries of built binaries..."
-  # Scan every kept /usr/local/bin tool, not just Hyprland: the protocol
-  # code generators hyprwayland-scanner and hyprwire-scanner link
-  # libpugixml.so.1 (package libpugixml1v5), whose only -dev provider
-  # (libpugixml-dev) is a purged build dep. Pinning solely off Hyprland +
-  # libs leaves those scanners' runtime libs unprotected, so the purge
-  # strips libpugixml1v5 and the kept scanners break for every later
-  # source build (hyprlock/hypridle/hyprlauncher/swww add-ons). ldd on a
-  # non-ELF entry just warns to stderr (suppressed).
+  # Phase 2 moved the COMPILED stack to /usr (CMAKE_INSTALL_PREFIX=/usr,
+  # meson --prefix=/usr), so the built binaries and their libs now live in
+  # /usr/bin and /usr/lib, not /usr/local. Scan every installed binary, not
+  # just Hyprland: the protocol code generators hyprwayland-scanner and
+  # hyprwire-scanner link libpugixml.so.1 (package libpugixml1v5), whose
+  # only -dev provider (libpugixml-dev) is a purged build dep. Pinning
+  # solely off Hyprland + libs leaves those scanners' runtime libs
+  # unprotected, so the purge strips libpugixml1v5 and they break for every
+  # later source build (hyprlock/hypridle/hyprlauncher/swww add-ons).
+  # Pinning the runtime-lib packages of all /usr binaries is harmless to the
+  # purge goal — build deps are -dev/toolchain packages that no binary links
+  # against, so ldd never lists them. ldd on a non-ELF entry (the hand-written
+  # glue scripts kept in /usr/local) just warns to stderr (suppressed).
   in_target "
     set -e
-    ldd /usr/local/bin/* /usr/local/lib/lib*.so* 2>/dev/null |
+    ldd /usr/bin/* /usr/lib/lib*.so* 2>/dev/null |
       grep -oE '/[^ ]+\.so[^ ]*' | sort -u |
       xargs -r -n1 -- realpath 2>/dev/null | sort -u |
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
@@ -352,8 +376,8 @@ purge_build_deps() {
       apt-get autoremove --purge -y
     "
   fi
-  in_target "! ldd /usr/local/bin/* 2>/dev/null | grep -q 'not found'" ||
-    fatal "Purge removed libraries a /usr/local/bin tool needs (ldd reports 'not found')."
+  in_target "! ldd /usr/bin/* 2>/dev/null | grep -q 'not found'" ||
+    fatal "Purge removed libraries a /usr/bin binary needs (ldd reports 'not found')."
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
 }
 
@@ -369,14 +393,21 @@ purge_build_deps() {
 #     (mainMod, terminal, ...) must become globals to keep resolving;
 #   - the installer's own additions live in hypr-deb.lua, required last.
 # No autogenerated marker: the acknowledgment-gated welcome app IS the
-# first-run notice. The staged source tree is guaranteed present here:
-# phase_hyprland stages hyprland before calling this, and the build-dep
-# purge that deletes the tree runs after.
+# first-run notice. The upstream example is read either from the staged
+# Hyprland source tree (online/firstboot source builds — phase_hyprland stages
+# it before calling this, and the build-dep purge that deletes the tree runs
+# after) or, in the offline prebuilt-deb install, from the installed hyprland
+# package at /usr/share/hypr/hyprland.lua.
 write_hypr_lua_config() {
-  local example="${TARGET}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua"
-  [[ -f "${example}" ]] ||
-    fatal "Upstream example config missing at ${example}" \
-      "(hyprland source not staged before configure_session?)."
+  local example="" candidate=""
+  for candidate in \
+    "${TARGET}${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
+    "${TARGET}/usr/share/hypr/hyprland.lua"; do
+    [[ -f "${candidate}" ]] && { example="${candidate}"; break; }
+  done
+  [[ -n "${example}" ]] ||
+    fatal "Upstream example config not found (neither the staged Hyprland" \
+      "source nor the installed /usr/share/hypr/hyprland.lua is present)."
   local cfg_dir="${TARGET}/home/${TARGET_USERNAME}/.config/hypr"
   local entry="${cfg_dir}/hyprland.lua"
   local hdr_re='^-{2,}[[:space:]]+([A-Za-z][A-Za-z[:space:]]*[A-Za-z])[[:space:]]+-{2,}$'
@@ -689,7 +720,7 @@ configure_session() {
 # Staged by installer.sh: greetd session entry. Session output goes to
 # the journal (journalctl -t hypr-session), never to the VT.
 UWSM_SILENT_START=2 exec /usr/bin/systemd-cat -t hypr-session \
-  /usr/local/bin/uwsm start -- hyprland.desktop
+  /usr/bin/uwsm start -- hyprland.desktop
 EOF
   chmod +x "${TARGET}/usr/local/bin/hypr-session"
   mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
@@ -1108,8 +1139,8 @@ case "$cmd" in
 esac
 BRIGHTNESS_SYNC
   chmod 755 "${TARGET}/usr/local/bin/brightness-sync"
-  # hypr-dim user unit. The ExecStart points at the installer's /usr/local/bin
-  # binary (upstream's unit uses %h/.local/bin/hypr-dim). Resident, supervised,
+  # hypr-dim user unit. The ExecStart points at the compiled binary in /usr/bin
+  # (upstream's unit uses %h/.local/bin/hypr-dim). Resident, supervised,
   # respawning; brightness-sync re-asserts external gamma after a restart. Enabled
   # for the user the same way hypridle is: a plain symlink into
   # graphical-session.target.wants (works even when the stack builds at first boot —
@@ -1127,7 +1158,7 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/hypr-dim
+ExecStart=/usr/bin/hypr-dim
 # Resident, supervised: always respawn. State (per-output gamma) is in memory
 # only, and a gamma_control Failed permanently drops an output — restart is the
 # recovery path; `brightness-sync restore` re-asserts levels afterward.
@@ -1138,7 +1169,11 @@ RestartSec=1
 WantedBy=graphical-session.target
 HYPR_DIM_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
-  ln -sf /usr/local/lib/systemd/user/hypridle.service \
+  # hypridle is part of the source-compiled stack, now shipped as a .deb with
+  # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
+  # hand-written hypr-dim.service below stays in /usr/local (installer glue,
+  # not owned by any .deb).
+  ln -sf /usr/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   ln -sf /usr/local/lib/systemd/user/hypr-dim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypr-dim.service"
@@ -1264,14 +1299,82 @@ check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"
 for name in "\${HYPR_BUILD_ORDER[@]}"; do
   build_one "\${name}"
 done
-test -x /usr/local/bin/Hyprland
+test -x /usr/bin/Hyprland
 purge_build_deps
 info "First-boot Hyprland build complete."
 EOF
   chmod +x "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
 }
 
+# OFFLINE (default when the on-ISO store is present): install the ENTIRE custom
+# stack from the temporary trusted file:// source that phase_bootstrap stood up
+# (setup_target_iso_repo). No toolchain, no source compile, no firstboot — the
+# shipped debs are already the newest (freshness is a build-time concern). The
+# deb data trees (binaries in /usr/bin, the example config in /usr/share/hypr)
+# land here, so configure_session reads the installed example afterwards.
+install_prebuilt_stack() {
+  info "Installing prebuilt Hyprland stack from the on-ISO repo" \
+    "(${#HYPR_BUILD_ORDER[@]} packages)..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${HYPR_BUILD_ORDER[*]}
+  "
+  in_target "test -x /usr/bin/Hyprland" ||
+    fatal "Hyprland binary missing after prebuilt-stack install."
+  # uwsm is the session entrypoint (greetd -> hypr-session -> uwsm); without it
+  # greetd boots to a dead greeter. Verify it landed, same as build_stack does.
+  in_target "test -x /usr/bin/uwsm" ||
+    fatal "uwsm binary missing after prebuilt-stack install (the session would not launch)."
+}
+
+# --online: when the on-ISO/cache repo is present, install whatever custom-stack
+# debs it provides (the same temporary trusted file:// source + bind machinery as
+# the offline path) and record them in HYPR_PREBUILT_INSTALLED so build_stack
+# source-builds only the components the repo did NOT provide. No repo, or nothing
+# available, leaves the full gcc-15 source build to handle everything.
+online_install_prebuilt() {
+  HYPR_PREBUILT_INSTALLED=()
+  if ! cache_repo_exists; then
+    info "No on-ISO/cache repo present; source-building the whole stack."
+    return 0
+  fi
+  info "On-ISO repo present (${CACHE_REPO_DIR}); installing available prebuilt" \
+    "stack debs (source build covers any the repo lacks)..."
+  setup_target_iso_repo
+  in_target "apt-get update"
+  local name="" avail=()
+  for name in "${HYPR_BUILD_ORDER[@]}"; do
+    if in_target "apt-cache show '${name}' >/dev/null 2>&1"; then
+      avail+=("${name}")
+      HYPR_PREBUILT_INSTALLED["${name}"]=1
+    fi
+  done
+  if ((${#avail[@]} > 0)); then
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y ${avail[*]}
+    "
+    info "Installed prebuilt debs: ${avail[*]}"
+  fi
+}
+
 phase_hyprland() {
+  # DEFAULT / --offline: install the prebuilt stack from the on-ISO store and
+  # skip the entire source-build machinery. The compatibility gate (check_compat)
+  # is a SOURCE-build guard needing Hyprland's CMakeLists, which offline mode does
+  # not stage — so it is skipped here. configure_session still runs (it writes the
+  # user config, reading the example from the just-installed hyprland deb).
+  if ((NETWORK_AVAILABLE == 0)); then
+    install_prebuilt_stack
+    configure_session
+    return 0
+  fi
+  # --online (network present): keep the source-build path. Resolve tags, stage
+  # Hyprland for the gate + example config, then build/defer as before — but first
+  # install any prebuilt custom debs the ISO repo offers so only the missing ones
+  # are compiled.
   resolve_all_tags
   # The gate needs Hyprland's CMakeLists; stage hyprland's source first.
   stage_source hyprland
@@ -1282,7 +1385,18 @@ phase_hyprland() {
   if ((BUILD_ON_FIRSTBOOT)); then
     stage_firstboot
   else
-    build_stack
-    purge_build_deps
+    online_install_prebuilt
+    if ((${#HYPR_PREBUILT_INSTALLED[@]} >= ${#HYPR_BUILD_ORDER[@]})); then
+      # Every component came from a prebuilt deb: no toolchain, no compile.
+      info "All custom stack components installed from prebuilt debs;" \
+        "skipping the source build."
+      in_target "test -x /usr/bin/Hyprland" ||
+        fatal "Hyprland binary missing after prebuilt-stack install."
+      in_target "test -x /usr/bin/uwsm" ||
+        fatal "uwsm binary missing after prebuilt-stack install (the session would not launch)."
+    else
+      build_stack
+      purge_build_deps
+    fi
   fi
 }
