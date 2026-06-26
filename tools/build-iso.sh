@@ -261,11 +261,24 @@ step_depsim() {
   fi
 }
 
-# 7) Assemble the final ISO (xorriso, runs in tools/iso-assemble.sh).
+# 7) Assemble the final ISO (xorriso, runs in tools/iso-assemble.sh): inject the
+#    offline repo AND a filtered copy of the installer tree, so the booted live
+#    ISO can run the installer fully offline (no git clone).
 step_assemble() {
+  info "[build] staging installer payload for the ISO"
+  local payload="${ISO_WORKSPACE}/installer-payload"
+  rm -rf "${payload}"
+  mkdir -p "${payload}"
+  # Ship only what the target install needs; exclude host-only build tooling
+  # (tools/), docs/, tests/, and VCS. Missing optional items are ignored.
+  local item
+  for item in installer.sh lib scripts addons assets README.md STRUCTURE.md; do
+    [[ -e "${REPO_ROOT}/${item}" ]] && cp -a "${REPO_ROOT}/${item}" "${payload}/"
+  done
   info "[build] assembling ${OUT_ISO}"
   # Invoke via bash so it works regardless of the script's execute bit.
-  bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${CACHE_DIR}/repo" "${OUT_ISO}" \
+  HYPR_INSTALLER_DIR="${payload}" \
+    bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${CACHE_DIR}/repo" "${OUT_ISO}" \
     || fatal "iso-assemble failed"
 }
 

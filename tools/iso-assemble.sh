@@ -15,6 +15,8 @@ set -euo pipefail
 
 # Top-level directory name under which the repo is injected on the ISO.
 ISO_DATA_SUBDIR="${ISO_DATA_SUBDIR:-hypr-repo}"
+# Top-level directory for the installer tree (when HYPR_INSTALLER_DIR is set).
+ISO_INSTALLER_SUBDIR="${ISO_INSTALLER_SUBDIR:-hypr-installer}"
 
 # Minimal logging shims so the lib can be sourced standalone in tests without
 # the project logging lib (same idiom as tools/lib-build-guard.sh).
@@ -47,13 +49,23 @@ validate_repo_layout() {
 # No full extraction needed.
 add_repo_to_iso() {
   local stock_iso="$1" repo_dir="$2" out_iso="$3"
-  xorriso \
-    -indev "${stock_iso}" \
-    -outdev "${out_iso}" \
-    -boot_image any replay \
-    -volid 'HYPR_OFFLINE' \
-    -map "${repo_dir%/}" "/${ISO_DATA_SUBDIR}" \
-    -commit
+  local -a args=(
+    -indev "${stock_iso}"
+    -outdev "${out_iso}"
+    -boot_image any replay
+    -volid 'HYPR_OFFLINE'
+    -map "${repo_dir%/}" "/${ISO_DATA_SUBDIR}"
+  )
+  # Optionally graft the installer tree so the booted live ISO can run the
+  # installer fully offline (no git clone). HYPR_INSTALLER_DIR is a prepared,
+  # filtered copy (no tools/docs/tests/.git) staged by build-iso.
+  if [[ -n "${HYPR_INSTALLER_DIR:-}" ]]; then
+    [[ -d "${HYPR_INSTALLER_DIR}" ]] \
+      || fatal "HYPR_INSTALLER_DIR not a directory: ${HYPR_INSTALLER_DIR}"
+    args+=(-map "${HYPR_INSTALLER_DIR%/}" "/${ISO_INSTALLER_SUBDIR}")
+  fi
+  args+=(-commit)
+  xorriso "${args[@]}"
 }
 
 # assemble STOCK_ISO REPO_DIR OUT_ISO
