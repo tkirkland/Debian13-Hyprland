@@ -73,7 +73,7 @@ if command -v dpkg-deb >/dev/null; then
   : >"${dest}/usr/lib/libfoo.so.0"
   declare -gA HYPR_DEB_PROVIDES=([foo]="libfoo0") HYPR_DEB_CONFLICTS=([foo]="libfoo0") HYPR_DEB_REPLACES=([foo]="libfoo0")
   out="$(package_to_deb "${dest}" foo 1.0.0-1 amd64 "libc6" "${pool}")"
-  assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Provides)" "package_to_deb threads Provides from map"
+  assert_eq "libfoo0 (= 1.0.0)" "$(dpkg-deb -f "${out}" Provides)" "package_to_deb emits VERSIONED Provides"
   assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Conflicts)" "package_to_deb threads Conflicts from map"
   assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Replaces)" "package_to_deb threads Replaces from map"
   HYPR_DEB_PROVIDES=() HYPR_DEB_CONFLICTS=() HYPR_DEB_REPLACES=()

@@ -73,13 +73,31 @@ write_control() {
   } >"${destdir}/DEBIAN/control"
 }
 
+# Turn a comma-separated Provides list into a VERSIONED one ("a, b" -> "a (= V),
+# b (= V)"). Debian only satisfies a VERSIONED dependency (e.g. slurp Depends
+# "libwayland-client0 (>= 1.20.0)") from a VERSIONED Provides; an unversioned
+# Provides does not count. V is the upstream version (Debian revision stripped).
+_versioned_provides() {
+  local list="$1" ver="$2" out="" p
+  local IFS=','
+  for p in ${list}; do
+    p="${p#"${p%%[![:space:]]*}"}"
+    p="${p%"${p##*[![:space:]]}"}"
+    [[ -n "${p}" ]] || continue
+    out="${out:+${out}, }${p} (= ${ver})"
+  done
+  printf '%s' "${out}"
+}
+
 # Stage a control file into DESTDIR and build pool/<name>_<ver>_<arch>.deb.
 # Echoes the resulting .deb path. DESTDIR must already contain the installed tree.
 package_to_deb() {
   local destdir="$1" name="$2" version="$3" arch="$4" depends="$5" pool="$6"
+  local provides="${HYPR_DEB_PROVIDES[${name}]:-}"
+  [[ -n "${provides}" ]] && provides="$(_versioned_provides "${provides}" "${version%-*}")"
   write_control "${destdir}" "${name}" "${version}" "${arch}" "${depends}" \
     "${HYPR_DEB_CONFLICTS[${name}]:-}" "${HYPR_DEB_REPLACES[${name}]:-}" \
-    "${HYPR_DEB_PROVIDES[${name}]:-}"
+    "${provides}"
   mkdir -p "${pool}"
   local out="${pool}/${name}_${version}_${arch}.deb"
   dpkg-deb --root-owner-group --build "${destdir}" "${out}" >/dev/null
