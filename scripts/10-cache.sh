@@ -10,14 +10,18 @@
 # Depends on resolve_latest_release_tag from scripts/60-hyprland.sh; the
 # orchestrator sources all modules before dispatching any phase.
 
+# Install-time consumers (live env, offline). CACHE_REPO_DIR defaults to
+# ${CACHE_DIR}/repo but preflight redirects it to the on-ISO store
+# (ISO_MEDIUM_REPO) when booted from our offline ISO, so these resolve the
+# repo wherever it actually lives.
 cache_repo_exists() {
-  [[ -f "${CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
+  [[ -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
 }
 
 # Configure apt (live env) to install from the cache repo only.
 install_from_cache_repo() {
   local list="/etc/apt/sources.list.d/hypr-deb-cache.list"
-  echo "deb [trusted=yes] file://${CACHE_DIR}/repo ${SUITE} main" >"${list}"
+  echo "deb [trusted=yes] file://${CACHE_REPO_DIR} ${SUITE} main" >"${list}"
   apt-get update -o Dir::Etc::sourcelist="${list}" \
     -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
   DEBIAN_FRONTEND=noninteractive apt-get install -y \

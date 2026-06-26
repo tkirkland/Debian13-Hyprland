@@ -182,12 +182,9 @@ phase_verify() {
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
      grep -qx '${ROOT_DATASET}'"
-  if ((SKIP_CACHE)); then
-    info "skip: embedded cache check (--skip-cache)"
-  else
-    vcheck "embedded cache repo valid" \
-      test -f "${TARGET}${TARGET_CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages"
-  fi
+  # The package store is ISO-only: the installed system's permanent apt
+  # sources are the real Debian mirror, and no repo is embedded in the target
+  # (embed_cache_in_target was removed). Nothing to verify in the target here.
 
   verify_report || fatal "Verification failed — installation is NOT complete."
   info "SUCCESS: bootable Debian + Hyprland conditions both met."

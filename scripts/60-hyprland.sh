@@ -247,7 +247,7 @@ build_custom_swww() {
 
 # hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
 # Cargo build, mirroring build_custom_swww (its own CARGO_HOME, --release
-# --locked, install to /usr/local/bin, then drop the cargo home). The
+# --locked, install to /usr/bin, then drop the cargo home). The
 # hypr-dim.service user unit (staged in configure_session) starts the installed
 # binary; the brightness-sync wrapper drives it over D-Bus dev.hyprdim.
 build_custom_hypr_dim() {
@@ -1116,8 +1116,8 @@ case "$cmd" in
 esac
 BRIGHTNESS_SYNC
   chmod 755 "${TARGET}/usr/local/bin/brightness-sync"
-  # hypr-dim user unit. The ExecStart points at the installer's /usr/local/bin
-  # binary (upstream's unit uses %h/.local/bin/hypr-dim). Resident, supervised,
+  # hypr-dim user unit. The ExecStart points at the compiled binary in /usr/bin
+  # (upstream's unit uses %h/.local/bin/hypr-dim). Resident, supervised,
   # respawning; brightness-sync re-asserts external gamma after a restart. Enabled
   # for the user the same way hypridle is: a plain symlink into
   # graphical-session.target.wants (works even when the stack builds at first boot —
@@ -1135,7 +1135,7 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/hypr-dim
+ExecStart=/usr/bin/hypr-dim
 # Resident, supervised: always respawn. State (per-output gamma) is in memory
 # only, and a gamma_control Failed permanently drops an output — restart is the
 # recovery path; `brightness-sync restore` re-asserts levels afterward.
@@ -1276,7 +1276,7 @@ check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"
 for name in "\${HYPR_BUILD_ORDER[@]}"; do
   build_one "\${name}"
 done
-test -x /usr/local/bin/Hyprland
+test -x /usr/bin/Hyprland
 purge_build_deps
 info "First-boot Hyprland build complete."
 EOF
