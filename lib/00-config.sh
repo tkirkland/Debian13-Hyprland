@@ -349,7 +349,16 @@ EOF
 # the sanitizer/quadmath/gomp set, and the libc6 they pull). Everything NOT
 # listed here stays governed by the 100-pin, so collateral upgrades such as
 # libmpfr6/libnghttp3-9/libngtcp2-16 cannot leak in from sid.
-Package: gcc-15* g++-15* cpp-15* libgcc-15-dev libstdc++-15-dev libstdc++6 libgcc-s1 libcc1-0 libgomp1 libitm1 libatomic1 libasan8 liblsan0 libtsan2 libubsan1 libhwasan0 libquadmath0 libc6 libc6-dev libc-bin libc-dev-bin
+#
+# The WHOLE glibc binary family must move to sid together with libc6: sid's
+# libc6 2.42 carries `Breaks: locales (< 2.42)` (and the other glibc binaries
+# share a tight `= ${binary:Version}` coupling), so if libc6 came from sid
+# while locales/libc-l10n/etc. stayed on trixie 2.41 the transaction would
+# break (e.g. the wider cache closure pulls `locales` via TARGET_BASE_PACKAGES).
+# Hence every glibc-source binary that can appear in the closure is allow-pinned
+# too; the libc6-i386/libc6-x32 multilib variants are listed for completeness
+# (harmless no-ops on a pure amd64 install).
+Package: gcc-15* g++-15* cpp-15* libgcc-15-dev libstdc++-15-dev libstdc++6 libgcc-s1 libcc1-0 libgomp1 libitm1 libatomic1 libasan8 liblsan0 libtsan2 libubsan1 libhwasan0 libquadmath0 libc6 libc6-dev libc-bin libc-dev-bin libc-l10n locales locales-all nscd libc6-dbg libc-devtools libc6-i386 libc6-x32
 Pin: release a=unstable
 Pin-Priority: 500
 EOF
