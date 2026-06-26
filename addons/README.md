@@ -14,7 +14,10 @@ boot.
 
 Note for offline installs: the `.deb` itself installs from this
 directory, but its *dependencies* must be resolvable — online that is
-automatic; offline they must already be in the cache closure.
+automatic; offline they must already be in the cache closure. This is for
+*third-party* artifacts only: first-class conditional packages such as the
+NVIDIA driver are NOT addons — they are baked into the offline closure and
+installed by their own detection-gated path, so you do not drop them here.
 
 ## Vendor runfiles — `addons/*.run`
 

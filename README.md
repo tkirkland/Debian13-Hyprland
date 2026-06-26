@@ -181,6 +181,14 @@ custom stack by package name from the prebuilt `.debs` — no source compile, no
 network. Pass `--online` to force the networked path instead, or `--offline`
 to refuse the network outright.
 
+The on-ISO store also carries the **NVIDIA driver** — both flavors (open and
+proprietary) for branches 595 (the production default) and 610, sourced from
+NVIDIA's CUDA repo, not Debian non-free (that path was removed). When a GPU is
+detected the installer conditionally installs the flavor+branch you choose
+(`--nvidia`/`--nvidia-branch`, or the prompt) entirely from `/hypr-repo` with no
+network; trust comes from the staged `cuda-keyring`, and the dkms kernel module
+builds on the target against the cached `linux-headers`, MOK-signed like ZFS.
+
 ## Networked install
 
 From a Debian 13 live session (or an installed Debian system) **without** our
@@ -221,13 +229,20 @@ Common flags (see `--help` for the full list):
 --rtc=<utc|local>                      hardware clock interpretation, required
                                        (utc, or local for Windows dual boot;
                                        prompted if omitted)
---nvidia=<open|debian|none|package>    NVIDIA driver source when a GPU is
-                                       detected (default: prompt; unattended
-                                       uses "open" — NVIDIA's repo, open
-                                       kernel modules, production branch)
---nvidia-version=<ver>                 pin an exact NVIDIA version for
-                                       --nvidia=open (e.g. 610.43.02-1);
-                                       pinned installs are apt-mark held
+--nvidia=<open|proprietary|none>       NVIDIA driver flavor when a GPU is
+                                       detected — both flavors come from
+                                       NVIDIA's CUDA repo and are baked into the
+                                       on-ISO store, so either installs fully
+                                       offline (default: prompt; unattended uses
+                                       "open", or "proprietary" on a pre-Turing
+                                       GPU). "open" = open kernel modules
+                                       (Turing/RTX, GTX 16xx and newer);
+                                       "proprietary" = every GPU; "none" = skip
+--nvidia-branch=<595|610>              NVIDIA driver branch (default 595, the
+                                       production/certified branch; 610 = newer)
+--nvidia-version=<ver>                 pin an exact NVIDIA version, either flavor
+                                       (e.g. 610.43.02-1); pinned installs are
+                                       apt-mark held
 --jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
 --ntp="<servers>"                      space-separated NTP servers for the
@@ -404,7 +419,10 @@ installer. GRUB needs nothing — its binary is Debian-signed.
 Scope is deliberately lean: a Debian base, compiled Hyprland, greetd +
 UWSM, a terminal (kitty), and a PipeWire/WirePlumber audio stack — no
 waybar or other desktop extras. NVIDIA support is opt-in (`--nvidia`, and
-only when a GPU is detected); on the Dell Precision 7780 a `modprobe.d`
+only when a GPU is detected) — both the open and proprietary flavors, for
+branches 595 and 610, are baked into the on-ISO store and install fully
+offline (the dkms module builds on the target); on the Dell Precision 7780 a
+`modprobe.d`
 drop-in forces the SOF SoundWire audio driver. UWSM is not packaged in
 Debian, so it is built from source (meson) at its latest release tag, like
 the hyprwm stack; its runtime dependencies (python3, python3-xdg,
