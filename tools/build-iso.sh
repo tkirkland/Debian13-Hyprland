@@ -264,7 +264,8 @@ step_depsim() {
 # 7) Assemble the final ISO (xorriso, runs in tools/iso-assemble.sh).
 step_assemble() {
   info "[build] assembling ${OUT_ISO}"
-  "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${CACHE_DIR}/repo" "${OUT_ISO}" \
+  # Invoke via bash so it works regardless of the script's execute bit.
+  bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${CACHE_DIR}/repo" "${OUT_ISO}" \
     || fatal "iso-assemble failed"
 }
 
