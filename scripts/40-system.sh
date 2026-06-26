@@ -173,7 +173,14 @@ install_zfs_from_source() {
     "${TARGET}"/var/tmp/*.buildinfo
   git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
     "${ZFS_REPO_URL}" "${TARGET}/var/tmp/openzfs"
-  in_target "
+  # The build step (autogen → configure → make native-deb-utils → assert the
+  # required packages were built) is shared. The in-target install tail below
+  # it (filter+install the .debs, purge pam, regenerate the PAM stack) only
+  # matters when zfs is going into a real target. When seeding an offline pool
+  # (ZFS_DEB_POOL set) the buildroot is thrown away, so skip the tail and stop
+  # after the build + copy-to-pool. With ZFS_DEB_POOL unset the concatenated
+  # script is byte-for-byte identical to the original installer in_target call.
+  local zfs_script="
     set -e
     export DEBIAN_FRONTEND=noninteractive
     # Drop any live-kernel modules package from an earlier failed attempt.
@@ -189,7 +196,9 @@ install_zfs_from_source() {
       openzfs-zfs-zed; do
       ls /var/tmp/\${p}_*.deb >/dev/null 2>&1 ||
         { echo \"required package not built: \${p}\" >&2; exit 1; }
-    done
+    done"
+  if [[ -z "${ZFS_DEB_POOL:-}" ]]; then
+    zfs_script+="
     debs=\"\$(ls /var/tmp/*.deb |
       grep -Ev 'zfs-modules|test|dracut|dbg|-dev|pam' || true)\"
     [[ -n \"\${debs}\" ]] ||
@@ -206,6 +215,8 @@ install_zfs_from_source() {
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
   "
+  fi
+  in_target "${zfs_script}"
   # Optionally seed an offline pool with the same filtered .debs (copy, so
   # the in-target install above is unaffected). Resolved host-side.
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
@@ -219,9 +230,13 @@ install_zfs_from_source() {
   fi
   # dkms rebuilds (and re-signs) the zfs module on every kernel update;
   # the toolchain must survive the Hyprland build-dep purge and its
-  # `apt-get autoremove --purge`.
-  in_target "apt-mark manual ${ZFS_BUILD_PACKAGES[*]} >/dev/null"
-  in_target "zfs version" || true
+  # `apt-get autoremove --purge`. Only meaningful for a real target: when
+  # seeding the offline pool (ZFS_DEB_POOL set) nothing was installed in this
+  # throwaway buildroot, so apt-mark and the zfs-version smoke test are skipped.
+  if [[ -z "${ZFS_DEB_POOL:-}" ]]; then
+    in_target "apt-mark manual ${ZFS_BUILD_PACKAGES[*]} >/dev/null"
+    in_target "zfs version" || true
+  fi
   rm -rf "${TARGET}/var/tmp/openzfs"
 }
 
