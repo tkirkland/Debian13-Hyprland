@@ -231,9 +231,11 @@ build_custom_swww() {
     # wayland >= 1.24 (we build wayland from release tags). The attribute has
     # no codegen meaning, so strip it from the core wayland.xml the scanner
     # reads — simpler than vendoring a patched scanner crate, and it leaves the
-    # committed Cargo.lock usable with --locked.
-    if [[ -f \"${HYPR_DESTDIR:-}/usr/share/wayland/wayland.xml\" ]]; then
-      sed -i 's/ frozen=\"true\"//g' \"${HYPR_DESTDIR:-}/usr/share/wayland/wayland.xml\"
+    # committed Cargo.lock usable with --locked. This patches the INSTALLED
+    # wayland.xml in the build environment (from our compiled wayland), NOT
+    # swww's DESTDIR output — so it is intentionally not HYPR_DESTDIR-prefixed.
+    if [[ -f /usr/share/wayland/wayland.xml ]]; then
+      sed -i 's/ frozen=\"true\"//g' /usr/share/wayland/wayland.xml
     fi
     export CARGO_HOME=/tmp/swww-cargo
     cargo build --release --locked
