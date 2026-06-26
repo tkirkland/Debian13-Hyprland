@@ -417,7 +417,7 @@ declare -A HYPR_RESOLVED_TAG=()
 HYPR_BUILD_PACKAGES=(
   build-essential cmake meson ninja-build pkg-config git
   wayland-protocols libwayland-dev libxkbcommon-dev libinput-dev
-  libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev
+  libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev hwdata
   glslang-tools glslang-dev libudev-dev libseat-dev libdisplay-info-dev
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
