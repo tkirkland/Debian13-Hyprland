@@ -96,6 +96,10 @@ step_bootstrap_chroot() {
   # on the HOST's PID 1 (this box is itself a ZFS workstation). Install the guard
   # BEFORE the binds and before any in_target apt run, exactly as phase_bootstrap.
   install_policy_rc_d
+  # Defense in depth beyond policy-rc.d: give the buildroot a private tmpfs /run
+  # so NO maintainer script (even one calling systemctl/dbus-send directly) can
+  # reach the host's systemd/D-Bus sockets.
+  export HYPR_PRIVATE_RUN=1
   mount_chroot_binds
   assert_chrooted_in_target \
     || fatal "in_target is not chroot-backed; refusing to build on the host."
