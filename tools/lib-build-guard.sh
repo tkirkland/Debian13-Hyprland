@@ -18,10 +18,33 @@ if ! declare -f fatal >/dev/null 2>&1; then
   }
 fi
 
+# _path_strictly_under PATH BASE...
+# Return 0 iff (canonical) PATH is a strict descendant of one of the given
+# absolute bases. Equality with a base does not count (we never operate on the
+# scratch root itself). Bases are canonicalized with realpath -m.
+_path_strictly_under() {
+  local p="${1}"
+  shift
+  local b breal
+  for b in "$@"; do
+    [[ "${b}" == /* ]] || continue
+    breal="$(realpath -m -- "${b}")"
+    if [[ "${p}" != "${breal}" && "${p}/" == "${breal}/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # assert_build_sandbox WORKSPACE TARGET
-# Fatal (return 1) unless TARGET is a non-empty absolute path strictly inside
-# a non-empty absolute WORKSPACE, and neither is a system root. Uses
-# realpath -m so it works before the directories exist.
+# Fatal (return 1) unless TARGET is a non-empty absolute path strictly inside a
+# non-empty absolute WORKSPACE, AND WORKSPACE resolves strictly under an
+# allowlisted throwaway scratch base (default: /var/tmp /tmp; override via
+# HYPR_BUILD_ALLOWED_BASES). A positive allowlist is used deliberately: a
+# blacklist of exact system roots (/usr, /var, ...) still accepts subdirectories
+# like /usr/local/x or /var/lib/x, under which a --confirm build would
+# debootstrap / bind-mount / rm -rf inside the host tree. Uses realpath -m so it
+# works before the directories exist.
 assert_build_sandbox() {
   local workspace="${1:-}" target="${2:-}"
   local wreal treal
@@ -46,19 +69,12 @@ assert_build_sandbox() {
   wreal="$(realpath -m -- "${workspace}")"
   treal="$(realpath -m -- "${target}")"
 
-  case "${wreal}" in
-    / | /usr | /etc | /var | /bin | /lib | /sbin | /boot | /root | /home)
-      info "build-guard: WORKSPACE is a system path: '${wreal}'"
-      return 1
-      ;;
-  esac
-
-  case "${treal}" in
-    / | /usr | /etc | /var | /bin | /lib | /sbin | /boot | /root | /home)
-      info "build-guard: TARGET is a system path: '${treal}'"
-      return 1
-      ;;
-  esac
+  local -a allowed_bases
+  read -r -a allowed_bases <<<"${HYPR_BUILD_ALLOWED_BASES:-/var/tmp /tmp}"
+  if ! _path_strictly_under "${wreal}" "${allowed_bases[@]}"; then
+    info "build-guard: WORKSPACE '${wreal}' must be strictly under an allowed scratch base (${allowed_bases[*]})"
+    return 1
+  fi
 
   if [[ "${treal}" == "${wreal}" ]]; then
     info "build-guard: TARGET must not equal WORKSPACE: '${treal}'"
