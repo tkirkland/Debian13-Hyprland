@@ -79,8 +79,13 @@ cache_populate_debs() {
   # /etc/apt/preferences.d/nvidia-driver-pin (they Conflict), so each branch is
   # installed, downloaded, then purged before switching. open and proprietary
   # are downloaded separately because nvidia-open Conflicts the proprietary
-  # nvidia-kernel-dkms/nvidia-kernel-source; the shared userspace overlaps and
-  # is deduped by cp -n.
+  # nvidia-kernel-dkms; the shared userspace overlaps and is deduped by cp -n.
+  # CRITICAL: each --download-only resolution must be internally conflict-free.
+  # We list ONLY the flavor metapackages + firmware + dkms build-deps and let
+  # apt resolve the shared userspace itself. Force-listing the shared set
+  # (nvidia-suspend-common, nvidia-kernel-common, ...) made apt refuse the
+  # transaction: nvidia-driver Conflicts nvidia-suspend-common, and
+  # nvidia-kernel-support (which nvidia-driver pulls) Conflicts nvidia-kernel-common.
   info "Resolving NVIDIA driver closure (open+proprietary, branches 595+610)..."
   chroot "${work}/closure" /usr/bin/env bash -c "
     set -e
@@ -110,16 +115,18 @@ SRC
       # the branch-agnostic metapackages resolve to this branch; this also
       # downloads the pin deb itself into the pool.
       apt-get install -y \"\${pin}\"
-      # Open flavor: nvidia-open drags in the shared nvidia-driver userspace.
+      # Open flavor: nvidia-open drags in its open-flavor shared userspace.
       apt-get install -y --download-only \
         ${NVIDIA_OPEN_PACKAGES[*]} \
+        ${NVIDIA_FIRMWARE_PACKAGES[*]} \
         ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
         linux-headers-amd64
-      # Proprietary flavor: explicit shared set keeps the pool closure
-      # unambiguous (incl. nvidia-kernel-source, which Conflicts open).
+      # Proprietary flavor: nvidia-driver pulls its own shared userspace
+      # (nvidia-driver-libs/-cuda, nvidia-kernel-support, nvidia-powerd, ...).
+      # Listing only the metapackages keeps this resolution conflict-free.
       apt-get install -y --download-only \
         ${NVIDIA_PROP_PACKAGES[*]} \
-        ${NVIDIA_SHARED_PACKAGES[*]} \
+        ${NVIDIA_FIRMWARE_PACKAGES[*]} \
         ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
         linux-headers-amd64
       # Purge the pin before switching branches (the two pins Conflict).
