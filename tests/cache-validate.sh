@@ -7,37 +7,38 @@ echo "test: cache validation"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
+# cache_validate gates on CACHE_REPO_DIR — the on-ISO store path when booted
+# from our offline ISO (preflight points it at ISO_MEDIUM_REPO). Pre-seed the
+# env so config's ${CACHE_REPO_DIR:-...} default picks it up, exactly as
+# preflight does at install time.
 run_validate() {
-  bash -c "
+  CACHE_REPO_DIR="${tmp}/repo" bash -c '
     source lib/00-config.sh
     source lib/01-log.sh
     source scripts/10-cache.sh
-    CACHE_DIR='${tmp}/cache'
     cache_validate
-  "
+  '
 }
 
-# Empty cache -> fails listing what's missing.
+# Empty repo -> fails, naming the missing index (no source/ZBM contract now).
 out="$(run_validate 2>&1 || true)"
-assert_contains "${out}" "repo index" "missing repo reported"
-assert_contains "${out}" "sources manifest" "missing manifest reported"
-assert_fails "empty cache fails validation" run_validate
+assert_contains "${out}" "repo index" "missing repo index reported"
+assert_fails "empty repo fails validation" run_validate
 
-# Minimal complete cache -> passes.
-mkdir -p "${tmp}/cache/repo/dists/trixie/main/binary-amd64" \
-  "${tmp}/cache/repo/pool" "${tmp}/cache/sources"
-touch "${tmp}/cache/repo/dists/trixie/Release"
+# Minimal complete repo (dists + Release + every pooled deb present) -> passes.
+mkdir -p "${tmp}/repo/dists/trixie/main/binary-amd64" "${tmp}/repo/pool"
+touch "${tmp}/repo/dists/trixie/Release"
 printf 'Filename: pool/fake_1.0_amd64.deb\n' \
-  >"${tmp}/cache/repo/dists/trixie/main/binary-amd64/Packages"
-touch "${tmp}/cache/repo/pool/fake_1.0_amd64.deb"
-printf 'hyprland v0.50.1\n' >"${tmp}/cache/sources/MANIFEST"
-touch "${tmp}/cache/sources/hyprland-v0.50.1.tar.gz"
-touch "${tmp}/cache/zfsbootmenu.EFI"
+  >"${tmp}/repo/dists/trixie/main/binary-amd64/Packages"
+touch "${tmp}/repo/pool/fake_1.0_amd64.deb"
 out="$(run_validate)"
-assert_contains "${out}" "Cache valid" "complete cache passes"
+assert_contains "${out}" "Cache repo valid" "complete repo passes"
 
-# Manifest references a missing tarball -> fails.
-printf 'hyprutils v0.8.2\n' >>"${tmp}/cache/sources/MANIFEST"
-assert_fails "missing source tarball fails validation" run_validate
+# Packages references a deb missing from the pool -> fails.
+printf 'Filename: pool/gone_2.0_amd64.deb\n' \
+  >>"${tmp}/repo/dists/trixie/main/binary-amd64/Packages"
+out="$(run_validate 2>&1 || true)"
+assert_contains "${out}" "deb missing from pool" "missing pooled deb reported"
+assert_fails "missing pooled deb fails validation" run_validate
 
 finish_test
