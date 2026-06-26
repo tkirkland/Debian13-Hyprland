@@ -33,6 +33,7 @@ for _src in \
   lib/01-log.sh \
   lib/04-chroot-mounts.sh \
   scripts/10-cache.sh \
+  scripts/30-bootstrap.sh \
   scripts/60-hyprland.sh \
   scripts/lib-deb-package.sh \
   tools/lib-build-guard.sh; do
@@ -89,6 +90,12 @@ step_bootstrap_chroot() {
   mkdir -p "${TARGET}"
   debootstrap "${SUITE}" "${TARGET}" "${MIRROR}" \
     || fatal "debootstrap failed for ${SUITE} -> ${TARGET}"
+  # CRITICAL host-safety: mount_chroot_binds binds the host's live /run (systemd
+  # + dbus sockets) into the buildroot. Without policy-rc.d exit 101, a package
+  # postinst's deb-systemd-invoke/invoke-rc.d would start/restart/reload services
+  # on the HOST's PID 1 (this box is itself a ZFS workstation). Install the guard
+  # BEFORE the binds and before any in_target apt run, exactly as phase_bootstrap.
+  install_policy_rc_d
   mount_chroot_binds
   assert_chrooted_in_target \
     || fatal "in_target is not chroot-backed; refusing to build on the host."
