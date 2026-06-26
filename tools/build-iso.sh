@@ -179,6 +179,11 @@ step_depsim() {
   if mountpoint -q "${simroot}${CACHE_DIR}" 2>/dev/null; then
     umount "${simroot}${CACHE_DIR}" || umount -l "${simroot}${CACHE_DIR}" || true
   fi
+  # Never rm -rf while the CACHE_DIR bind is still live: a stuck mount would let
+  # rm traverse the bind and delete the real pool. Refuse rather than risk it.
+  if mountpoint -q "${simroot}${CACHE_DIR}" 2>/dev/null; then
+    fatal "depsim: ${simroot}${CACHE_DIR} still mounted; refusing rm -rf (unmount manually)"
+  fi
   rm -rf "${simroot}"
   ((rc == 0)) || fatal "depsim: apt-get --simulate failed (unsatisfied offline closure)"
   info "${out}"
