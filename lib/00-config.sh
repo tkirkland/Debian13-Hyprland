@@ -290,6 +290,11 @@ HYPR_BACKPORTS_PACKAGES=(cargo)
 #   get the toolchain debs from the cache repo instead.
 write_sid_toolchain_sources() {
   local root="${1:-}"
+  if [[ -z "${root}" ]]; then
+    printf '[FATAL] %s: refusing to write apt sources with empty root (would hit host /etc)\n' \
+      "${FUNCNAME[0]}" >&2
+    return 1
+  fi
   mkdir -p "${root%/}/etc/apt/sources.list.d" \
     "${root%/}/etc/apt/preferences.d"
   cat >"${root%/}/etc/apt/sources.list.d/sid-toolchain.sources" <<EOF
@@ -315,6 +320,11 @@ EOF
 # nothing pulls from it unless asked with `-t trixie-backports`.
 write_backports_sources() {
   local root="${1:-}"
+  if [[ -z "${root}" ]]; then
+    printf '[FATAL] %s: refusing to write apt sources with empty root (would hit host /etc)\n' \
+      "${FUNCNAME[0]}" >&2
+    return 1
+  fi
   mkdir -p "${root%/}/etc/apt/sources.list.d" \
     "${root%/}/etc/apt/preferences.d"
   cat >"${root%/}/etc/apt/sources.list.d/backports.sources" <<EOF

@@ -192,7 +192,7 @@ build_custom_lua() {
     install -m644 lua.h luaconf.h lualib.h lauxlib.h \"${HYPR_DESTDIR:-}/usr/include/\"
     install -m644 liblua.a \"${HYPR_DESTDIR:-}/usr/lib/\"
   "
-  cat >"${HYPR_DESTDIR:-}${TARGET}/usr/lib/pkgconfig/lua.pc" <<EOF
+  cat >"${TARGET:-}${HYPR_DESTDIR:-}/usr/lib/pkgconfig/lua.pc" <<EOF
 prefix=/usr
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
@@ -203,8 +203,8 @@ Version: ${ver}
 Libs: -L\${libdir} -llua -lm -ldl
 Cflags: -I\${includedir}
 EOF
-  if [[ ! -f "${HYPR_DESTDIR:-}${TARGET}/usr/include/lua.hpp" ]]; then
-    cat >"${HYPR_DESTDIR:-}${TARGET}/usr/include/lua.hpp" <<'EOF'
+  if [[ ! -f "${TARGET:-}${HYPR_DESTDIR:-}/usr/include/lua.hpp" ]]; then
+    cat >"${TARGET:-}${HYPR_DESTDIR:-}/usr/include/lua.hpp" <<'EOF'
 // lua.hpp shim: upstream stopped shipping it after Lua 5.3.
 extern "C" {
 #include "lua.h"

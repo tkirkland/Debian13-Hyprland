@@ -137,6 +137,10 @@ step_zfs() {
     # shellcheck disable=SC1091
     source "${REPO_ROOT}/scripts/40-system.sh"
   fi
+  # Re-assert after the lazy source: a future module that redefined in_target
+  # to the no-chroot host fallback must not slip ZFS compiles onto the host.
+  assert_chrooted_in_target \
+    || fatal "in_target is not chroot-backed after sourcing 40-system.sh; refusing to build on host."
   info "[build] building OpenZFS into the pool ${POOL}"
   ZFS_DEB_POOL="${POOL}" install_zfs_from_source
 }
@@ -154,17 +158,29 @@ step_depsim() {
   local simroot
   simroot="$(mktemp -d "${ISO_WORKSPACE}/depsim.XXXXXX")"
   debootstrap "${SUITE}" "${simroot}" "${MIRROR}" \
-    || fatal "depsim: debootstrap failed"
+    || { rm -rf "${simroot}"; fatal "depsim: debootstrap failed"; }
   printf 'deb [trusted=yes] file://%s/repo %s main\n' "${CACHE_DIR}" "${SUITE}" \
     >"${simroot}/etc/apt/sources.list"
-  mount --bind "${CACHE_DIR}" "${simroot}${CACHE_DIR}" 2>/dev/null || true
-  local out
+  # Track the bind mount so the EXIT/ERR trap (teardown_chroot_binds) unmounts
+  # it even on a failure path — it must never leak under /var/tmp.
+  mkdir -p "${simroot}${CACHE_DIR}"
+  if mount --bind "${CACHE_DIR}" "${simroot}${CACHE_DIR}"; then
+    track_mount "${simroot}${CACHE_DIR}"
+  fi
+  local out rc
   out="$(chroot "${simroot}" /usr/bin/env bash -c "
     set -e
     apt-get update -o APT::Get::List-Cleanup=0 >/dev/null
     DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y \
       ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]}
-  ")" || fatal "depsim: apt-get --simulate failed (unsatisfied offline closure)"
+  ")" && rc=0 || rc=$?
+  # Unmount + remove the throwaway simroot now. The bind is also trap-tracked;
+  # teardown_chroot_binds re-checks mountpoint, so this is not a double-unmount.
+  if mountpoint -q "${simroot}${CACHE_DIR}" 2>/dev/null; then
+    umount "${simroot}${CACHE_DIR}" || umount -l "${simroot}${CACHE_DIR}" || true
+  fi
+  rm -rf "${simroot}"
+  ((rc == 0)) || fatal "depsim: apt-get --simulate failed (unsatisfied offline closure)"
   info "${out}"
   # Anything fetched would be logged as an http(s):// URI by apt; the file://
   # repo never is. A remote URI here means the pool is incomplete.
@@ -219,6 +235,11 @@ main() {
   # Heavy path only past here. Guards BEFORE any mutating work.
   require_root || fatal "build-iso must run as root (debootstrap/chroot)."
   assert_build_sandbox "${ISO_WORKSPACE}" "${TARGET}" || fatal "unsafe sandbox config."
+  # BUILD_STAGE_REL is operator-overridable and gets concatenated RAW onto
+  # TARGET for host-side rm -rf/mkdir in step_build_stack; prove it cannot
+  # escape the buildroot before any mutating step runs.
+  assert_stage_under_target "${TARGET}" "${BUILD_STAGE_REL}" \
+    || fatal "unsafe BUILD_STAGE_REL (escapes buildroot): ${BUILD_STAGE_REL}"
 
   # Mounts must never leak, even on failure.
   trap 'teardown_chroot_binds' EXIT
