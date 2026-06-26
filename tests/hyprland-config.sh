@@ -20,7 +20,7 @@ source scripts/60-hyprland.sh
 # build_stack must verify uwsm built, not just Hyprland: if a component before
 # uwsm (which builds last) fails, the loop aborts and uwsm never installs,
 # leaving a system that boots to greetd with no session manager (dead greeter).
-assert_contains "$(declare -f build_stack)" "/usr/local/bin/uwsm" \
+assert_contains "$(declare -f build_stack)" "/usr/bin/uwsm" \
   "build_stack verifies the uwsm binary after the source build"
 
 TARGET="${tmp}/target"
@@ -165,6 +165,20 @@ if [[ -x "${wrapper}" ]]; then
     "wrapper routes session output to the journal"
   assert_contains "$(<"${wrapper}")" "UWSM_SILENT_START=2" \
     "wrapper suppresses uwsm startup chatter"
+  # Consumer-path guard (dead-greeter regression): uwsm is part of the
+  # source-compiled stack, now shipped as a .deb at prefix /usr, so the
+  # wrapper must exec /usr/bin/uwsm. A stale /usr/local/bin/uwsm reference
+  # would fail to launch the session ("failed to execute .../uwsm").
+  assert_contains "$(<"${wrapper}")" "exec /usr/bin/systemd-cat -t hypr-session" \
+    "wrapper routes through systemd-cat at its real /usr/bin path"
+  assert_contains "$(<"${wrapper}")" "/usr/bin/uwsm start -- hyprland.desktop" \
+    "wrapper execs the compiled uwsm at its /usr prefix (not /usr/local)"
+  if [[ "$(<"${wrapper}")" == */usr/local/bin/uwsm* ]]; then
+    echo "  FAIL: wrapper still references the pre-move /usr/local/bin/uwsm" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: wrapper has no stale /usr/local/bin/uwsm reference"
+  fi
 else
   echo "  FAIL: hypr-session wrapper missing or not executable" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
@@ -172,6 +186,39 @@ fi
 greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
 assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
   "greetd session command uses the wrapper"
+
+# hypr-dim.service (issue #66): the unit FILE is installer glue and stays under
+# /usr/local, but its ExecStart points at the COMPILED binary, which Phase 2
+# moved to /usr (shipped as a .deb). It must therefore exec /usr/bin/hypr-dim,
+# never the pre-move /usr/local/bin/hypr-dim.
+dim_unit="${TARGET}/usr/local/lib/systemd/user/hypr-dim.service"
+if [[ -f "${dim_unit}" ]]; then
+  echo "  ok: hypr-dim.service unit staged under /usr/local (installer glue)"
+  dim_txt="$(<"${dim_unit}")"
+  assert_contains "${dim_txt}" "ExecStart=/usr/bin/hypr-dim" \
+    "hypr-dim.service execs the compiled binary at its /usr prefix"
+  if [[ "${dim_txt}" == *"ExecStart=/usr/local/bin/hypr-dim"* ]]; then
+    echo "  FAIL: hypr-dim.service still execs the pre-move /usr/local/bin/hypr-dim" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: hypr-dim.service has no stale /usr/local/bin/hypr-dim ExecStart"
+  fi
+else
+  echo "  FAIL: hypr-dim.service unit missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
+# Hand-written glue scripts stay in /usr/local (NOT owned by any .deb): the
+# compiled-binary /usr migration must not have dragged these along.
+for glue in usr/local/bin/swww-cycle usr/local/bin/drm-reprobe \
+  usr/local/bin/brightness-sync usr/local/bin/hypr-session; do
+  if [[ -f "${TARGET}/${glue}" ]]; then
+    echo "  ok: glue script ${glue##*/} staged under /usr/local"
+  else
+    echo "  FAIL: glue script ${glue} missing from /usr/local" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  fi
+done
 
 # Greeter branch (no autologin): the prompt runs inside cage (a kiosk Wayland
 # compositor) via /etc/greetd/greeter-displays.sh, not straight on VT1. The
@@ -292,5 +339,26 @@ ver_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   declare -f phase_verify' 2>/dev/null || true)"
 assert_contains "${ver_body}" "welcome app installed" \
   "verify checks the welcome binary exists"
+
+# Offline prebuilt-deb install: no Hyprland source tree is staged, so the user
+# config is generated from the example the hyprland deb installs at
+# /usr/share/hypr/hyprland.lua. configure_session must read that fallback.
+# (Placed last: the configure_session subshell reassigns TARGET.)
+offline_target="${tmp}/offline-target"
+mkdir -p "${offline_target}/usr/share/hypr"
+cp "${tmp}/target${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
+  "${offline_target}/usr/share/hypr/hyprland.lua"
+(
+  in_target() { :; }
+  TARGET="${offline_target}"
+  HYPR_AUTOLOGIN=1
+  configure_session
+)
+if [[ -f "${offline_target}/home/tester/.config/hypr/hyprland.lua" ]]; then
+  echo "  ok: offline config generated from the installed /usr/share/hypr example"
+else
+  echo "  FAIL: offline config not generated from /usr/share/hypr/hyprland.lua" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
 
 finish_test

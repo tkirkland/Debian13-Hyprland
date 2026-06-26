@@ -20,9 +20,24 @@ mount_chroot_binds() {
   track_mount "${t}/proc"
   mount -t sysfs sysfs "${t}/sys" || fatal "Failed to mount ${t}/sys"
   track_mount "${t}/sys"
-  mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
+  # HYPR_PRIVATE_RUN=1 (set by the ISO builder) mounts a fresh tmpfs at /run
+  # instead of bind-mounting the host's live /run. Host /run carries the real
+  # systemd (/run/systemd/private) and D-Bus sockets; a package maintainer
+  # script that calls systemctl/dbus-send DIRECTLY would otherwise reach the
+  # host's PID 1 even with policy-rc.d in place (policy-rc.d only covers
+  # invoke-rc.d/deb-systemd-invoke). A private tmpfs has no host sockets, so no
+  # in-chroot process can touch host services. The installer leaves this unset
+  # and keeps the bind (it runs inside the disposable live ISO, not the user OS).
+  if ((${HYPR_PRIVATE_RUN:-0})); then
+    mount -t tmpfs tmpfs "${t}/run" || fatal "Failed to mount tmpfs ${t}/run"
+  else
+    mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
+  fi
   track_mount "${t}/run"
-  if [[ -d /sys/firmware/efi/efivars ]]; then
+  # The ISO builder (HYPR_PRIVATE_RUN=1) never installs a bootloader into the
+  # buildroot, so it must NOT expose host EFI NVRAM (a writable host-mutation
+  # surface). Only the installer (flag unset) binds efivars, where it is needed.
+  if ((${HYPR_PRIVATE_RUN:-0} == 0)) && [[ -d /sys/firmware/efi/efivars ]]; then
     mount --bind /sys/firmware/efi/efivars "${t}/sys/firmware/efi/efivars" ||
       fatal "Failed to bind-mount ${t}/sys/firmware/efi/efivars"
     track_mount "${t}/sys/firmware/efi/efivars"

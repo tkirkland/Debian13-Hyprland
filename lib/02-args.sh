@@ -19,6 +19,9 @@ Options:
                         omitted; required with --yes / non-interactive runs)
   --build-on-firstboot  Defer the Hyprland build to first boot of the target
   --offline             Force offline mode (install only from the cache)
+  --online              Force online mode (use the network mirror even when
+                        the on-ISO package store is present; the default is
+                        offline-from-store when that store is found)
   --phase=<name>        Run a single phase:
                         preflight cache storage bootstrap system boot
                         hyprland verify cleanup
@@ -35,20 +38,24 @@ Options:
                         with Windows (which assumes a local-time RTC)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
-  --nvidia=<open|debian|none|package>
-                        NVIDIA driver source when a GPU is detected:
-                        "open" = NVIDIA's Debian 13 repo, open kernel
-                        modules pinned to NVIDIA_DRIVER_VERSION (default
-                        610.43.02-1); "debian" = Debian's non-free
-                        nvidia-driver (550); "none" = skip; any other
-                        value = a literal non-free package name.
-                        Prompted interactively if omitted; unattended
-                        runs default to "open"
+  --nvidia=<open|proprietary|none>
+                        NVIDIA driver flavor when a GPU is detected — both
+                        come from NVIDIA's CUDA repo and install offline from
+                        the on-ISO store: "open" = open kernel modules (Turing
+                        / RTX, GTX 16xx and newer); "proprietary" = proprietary
+                        modules (every GPU; forced on pre-Turing cards);
+                        "none" = skip. Prompted interactively if omitted;
+                        unattended runs default to "open" (or "proprietary"
+                        on a pre-Turing GPU)
+  --nvidia-branch=<595|610>
+                        NVIDIA driver branch (default 595, the
+                        production/certified branch; 610 = newer feature
+                        branch). Selected via the nvidia-driver-pinning package
   --nvidia-version=<ver>
-                        Exact driver version for --nvidia=open, e.g.
-                        610.43.02-1 (pinned and apt-mark held). Default:
-                        the repo's production branch, tracked across
-                        NVIDIA's branch promotions
+                        Exact driver version (both flavors), e.g. 610.43.02-1
+                        — pins each package and apt-mark holds them. Default:
+                        the branch's newest release, tracked across NVIDIA's
+                        branch promotions
   --mirror=<url>        Debian mirror (default http://deb.debian.org/debian)
   --ntp="<servers>"     Space-separated NTP servers for the installed system's
                         systemd-timesyncd (e.g. "0.pool.ntp.org
@@ -79,6 +86,7 @@ parse_args() {
         ;;
       --build-on-firstboot) BUILD_ON_FIRSTBOOT=1 ;;
       --offline) OFFLINE=1 ;;
+      --online) ONLINE=1 ;;
       --phase=*)
         RUN_PHASE="${arg#*=}"
         [[ " ${VALID_PHASES} " == *" ${RUN_PHASE} "* ]] ||
@@ -101,8 +109,17 @@ parse_args() {
         ;;
       --nvidia=*)
         NVIDIA_DRIVER="${arg#*=}"
-        [[ -n "${NVIDIA_DRIVER}" ]] ||
-          fatal "--nvidia expects open|debian|none or a package name"
+        case "${NVIDIA_DRIVER}" in
+          open | proprietary | none) ;;
+          *) fatal "--nvidia expects open|proprietary|none, got '${NVIDIA_DRIVER}'" ;;
+        esac
+        ;;
+      --nvidia-branch=*)
+        NVIDIA_BRANCH="${arg#*=}"
+        case "${NVIDIA_BRANCH}" in
+          595 | 610) ;;
+          *) fatal "--nvidia-branch expects 595 or 610, got '${NVIDIA_BRANCH}'" ;;
+        esac
         ;;
       --nvidia-version=*)
         NVIDIA_DRIVER_VERSION="${arg#*=}"
@@ -181,27 +198,31 @@ require_nvidia_choice() {
   ((HAS_NVIDIA_GPU)) || return 0
   [[ -n "${NVIDIA_DRIVER}" ]] && return 0
   if ((!IS_INTERACTIVE)) || ((ASSUME_YES)); then
-    NVIDIA_DRIVER="open"
-    info "NVIDIA GPU detected: defaulting to the open kernel modules from" \
-      "NVIDIA's repo (override with --nvidia=<open|debian|none>)."
+    if ((${NVIDIA_GPU_PRETURING:-0})); then
+      NVIDIA_DRIVER="proprietary"
+      info "Pre-Turing NVIDIA GPU detected: defaulting to the proprietary" \
+        "driver (the open kernel modules need Turing or newer)."
+    else
+      NVIDIA_DRIVER="open"
+      info "NVIDIA GPU detected: defaulting to the open kernel modules from" \
+        "NVIDIA's repo (override with --nvidia=<open|proprietary|none>)."
+    fi
     return 0
   fi
   local choice=""
   console "NVIDIA GPU detected. Driver to install:"
-  console "  1) open    NVIDIA's Debian 13 repo, open kernel modules — suggested."
-  console "             Production branch by default; --nvidia-version=<ver> pins"
-  console "             an exact release (e.g. 610.43.02-1, the feature branch)."
-  console "             Requires a Turing (RTX/GTX 16xx) or newer GPU."
-  console "  2) debian  Debian 13's non-free nvidia-driver (550 series, proprietary"
-  console "             kernel modules) — for pre-Turing GPUs."
-  console "  3) none    skip — keep the kernel's nouveau driver."
+  console "  1) open         NVIDIA's open kernel modules — suggested."
+  console "                  Requires a Turing (RTX/GTX 16xx) or newer GPU."
+  console "  2) proprietary  NVIDIA's proprietary kernel modules — every GPU,"
+  console "                  required for pre-Turing cards."
+  console "  3) none         skip — keep the kernel's nouveau driver."
   while true; do
     prompt "Choice [1-3, default 1]: " ||
       fatal "No input (EOF) while selecting the NVIDIA driver."
     choice="${REPLY}"
     case "${choice}" in
       1 | "") NVIDIA_DRIVER="open" ;;
-      2) NVIDIA_DRIVER="debian" ;;
+      2) NVIDIA_DRIVER="proprietary" ;;
       3) NVIDIA_DRIVER="none" ;;
       *) continue ;;
     esac

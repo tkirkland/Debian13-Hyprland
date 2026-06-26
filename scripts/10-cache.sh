@@ -10,14 +10,18 @@
 # Depends on resolve_latest_release_tag from scripts/60-hyprland.sh; the
 # orchestrator sources all modules before dispatching any phase.
 
+# Install-time consumers (live env, offline). CACHE_REPO_DIR defaults to
+# ${CACHE_DIR}/repo but preflight redirects it to the on-ISO store
+# (ISO_MEDIUM_REPO) when booted from our offline ISO, so these resolve the
+# repo wherever it actually lives.
 cache_repo_exists() {
-  [[ -f "${CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
+  [[ -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
 }
 
 # Configure apt (live env) to install from the cache repo only.
 install_from_cache_repo() {
   local list="/etc/apt/sources.list.d/hypr-deb-cache.list"
-  echo "deb [trusted=yes] file://${CACHE_DIR}/repo ${SUITE} main" >"${list}"
+  echo "deb [trusted=yes] file://${CACHE_REPO_DIR} ${SUITE} main" >"${list}"
   apt-get update -o Dir::Etc::sourcelist="${list}" \
     -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -43,7 +47,11 @@ cache_populate_debs() {
   debootstrap --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
   # The pinned sid source supplies gcc-15 (absent from trixie) and
   # trixie-backports supplies the Rust toolchain (cargo/rustc) for swww, so the
-  # offline cache carries both toolchain sets too.
+  # offline cache carries both toolchain sets too. The scoped allow-pins these
+  # writers install let the toolchain resolve by NAME (no `-t`), so the closure
+  # downloads exactly the versions the build will install (see install_build_deps
+  # in 60-hyprland.sh): `-t` would override the pins and pull collateral sid/
+  # backports upgrades (libmpfr6/libnghttp3-9/libngtcp2-16) the build never uses.
   write_sid_toolchain_sources "${work}/closure"
   write_backports_sources "${work}/closure"
   chroot "${work}/closure" /usr/bin/env bash -c "
@@ -56,9 +64,74 @@ cache_populate_debs() {
       ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 grub-efi-amd64-signed \
       systemd-boot os-prober
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      -t sid ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      ${HYPR_TOOLCHAIN_PACKAGES[*]}
     DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      -t trixie-backports ${HYPR_BACKPORTS_PACKAGES[*]}
+      ${HYPR_BACKPORTS_PACKAGES[*]}
+  "
+  cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
+
+  # NVIDIA drivers (Phase 5): resolve the full offline closure for BOTH flavors
+  # (open + proprietary) and BOTH branches (595 + 610) into the same pool, so
+  # the on-ISO /hypr-repo can install NVIDIA with no network. Runs only inside
+  # this throwaway closure chroot (never touches the host). Trust comes from the
+  # cuda-keyring deb; the deb822 source matches the flat (Suites: /) NVIDIA repo.
+  # The two nvidia-driver-pinning-<branch> packages select the branch and share
+  # /etc/apt/preferences.d/nvidia-driver-pin (they Conflict), so each branch is
+  # installed, downloaded, then purged before switching. open and proprietary
+  # are downloaded separately because nvidia-open Conflicts the proprietary
+  # nvidia-kernel-dkms; the shared userspace overlaps and is deduped by cp -n.
+  # CRITICAL: each --download-only resolution must be internally conflict-free.
+  # We list ONLY the flavor metapackages + firmware + dkms build-deps and let
+  # apt resolve the shared userspace itself. Force-listing the shared set
+  # (nvidia-suspend-common, nvidia-kernel-common, ...) made apt refuse the
+  # transaction: nvidia-driver Conflicts nvidia-suspend-common, and
+  # nvidia-kernel-support (which nvidia-driver pulls) Conflicts nvidia-kernel-common.
+  info "Resolving NVIDIA driver closure (open+proprietary, branches 595+610)..."
+  chroot "${work}/closure" /usr/bin/env bash -c "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    # Tools to fetch the keyring deb over HTTPS (minbase has neither).
+    apt-get install -y --no-install-recommends ca-certificates curl
+    # Establish trust: fetch + install cuda-keyring (drops the trusted key at
+    # /usr/share/keyrings/cuda-archive-keyring.gpg). Stage the deb for the pool
+    # so the target can dpkg -i it from /hypr-repo for offline trust.
+    curl -fsSL --retry 3 '${NVIDIA_REPO_KEYRING_URL}' \
+      -o /var/cache/apt/archives/cuda-keyring_1.1-1_all.deb
+    dpkg -i /var/cache/apt/archives/cuda-keyring_1.1-1_all.deb
+    # cuda-keyring also drops a flat-repo .list pointing at the HTTPS URL;
+    # replace it with the signed deb822 source so there is a single NVIDIA
+    # source (matches the install-time keyringSetup).
+    rm -f /etc/apt/sources.list.d/cuda-debian13-x86_64.list
+    cat > /etc/apt/sources.list.d/cuda-debian13.sources <<'SRC'
+Types: deb
+URIs: ${NVIDIA_REPO_URL}
+Suites: /
+Signed-By: /usr/share/keyrings/cuda-archive-keyring.gpg
+SRC
+    apt-get update
+    for branch in 595 610; do
+      pin=\"nvidia-driver-pinning-\${branch}\"
+      # Activate the branch pin (installs preferences.d/nvidia-driver-pin) so
+      # the branch-agnostic metapackages resolve to this branch; this also
+      # downloads the pin deb itself into the pool.
+      apt-get install -y \"\${pin}\"
+      # Open flavor: nvidia-open drags in its open-flavor shared userspace.
+      apt-get install -y --download-only \
+        ${NVIDIA_OPEN_PACKAGES[*]} \
+        ${NVIDIA_FIRMWARE_PACKAGES[*]} \
+        ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
+        linux-headers-amd64
+      # Proprietary flavor: nvidia-driver pulls its own shared userspace
+      # (nvidia-driver-libs/-cuda, nvidia-kernel-support, nvidia-powerd, ...).
+      # Listing only the metapackages keeps this resolution conflict-free.
+      apt-get install -y --download-only \
+        ${NVIDIA_PROP_PACKAGES[*]} \
+        ${NVIDIA_FIRMWARE_PACKAGES[*]} \
+        ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
+        linux-headers-amd64
+      # Purge the pin before switching branches (the two pins Conflict).
+      apt-get purge -y \"\${pin}\"
+    done
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"
@@ -109,38 +182,48 @@ cache_populate_zbm() {
   fetch_zbm_efi "${CACHE_DIR}/zfsbootmenu.EFI"
 }
 
+# Validate the offline apt repo that debootstrap and in-chroot apt consume.
+# Checks CACHE_REPO_DIR — which defaults to ${CACHE_DIR}/repo but preflight
+# redirects to the on-ISO store (ISO_MEDIUM_REPO) when booted from our offline
+# ISO — so the SAME gate covers both the install-from-ISO path and the legacy
+# install-populated-cache path. The repo IS the offline contract: it carries
+# the debootstrap base, the prebuilt custom stack debs (HYPR_BUILD_ORDER), and
+# the OpenZFS debs — the full closure apt resolves against. Source tarballs and
+# the ZBM EFI are BUILD-TIME artifacts (produced under CACHE_DIR at ISO
+# creation, never shipped in the repo) and are no longer part of the offline
+# install contract, so they are not validated here.
 cache_validate() {
-  local problems=() pkg_index="" fname="" name="" tag=""
-  pkg_index="${CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages"
+  local problems=() pkg_index="" fname=""
+  pkg_index="${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages"
 
   [[ -f "${pkg_index}" ]] || problems+=("repo index missing: ${pkg_index}")
-  [[ -f "${CACHE_DIR}/repo/dists/${SUITE}/Release" ]] ||
+  [[ -f "${CACHE_REPO_DIR}/dists/${SUITE}/Release" ]] ||
     problems+=("repo Release file missing")
   if [[ -f "${pkg_index}" ]]; then
     while IFS= read -r fname; do
-      [[ -f "${CACHE_DIR}/repo/${fname}" ]] ||
+      [[ -f "${CACHE_REPO_DIR}/${fname}" ]] ||
         problems+=("deb missing from pool: ${fname}")
     done < <(awk '/^Filename: /{print $2}' "${pkg_index}")
-  fi
 
-  if [[ -f "${CACHE_DIR}/sources/MANIFEST" ]]; then
-    while read -r name tag; do
-      [[ -f "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" ]] ||
-        problems+=("source tarball missing: ${name}-${tag}.tar.gz")
-    done <"${CACHE_DIR}/sources/MANIFEST"
-  else
-    problems+=("sources manifest missing: ${CACHE_DIR}/sources/MANIFEST")
+    # Offline contract (Phase 5): the store MUST carry the NVIDIA driver debs
+    # for both flavors and both branches plus the trust keyring — without them
+    # the target cannot install NVIDIA offline. Assert the key packages are
+    # indexed (their files are covered by the Filename check above).
+    local want=""
+    for want in cuda-keyring \
+      "${NVIDIA_OPEN_PACKAGES[@]}" "${NVIDIA_PROP_PACKAGES[@]}" \
+      "${NVIDIA_PINNING_PACKAGE[595]}" "${NVIDIA_PINNING_PACKAGE[610]}"; do
+      grep -qx "Package: ${want}" "${pkg_index}" ||
+        problems+=("NVIDIA driver deb missing from pool index: ${want}")
+    done
   fi
-
-  [[ -f "${CACHE_DIR}/zfsbootmenu.EFI" ]] ||
-    problems+=("zfsbootmenu.EFI missing")
 
   if ((${#problems[@]} > 0)); then
     local p=""
     for p in "${problems[@]}"; do warn "cache: ${p}"; done
     fatal "Cache validation failed (${#problems[@]} problem(s))."
   fi
-  info "Cache valid: ${CACHE_DIR}"
+  info "Cache repo valid: ${CACHE_REPO_DIR}"
 }
 
 phase_cache() {
