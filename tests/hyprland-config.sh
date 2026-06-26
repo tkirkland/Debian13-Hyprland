@@ -187,6 +187,39 @@ greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
 assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
   "greetd session command uses the wrapper"
 
+# hypr-dim.service (issue #66): the unit FILE is installer glue and stays under
+# /usr/local, but its ExecStart points at the COMPILED binary, which Phase 2
+# moved to /usr (shipped as a .deb). It must therefore exec /usr/bin/hypr-dim,
+# never the pre-move /usr/local/bin/hypr-dim.
+dim_unit="${TARGET}/usr/local/lib/systemd/user/hypr-dim.service"
+if [[ -f "${dim_unit}" ]]; then
+  echo "  ok: hypr-dim.service unit staged under /usr/local (installer glue)"
+  dim_txt="$(<"${dim_unit}")"
+  assert_contains "${dim_txt}" "ExecStart=/usr/bin/hypr-dim" \
+    "hypr-dim.service execs the compiled binary at its /usr prefix"
+  if [[ "${dim_txt}" == *"ExecStart=/usr/local/bin/hypr-dim"* ]]; then
+    echo "  FAIL: hypr-dim.service still execs the pre-move /usr/local/bin/hypr-dim" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: hypr-dim.service has no stale /usr/local/bin/hypr-dim ExecStart"
+  fi
+else
+  echo "  FAIL: hypr-dim.service unit missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
+# Hand-written glue scripts stay in /usr/local (NOT owned by any .deb): the
+# compiled-binary /usr migration must not have dragged these along.
+for glue in usr/local/bin/swww-cycle usr/local/bin/drm-reprobe \
+  usr/local/bin/brightness-sync usr/local/bin/hypr-session; do
+  if [[ -f "${TARGET}/${glue}" ]]; then
+    echo "  ok: glue script ${glue##*/} staged under /usr/local"
+  else
+    echo "  FAIL: glue script ${glue} missing from /usr/local" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  fi
+done
+
 # Greeter branch (no autologin): the prompt runs inside cage (a kiosk Wayland
 # compositor) via /etc/greetd/greeter-displays.sh, not straight on VT1. The
 # greetd command is just cage + that wrapper; tuigreet and its flags now live
@@ -306,5 +339,26 @@ ver_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   declare -f phase_verify' 2>/dev/null || true)"
 assert_contains "${ver_body}" "welcome app installed" \
   "verify checks the welcome binary exists"
+
+# Offline prebuilt-deb install: no Hyprland source tree is staged, so the user
+# config is generated from the example the hyprland deb installs at
+# /usr/share/hypr/hyprland.lua. configure_session must read that fallback.
+# (Placed last: the configure_session subshell reassigns TARGET.)
+offline_target="${tmp}/offline-target"
+mkdir -p "${offline_target}/usr/share/hypr"
+cp "${tmp}/target${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
+  "${offline_target}/usr/share/hypr/hyprland.lua"
+(
+  in_target() { :; }
+  TARGET="${offline_target}"
+  HYPR_AUTOLOGIN=1
+  configure_session
+)
+if [[ -f "${offline_target}/home/tester/.config/hypr/hyprland.lua" ]]; then
+  echo "  ok: offline config generated from the installed /usr/share/hypr example"
+else
+  echo "  FAIL: offline config not generated from /usr/share/hypr/hyprland.lua" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
 
 finish_test
