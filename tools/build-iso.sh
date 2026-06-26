@@ -245,7 +245,17 @@ step_depsim() {
   info "[build] simulating full install against the offline pool only"
   local simroot
   simroot="$(mktemp -d "${ISO_WORKSPACE}/depsim.XXXXXX")"
-  debootstrap "${SUITE}" "${simroot}" "${MIRROR}" \
+  # Bootstrap the throwaway base DIRECTLY from the offline pool — ZERO network.
+  # step_reindex (step 5) already wrote ${CACHE_DIR}/repo/dists/${SUITE}/{Release,
+  # main/binary-${ARCH}/Packages}, and the base debs were pooled at step 1, so the
+  # pool can bootstrap a full base system offline. This drops the 4th base download
+  # AND strengthens the test (proves the pool is self-sufficient for base bootstrap).
+  # --no-check-gpg: the pool's apt-ftparchive Release is unsigned (no Release.gpg/
+  # InRelease), so signature verification must be disabled — verified empirically
+  # against this exact pool layout with debootstrap 1.0.141 (file:// + --no-check-gpg
+  # installs the base successfully; a file:// debootstrap WITHOUT it fails on the
+  # missing Release.gpg).
+  debootstrap --no-check-gpg "${SUITE}" "${simroot}" "file://${CACHE_DIR}/repo" \
     || { rm -rf "${simroot}"; fatal "depsim: debootstrap failed"; }
   printf 'deb [trusted=yes] file://%s/repo %s main\n' "${CACHE_DIR}" "${SUITE}" \
     >"${simroot}/etc/apt/sources.list"
