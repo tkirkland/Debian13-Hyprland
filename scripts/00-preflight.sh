@@ -263,7 +263,9 @@ probe_network() {
 # display-controller class (0x03xxxx) means an NVIDIA GPU is present.
 detect_nvidia_gpu() {
   HAS_NVIDIA_GPU=0
-  local dev="" vendor="" class=""
+  # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
+  NVIDIA_GPU_PRETURING=0
+  local dev="" vendor="" class="" device=""
   for dev in "${SYS_PCI_PATH}"/*; do
     [[ -r "${dev}/vendor" && -r "${dev}/class" ]] || continue
     read -r vendor <"${dev}/vendor"
@@ -271,6 +273,19 @@ detect_nvidia_gpu() {
     if [[ "${vendor}" == "0x10de" && "${class}" == 0x03* ]]; then
       # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
       HAS_NVIDIA_GPU=1
+      # The open kernel modules need Turing (TU1xx) or newer: those carry PCI
+      # device ids >= 0x1E00, while Pascal/Maxwell and older sit below and need
+      # the proprietary driver. An unreadable/odd id is treated as open-capable.
+      if [[ -r "${dev}/device" ]]; then
+        read -r device <"${dev}/device"
+        if [[ "${device}" =~ ^0x[0-9a-fA-F]+$ ]] && ((device < 0x1E00)); then
+          # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
+          NVIDIA_GPU_PRETURING=1
+          info "NVIDIA GPU detected (PCI ${dev##*/}, device ${device}):" \
+            "pre-Turing — open kernel modules unsupported, will use proprietary."
+          return 0
+        fi
+      fi
       info "NVIDIA GPU detected (PCI ${dev##*/})."
       return 0
     fi

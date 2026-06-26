@@ -87,19 +87,15 @@ phase_verify() {
     test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.lua"
 
   # NVIDIA (issue #4): only when a GPU was detected and a driver chosen.
-  # Offline installs legitimately skip the package (warned at install).
+  # Both flavors install offline from /hypr-repo now (Phase 5), so this is
+  # checked regardless of network. nvidia-driver (the shared userspace) is
+  # present for BOTH flavors — nvidia-open Depends on it — so it is a flavor-
+  # agnostic probe that also holds under the pre-Turing proprietary fallback.
   if nvidia_install_requested; then
-    local nv_pkg="${NVIDIA_DRIVER}"
-    case "${nv_pkg}" in
-      open) nv_pkg="nvidia-open" ;;
-      debian) nv_pkg="nvidia-driver" ;;
-    esac
-    if ((NETWORK_AVAILABLE)); then
-      vcheck "NVIDIA driver package installed (${nv_pkg})" \
-        in_target "dpkg -s '${nv_pkg}' >/dev/null"
-      vcheck "nvidia-drm modeset configured" \
-        grep -q "nvidia-drm" "${TARGET}/etc/modprobe.d/nvidia-options.conf"
-    fi
+    vcheck "NVIDIA driver userspace installed (nvidia-driver)" \
+      in_target "dpkg -s nvidia-driver >/dev/null"
+    vcheck "nvidia-drm modeset configured" \
+      grep -q "nvidia-drm" "${TARGET}/etc/modprobe.d/nvidia-options.conf"
     vcheck "uwsm env carries NVIDIA variables" \
       grep -q "__GLX_VENDOR_LIBRARY_NAME" \
       "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env"

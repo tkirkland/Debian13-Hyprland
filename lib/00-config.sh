@@ -158,6 +158,11 @@ MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
 #                supports every NVIDIA GPU (REPLACES the old "debian" option).
 #   none         skip — keep the kernel's nouveau driver
 HAS_NVIDIA_GPU=0
+# Set by detect_nvidia_gpu when the GPU's PCI device id predates Turing
+# (< 0x1E00): Pascal/Maxwell and older cards are unsupported by the open
+# kernel modules, so install_nvidia_driver forces the proprietary flavor.
+# shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
+NVIDIA_GPU_PRETURING=0
 NVIDIA_DRIVER="${NVIDIA_DRIVER:-}"
 
 # NVIDIA CUDA debian13 repo. This is a FLAT (non-suite/component) repo: the
