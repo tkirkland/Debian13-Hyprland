@@ -204,6 +204,17 @@ NVIDIA_SHARED_PACKAGES=(
   nvidia-settings nvidia-xconfig xserver-xorg-video-nvidia
   nvidia-vdpau-driver nvidia-powerd nvidia-suspend-common
 )
+# Build-time deps the on-target dkms module build needs, staged in the offline
+# pool so both nvidia-kernel-dkms and nvidia-kernel-open-dkms compile with no
+# network (same machinery as openzfs-zfs-dkms, which already works offline).
+# Once the NVIDIA source is enabled, apt resolves `dkms` to NVIDIA's repo build
+# (3.4.1-1 > Debian's 3.2.2-1, unpinned), so that exact deb lands in the pool.
+# linux-headers-amd64 is already in the closure for openzfs; it is downloaded
+# again alongside these so the dkms header dependency is explicit. The hard dep
+# firmware-nvidia-gsp is branch-versioned and already in NVIDIA_SHARED_PACKAGES.
+NVIDIA_DKMS_BUILD_PACKAGES=(
+  dkms build-essential gcc g++ cpp make binutils libc6-dev kmod
+)
 
 # Exact version override (e.g. 610.43.02-1, via --nvidia-version=...), applied
 # to BOTH flavors. Empty = repo default: the NVIDIA_PINNING_PACKAGE for
