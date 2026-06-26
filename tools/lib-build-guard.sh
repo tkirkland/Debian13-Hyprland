@@ -72,6 +72,50 @@ assert_build_sandbox() {
   return 0
 }
 
+# assert_stage_under_target TARGET STAGE_REL
+# Fatal (return 1) unless the host-side staging path ${TARGET}${STAGE_REL}
+# resolves strictly inside TARGET. STAGE_REL (e.g. BUILD_STAGE_REL) is a
+# chroot-internal absolute path that is concatenated RAW onto TARGET for the
+# host-side rm -rf/mkdir in step_build_stack; an operator-overridable traversal
+# value such as '/../../../etc' would otherwise escape the buildroot and let a
+# host rm -rf/mkdir hit /etc, /usr or /var. realpath -m collapses any '..' so
+# the containment check holds before the directories exist.
+assert_stage_under_target() {
+  local target="${1:-}" stagerel="${2:-}"
+  local treal sreal
+
+  if [[ -z "${target}" ]]; then
+    info "build-guard: TARGET is empty"
+    return 1
+  fi
+  if [[ "${target}" != /* ]]; then
+    info "build-guard: TARGET must be absolute: '${target}'"
+    return 1
+  fi
+  if [[ -z "${stagerel}" ]]; then
+    info "build-guard: STAGE_REL is empty"
+    return 1
+  fi
+  if [[ "${stagerel}" != /* ]]; then
+    info "build-guard: STAGE_REL must be a chroot-internal absolute path: '${stagerel}'"
+    return 1
+  fi
+
+  treal="$(realpath -m -- "${target}")"
+  sreal="$(realpath -m -- "${target}${stagerel}")"
+
+  if [[ "${sreal}" == "${treal}" ]]; then
+    info "build-guard: stage path must not equal TARGET: '${treal}'"
+    return 1
+  fi
+  if [[ "${sreal}/" != "${treal}/"* ]]; then
+    info "build-guard: stage path '${sreal}' escapes TARGET '${treal}'"
+    return 1
+  fi
+
+  return 0
+}
+
 # assert_chrooted_in_target
 # Fatal (return 1) unless the in-effect in_target function is the
 # chroot-backed variant (its body contains the token 'chroot'), NOT the
