@@ -69,6 +69,64 @@ cache_populate_debs() {
       ${HYPR_BACKPORTS_PACKAGES[*]}
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
+
+  # NVIDIA drivers (Phase 5): resolve the full offline closure for BOTH flavors
+  # (open + proprietary) and BOTH branches (595 + 610) into the same pool, so
+  # the on-ISO /hypr-repo can install NVIDIA with no network. Runs only inside
+  # this throwaway closure chroot (never touches the host). Trust comes from the
+  # cuda-keyring deb; the deb822 source matches the flat (Suites: /) NVIDIA repo.
+  # The two nvidia-driver-pinning-<branch> packages select the branch and share
+  # /etc/apt/preferences.d/nvidia-driver-pin (they Conflict), so each branch is
+  # installed, downloaded, then purged before switching. open and proprietary
+  # are downloaded separately because nvidia-open Conflicts the proprietary
+  # nvidia-kernel-dkms/nvidia-kernel-source; the shared userspace overlaps and
+  # is deduped by cp -n.
+  info "Resolving NVIDIA driver closure (open+proprietary, branches 595+610)..."
+  chroot "${work}/closure" /usr/bin/env bash -c "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    # Tools to fetch the keyring deb over HTTPS (minbase has neither).
+    apt-get install -y --no-install-recommends ca-certificates curl
+    # Establish trust: fetch + install cuda-keyring (drops the trusted key at
+    # /usr/share/keyrings/cuda-archive-keyring.gpg). Stage the deb for the pool
+    # so the target can dpkg -i it from /hypr-repo for offline trust.
+    curl -fsSL --retry 3 '${NVIDIA_REPO_KEYRING_URL}' \
+      -o /var/cache/apt/archives/cuda-keyring_1.1-1_all.deb
+    dpkg -i /var/cache/apt/archives/cuda-keyring_1.1-1_all.deb
+    # cuda-keyring also drops a flat-repo .list pointing at the HTTPS URL;
+    # replace it with the signed deb822 source so there is a single NVIDIA
+    # source (matches the install-time keyringSetup).
+    rm -f /etc/apt/sources.list.d/cuda-debian13-x86_64.list
+    cat > /etc/apt/sources.list.d/cuda-debian13.sources <<'SRC'
+Types: deb
+URIs: ${NVIDIA_REPO_URL}
+Suites: /
+Signed-By: /usr/share/keyrings/cuda-archive-keyring.gpg
+SRC
+    apt-get update
+    for branch in 595 610; do
+      pin=\"nvidia-driver-pinning-\${branch}\"
+      # Activate the branch pin (installs preferences.d/nvidia-driver-pin) so
+      # the branch-agnostic metapackages resolve to this branch; this also
+      # downloads the pin deb itself into the pool.
+      apt-get install -y \"\${pin}\"
+      # Open flavor: nvidia-open drags in the shared nvidia-driver userspace.
+      apt-get install -y --download-only \
+        ${NVIDIA_OPEN_PACKAGES[*]} \
+        ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
+        linux-headers-amd64
+      # Proprietary flavor: explicit shared set keeps the pool closure
+      # unambiguous (incl. nvidia-kernel-source, which Conflicts open).
+      apt-get install -y --download-only \
+        ${NVIDIA_PROP_PACKAGES[*]} \
+        ${NVIDIA_SHARED_PACKAGES[*]} \
+        ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
+        linux-headers-amd64
+      # Purge the pin before switching branches (the two pins Conflict).
+      apt-get purge -y \"\${pin}\"
+    done
+  "
+  cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"
   info "Pool populated: $(find "${pool}" -name '*.deb' | wc -l) packages"
 }
@@ -139,6 +197,18 @@ cache_validate() {
       [[ -f "${CACHE_REPO_DIR}/${fname}" ]] ||
         problems+=("deb missing from pool: ${fname}")
     done < <(awk '/^Filename: /{print $2}' "${pkg_index}")
+
+    # Offline contract (Phase 5): the store MUST carry the NVIDIA driver debs
+    # for both flavors and both branches plus the trust keyring — without them
+    # the target cannot install NVIDIA offline. Assert the key packages are
+    # indexed (their files are covered by the Filename check above).
+    local want=""
+    for want in cuda-keyring \
+      "${NVIDIA_OPEN_PACKAGES[@]}" "${NVIDIA_PROP_PACKAGES[@]}" \
+      "${NVIDIA_PINNING_PACKAGE[595]}" "${NVIDIA_PINNING_PACKAGE[610]}"; do
+      grep -qx "Package: ${want}" "${pkg_index}" ||
+        problems+=("NVIDIA driver deb missing from pool index: ${want}")
+    done
   fi
 
   if ((${#problems[@]} > 0)); then
