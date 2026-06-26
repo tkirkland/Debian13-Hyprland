@@ -509,7 +509,9 @@ unset _addon_line
 # linux-headers-amd64 metapackage tracks the archive's NEWEST kernel, which
 # is often newer than a live ISO's running kernel — DKMS would then build
 # modules only for a kernel that isn't running and modprobe would fail.
-LIVE_KERNEL_HEADERS="linux-headers-$(uname -r)"
+# Overridable: the ISO builder (tools/build-iso.sh) runs on the operator's own
+# host, whose `uname -r` is NOT an archive kernel, so it pins the metapackage.
+LIVE_KERNEL_HEADERS="${LIVE_KERNEL_HEADERS:-linux-headers-$(uname -r)}"
 
 # Live-environment tools the preflight must be able to install offline.
 LIVE_TOOL_PACKAGES=(

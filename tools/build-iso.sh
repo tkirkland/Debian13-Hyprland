@@ -25,6 +25,13 @@ REPO_ROOT="$(cd -- "${TOOLS_DIR}/.." && pwd)"
 # lib/00-config.sh reads addons/*.list relative to the cwd, so anchor there.
 cd "${REPO_ROOT}"
 
+# This builder runs on the operator's own machine, whose running kernel
+# (uname -r) is NOT in the Debian archive. Pin the kernel-headers metapackage
+# (which IS, and matches linux-image-amd64 in TARGET_BASE_PACKAGES) BEFORE
+# sourcing config — LIVE_TOOL_PACKAGES captures LIVE_KERNEL_HEADERS at source
+# time, so this must be exported first.
+export LIVE_KERNEL_HEADERS="${LIVE_KERNEL_HEADERS:-linux-headers-amd64}"
+
 # Source order is CRITICAL: lib/04-chroot-mounts.sh must precede
 # scripts/60-hyprland.sh so the chroot-backed in_target is in effect (60's
 # fallback only defines in_target when one is not already declared).
