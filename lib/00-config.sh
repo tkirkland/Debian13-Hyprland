@@ -198,17 +198,19 @@ declare -gA NVIDIA_PINNING_PACKAGE=(
 # firmware-nvidia-gsp.
 NVIDIA_OPEN_PACKAGES=(nvidia-open nvidia-kernel-open-dkms)
 NVIDIA_PROP_PACKAGES=(nvidia-driver nvidia-kernel-dkms)
-# Shared userspace pulled in by nvidia-driver / nvidia-driver-libs. Listed
-# explicitly so the offline /hypr-repo pool closure is unambiguous; the
-# libnvidia-*/libnv* userspace libs (libcuda1, libnvoptix1, libnvidia-ml, etc.)
-# follow automatically as dependencies.
-NVIDIA_SHARED_PACKAGES=(
-  nvidia-driver nvidia-driver-libs nvidia-driver-cuda
-  nvidia-kernel-common nvidia-kernel-support nvidia-kernel-source
-  firmware-nvidia-gsp
-  nvidia-settings nvidia-xconfig xserver-xorg-video-nvidia
-  nvidia-vdpau-driver nvidia-powerd nvidia-suspend-common
-)
+# Each flavor metapackage resolves its OWN correct shared userspace closure, so
+# we do NOT force-list the shared libs: doing so previously dragged in packages
+# that the driver Conflicts and broke the download resolution. Specifically
+#   nvidia-driver Conflicts nvidia-suspend-common
+#   nvidia-kernel-support (pulled by nvidia-driver) Conflicts nvidia-kernel-common
+# so listing nvidia-suspend-common + nvidia-kernel-common made apt refuse the
+# whole transaction. nvidia-driver already pulls nvidia-driver-libs,
+# nvidia-driver-cuda, nvidia-kernel-support, nvidia-powerd, nvidia-settings and
+# the libnvidia-*/libnv* userspace as deps; nvidia-open pulls its open-flavor
+# equivalents. The only shared dep we list explicitly (belt-and-suspenders, so
+# the offline pool unambiguously carries it) is firmware-nvidia-gsp — a hard dep
+# of both dkms packages and conflict-free with every flavor/branch.
+NVIDIA_FIRMWARE_PACKAGES=(firmware-nvidia-gsp)
 # Build-time deps the on-target dkms module build needs, staged in the offline
 # pool so both nvidia-kernel-dkms and nvidia-kernel-open-dkms compile with no
 # network (same machinery as openzfs-zfs-dkms, which already works offline).
@@ -216,7 +218,7 @@ NVIDIA_SHARED_PACKAGES=(
 # (3.4.1-1 > Debian's 3.2.2-1, unpinned), so that exact deb lands in the pool.
 # linux-headers-amd64 is already in the closure for openzfs; it is downloaded
 # again alongside these so the dkms header dependency is explicit. The hard dep
-# firmware-nvidia-gsp is branch-versioned and already in NVIDIA_SHARED_PACKAGES.
+# firmware-nvidia-gsp is branch-versioned and listed in NVIDIA_FIRMWARE_PACKAGES.
 NVIDIA_DKMS_BUILD_PACKAGES=(
   dkms build-essential gcc g++ cpp make binutils libc6-dev kmod
 )

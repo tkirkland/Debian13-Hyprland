@@ -174,12 +174,17 @@ out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_PROP_PACKAGES[*]}"')"
 assert_eq "nvidia-driver nvidia-kernel-dkms" "${out}" \
   "proprietary flavor = nvidia-driver + nvidia-kernel-dkms (NVIDIA repo, not Debian non-free)"
 
-# Shared userspace set staged into the offline pool.
-out="$(bash -c 'source lib/00-config.sh; printf "%s\n" "${NVIDIA_SHARED_PACKAGES[@]}"')"
-assert_contains "${out}" "nvidia-driver-libs" "shared userspace includes nvidia-driver-libs"
-assert_contains "${out}" "nvidia-driver-cuda" "shared userspace includes nvidia-driver-cuda"
-assert_contains "${out}" "firmware-nvidia-gsp" "shared userspace includes firmware-nvidia-gsp (dkms hard dep)"
-assert_contains "${out}" "xserver-xorg-video-nvidia" "shared userspace includes the X driver"
+# Shared userspace is resolved by apt per-flavor, NOT force-listed (force-listing
+# nvidia-suspend-common / nvidia-kernel-common broke the download resolution
+# because nvidia-driver / nvidia-kernel-support Conflict them). Only the
+# conflict-free firmware hard dep is listed explicitly for the offline pool.
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_FIRMWARE_PACKAGES[*]}"')"
+assert_eq "firmware-nvidia-gsp" "${out}" \
+  "explicit pool firmware = firmware-nvidia-gsp (dkms hard dep, conflict-free)"
+# The retired over-broad shared array must be gone (it Conflicted the driver).
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_SHARED_PACKAGES[*]:-UNSET}"')"
+assert_eq "UNSET" "${out}" \
+  "over-broad NVIDIA_SHARED_PACKAGES removed (conflicted nvidia-driver)"
 
 # The retired Debian non-free "debian" flavor must be gone from the docs/config.
 if grep -qE '^\s*#.*\bdebian\b.*non-free nvidia-driver' lib/00-config.sh; then
