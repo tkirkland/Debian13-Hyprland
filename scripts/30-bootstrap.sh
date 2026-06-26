@@ -1,6 +1,16 @@
 # shellcheck shell=bash
-# Bootstrap: mount the target tree, debootstrap Debian (network or cache),
-# embed the cache, write apt sources, establish chroot binds.
+# Bootstrap: mount the target tree, debootstrap Debian (network or the on-ISO
+# repo), write the permanent Debian apt sources, and — offline — bind-mount
+# the on-ISO package store into the target with a temporary file:// apt source
+# so in-chroot apt resolves the offline packages during the install.
+
+# In-target path where the on-ISO package store is bind-mounted so apt's
+# file:// source resolves inside the chroot. Fixed (not derived from
+# CACHE_REPO_DIR) so the temporary deb822 source URI is stable, and so
+# teardown can find the mount without extra state.
+TARGET_ISO_REPO_MNT="/run/hypr-repo"
+# Target-relative path of the temporary offline apt source (removed at cleanup).
+ISO_TEMP_SOURCE_REL="etc/apt/sources.list.d/hypr-iso-temp.sources"
 
 mount_target_tree() {
   info "Mounting target tree at ${TARGET}..."
@@ -59,63 +69,64 @@ run_debootstrap() {
     debootstrap --arch="${ARCH}" "${SUITE}" "${TARGET}" "${MIRROR}"
   else
     cache_validate
-    info "debootstrap ${SUITE} from offline cache..."
+    info "debootstrap ${SUITE} from the on-ISO repo (${CACHE_REPO_DIR})..."
     debootstrap --no-check-gpg --arch="${ARCH}" "${SUITE}" "${TARGET}" \
-      "file://${CACHE_DIR}/repo"
+      "file://${CACHE_REPO_DIR}"
   fi
 }
 
-# The complete cache is always embedded so the installed system can rebuild
-# or reinstall fully offline (spec: Cache section).
-embed_cache_in_target() {
-  if ((SKIP_CACHE)); then
-    info "--skip-cache: not embedding an offline cache in the target."
-    return 0
-  fi
-  [[ -d "${CACHE_DIR}/repo" ]] || {
-    warn "No cache at ${CACHE_DIR}; target will not carry an offline cache."
-    return 0
-  }
-  info "Embedding cache into ${TARGET}${TARGET_CACHE_DIR}..."
-  mkdir -p "${TARGET}${TARGET_CACHE_DIR}"
-  rsync -a "${CACHE_DIR}/" "${TARGET}${TARGET_CACHE_DIR}/"
-  cat >"${TARGET}${TARGET_CACHE_DIR}/README" <<EOF
-Hypr-Deb offline cache.
-repo/     local apt repository; deb822 stanza to use it:
-            Types: deb
-            URIs: file://${TARGET_CACHE_DIR}/repo
-            Suites: ${SUITE}
-            Components: main
-            Trusted: yes
-sources/  hyprwm source tag archives + MANIFEST of resolved release tags
-zfsbootmenu.EFI  cached ZFSBootMenu release binary
-EOF
-}
-
-# Target apt sources are written in deb822 format under
-# /etc/apt/sources.list.d/ (components from DEBIAN_COMPONENTS, shared with
-# the live environment via write_debian_sources); /etc/apt/sources.list is
-# reduced to a pointer comment so debootstrap's one-line entries never
-# linger.
+# The PERMANENT apt sources of the installed system are always the real Debian
+# mirror (via write_debian_sources, shared with the live environment) so future
+# online `apt update`s work. The on-ISO package store is ISO-ONLY and is never
+# embedded in the target; offline installs resolve their packages through the
+# TEMPORARY file:// source set up by setup_target_iso_repo. /etc/apt/sources.list
+# is reduced to a pointer comment by write_debian_sources so debootstrap's
+# one-line entries never linger.
 write_target_apt_sources() {
   local apt_dir="${TARGET}/etc/apt"
   mkdir -p "${apt_dir}/sources.list.d"
   rm -f "${apt_dir}/sources.list.d/debian.sources" \
     "${apt_dir}/sources.list.d/hypr-deb-cache.sources"
-  if ((NETWORK_AVAILABLE)); then
-    write_debian_sources "${TARGET}"
-  else
-    cat >"${apt_dir}/sources.list" <<'EOF'
-# Managed by hypr-deb: APT sources are defined in
-# /etc/apt/sources.list.d/.
-EOF
-    cat >"${apt_dir}/sources.list.d/hypr-deb-cache.sources" <<EOF
+  write_debian_sources "${TARGET}"
+}
+
+# Offline only: bind-mount the on-ISO package store into the target (at the
+# fixed TARGET_ISO_REPO_MNT, under the already-bound /run) and write a TEMPORARY
+# trusted file:// apt source so in-chroot apt resolves the offline packages
+# during the install. Both are removed by teardown_target_iso_repo at cleanup.
+# Requires mount_chroot_binds to have run first (the store is bound under /run).
+setup_target_iso_repo() {
+  local mnt="${TARGET}${TARGET_ISO_REPO_MNT}"
+  mkdir -p "${mnt}"
+  if ! mountpoint -q "${mnt}"; then
+    mount --bind "${CACHE_REPO_DIR}" "${mnt}" ||
+      fatal "Failed to bind-mount ${CACHE_REPO_DIR} into ${mnt}"
+  fi
+  write_iso_temp_source
+}
+
+# Write the temporary trusted file:// apt source pointing at the in-target
+# bind path. Split out so it is testable without the (root-only) bind mount.
+write_iso_temp_source() {
+  local src="${TARGET}/${ISO_TEMP_SOURCE_REL}"
+  mkdir -p "$(dirname "${src}")"
+  cat >"${src}" <<EOF
 Types: deb
-URIs: file://${TARGET_CACHE_DIR}/repo
+URIs: file://${TARGET_ISO_REPO_MNT}
 Suites: ${SUITE}
 Components: main
 Trusted: yes
 EOF
+}
+
+# Idempotent teardown of the offline install repo: remove the temporary source
+# file and unmount the bind. Safe on the normal path and on failure — it checks
+# the mountpoint before unmounting and rm -f tolerates an absent file.
+teardown_target_iso_repo() {
+  rm -f "${TARGET}/${ISO_TEMP_SOURCE_REL}"
+  local mnt="${TARGET}${TARGET_ISO_REPO_MNT}"
+  if mountpoint -q "${mnt}" 2>/dev/null; then
+    umount "${mnt}" || umount -l "${mnt}" || warn "Could not unmount ${mnt}"
   fi
 }
 
@@ -140,8 +151,14 @@ phase_bootstrap() {
   mount_target_tree
   run_debootstrap
   install_policy_rc_d
-  embed_cache_in_target
-  write_target_apt_sources
   mount_chroot_binds
+  # Offline: stand up the temporary file:// store source (+ bind) BEFORE writing
+  # the permanent Debian sources, so the in-chroot apt-get update below indexes
+  # the on-ISO packages. The unreachable Debian mirror is only warned about by
+  # apt (exit 0); the installed system keeps it as its permanent source.
+  if ((NETWORK_AVAILABLE == 0)); then
+    setup_target_iso_repo
+  fi
+  write_target_apt_sources
   in_target "apt-get update"
 }
