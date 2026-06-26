@@ -64,6 +64,14 @@ export TARGET
 # Cache/pool live inside the workspace (override lib/00-config.sh's defaults).
 CACHE_DIR="${ISO_WORKSPACE}/cache"
 POOL="${CACHE_DIR}/repo/pool"
+# Shared debootstrap .deb cache. The buildroot debootstrap (step_bootstrap_chroot)
+# fills it on the SINGLE base download; the closure debootstrap (10-cache.sh,
+# sourced in-process) reuses it via --cache-dir, so the trixie base is fetched
+# once and reused instead of being re-downloaded. EXPORTED so the in-process
+# 10-cache.sh sees it; the installer phase_cache leaves it UNSET (10-cache.sh
+# references it defensively, so that path is unchanged — no --cache-dir).
+DEBOOTSTRAP_CACHE="${CACHE_DIR}/debs-cache"
+export DEBOOTSTRAP_CACHE
 # Chroot-internal staging root for DESTDIR installs (host-visible at
 # ${TARGET}${BUILD_STAGE_REL}; chroot-visible at ${BUILD_STAGE_REL}).
 BUILD_STAGE_REL="${BUILD_STAGE_REL:-/var/tmp/hypr-stage}"
@@ -107,8 +115,22 @@ step_bootstrap_chroot() {
   else
     info "[build] debootstrap ${SUITE} -> ${TARGET}"
     mkdir -p "${TARGET}"
-    debootstrap "${SUITE}" "${TARGET}" "${MIRROR}" \
+    # --cache-dir seeds the shared deb cache on this SINGLE base download; the
+    # closure debootstrap in 10-cache.sh reuses it instead of re-fetching base.
+    debootstrap --cache-dir="${DEBOOTSTRAP_CACHE}" "${SUITE}" "${TARGET}" "${MIRROR}" \
       || fatal "debootstrap failed for ${SUITE} -> ${TARGET}"
+  fi
+  # Harvest the base .debs from the buildroot's apt archives into the pool. This
+  # is THE single base download/harvest for the build-iso path (the dedicated
+  # --download-only bootstrap pass in 10-cache.sh is dropped). Placed after the
+  # resume/else block so it also runs on resume; cp -n is idempotent. At step 1
+  # the buildroot archives hold the freshly debootstrapped base set (no in_target
+  # apt has run yet this invocation). POOL is created by main() before
+  # run_heavy_build; mkdir -p here keeps the harvest self-contained. Empty-glob
+  # safe via the compgen guard.
+  mkdir -p "${POOL}"
+  if compgen -G "${TARGET}/var/cache/apt/archives/*.deb" >/dev/null; then
+    cp -n "${TARGET}/var/cache/apt/archives/"*.deb "${POOL}/"
   fi
   # CRITICAL host-safety: mount_chroot_binds binds the host's live /run (systemd
   # + dbus sockets) into the buildroot. Without policy-rc.d exit 101, a package
@@ -331,7 +353,7 @@ main() {
   trap 'teardown_chroot_binds' EXIT
   trap 'teardown_chroot_binds' ERR
 
-  mkdir -p "${ISO_WORKSPACE}" "${POOL}"
+  mkdir -p "${ISO_WORKSPACE}" "${POOL}" "${DEBOOTSTRAP_CACHE}"
   run_heavy_build
 }
 
