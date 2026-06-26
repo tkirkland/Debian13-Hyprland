@@ -127,9 +127,64 @@ DISK1/DISK2) and the ESP grows to 2G so that any of the three supported
 bootloaders fit, including kernel/initramfs copies for grub and
 systemd-boot.
 
-## Usage
+## Two ways to install
 
-From a Debian 13 live session (or an installed Debian system), as root:
+There are two supported models; pick one.
+
+1. **Offline from our ISO (recommended).** A two-stage flow. On a networked
+   build host you bake a self-sufficient ISO with `tools/build-iso.sh` — it
+   compiles the whole Hyprland stack to `.debs` at *ISO-creation* time (behind
+   the build-time freshness gate) and packs an `apt-ftparchive` repo plus the
+   installer tree onto the medium. You then boot that ISO on the target and run
+   the baked installer, which installs **fully offline** from the on-ISO store —
+   zero network. See [Offline-from-ISO](#offline-from-iso-recommended) below.
+
+2. **Networked install from a stock live ISO.** Boot any current Debian 13
+   live ISO, clone this repo, and run the installer; it debootstraps from the
+   Debian mirror and **compiles** the Hyprland stack from source during the
+   install. This is also the `--online` fallback path. See
+   [Networked install](#networked-install) below.
+
+Either way the **installed** system's permanent apt sources are the real Debian
+mirror, so future `apt update`s work normally. The on-ISO package store is
+ISO-only — it is never copied into the installed system.
+
+## Offline-from-ISO (recommended)
+
+**Stage A — build the ISO (networked build host).** From a clone of this repo
+on a machine with network access, as root:
+
+```bash
+# Dry-run first: prints the resolved build plan and mutates nothing.
+sudo tools/build-iso.sh
+# Then build for real (debootstrap, source compiles, OpenZFS build, repack):
+sudo tools/build-iso.sh --confirm
+```
+
+`STOCK_ISO` (the upstream Debian 13 live ISO to repack) and `OUT_ISO` (the
+output path) are env-overridable; see the top of `tools/build-iso.sh`. The
+build compiles each stack component at its latest release tag, gated by the
+build-time freshness check (`deb_needs_rebuild`), so the shipped `.debs` are
+already the newest — there is no version checking at install time.
+
+**Stage B — boot the ISO and install (target machine, no network needed).**
+Boot the resulting `OUT_ISO`, get root, and run the baked installer:
+
+```bash
+sudo /run/live/medium/hypr-installer/installer.sh --bootloader=zbm --rtc=utc
+```
+
+Preflight detects the live medium at `/run/live/medium`, finds the package
+store at `/run/live/medium/hypr-repo`, and makes **offline the default**: it
+debootstraps from `file://` the on-ISO repo and `apt-get install`s the entire
+custom stack by package name from the prebuilt `.debs` — no source compile, no
+network. Pass `--online` to force the networked path instead, or `--offline`
+to refuse the network outright.
+
+## Networked install
+
+From a Debian 13 live session (or an installed Debian system) **without** our
+ISO, as root:
 
 ```bash
 # --recurse-submodules pulls the bundled wallpaper set (assets/wallpapers).
@@ -153,10 +208,15 @@ Common flags (see `--help` for the full list):
 ```
 --bootloader=<zbm|grub|systemd-boot>   bootloader (required with --yes)
 --build-on-firstboot                   defer the Hyprland build to first boot
---offline                              install only from the local cache
+--offline                              force offline; install only from the
+                                       on-ISO/local repo (no network)
+--online                               force network mode even when the on-ISO
+                                       store is present (overrides the offline
+                                       default; mirror of --offline)
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
---skip-cache                           omit the embedded offline cache
+--skip-cache                           skip the cache phase (no offline repo
+                                       populate/validate)
 --autologin                            start Hyprland without the login prompt
 --rtc=<utc|local>                      hardware clock interpretation, required
                                        (utc, or local for Windows dual boot;
@@ -235,9 +295,9 @@ chroot binds automatically.
 
 ```
 preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
-cache       populate or validate the offline cache (network needed to populate)
+cache       validate the on-ISO repo (offline) or populate a cache (--online)
 storage     destroy/wipe/partition/mdadm/ZFS (the destructive gate lives here)
-bootstrap   mount target, debootstrap, bind mounts, apt sources, embed cache
+bootstrap   mount target, debootstrap, bind mounts, Debian apt sources
 system      identity, packages, add-ons, user, ZFS boot support, initramfs
 boot        chosen bootloader install + NVRAM entry + ESP kernel-sync hook
 hyprland    tag resolution, compatibility gate, builds (or firstboot staging)
@@ -247,41 +307,39 @@ cleanup     unmount binds and target tree, export the pool
 
 ### Offline workflow
 
-The installer prefers the network but can run fully offline:
+Offline installation is the [Offline-from-ISO](#offline-from-iso-recommended)
+model above: the network-bearing work happens once on the build host
+(`tools/build-iso.sh --confirm`), which assembles a self-sufficient ISO. The
+booted target installs entirely from the on-ISO package store at
+`/run/live/medium/hypr-repo`, with **no network**:
 
-1. On a networked machine, run:
+- The `cache` phase runs `cache_validate` against the on-ISO repo
+  (`CACHE_REPO_DIR`, pointed at the store by preflight) and fails with a precise
+  list if any indexed `.deb` is missing from the pool. It does **not** populate
+  anything offline — the repo is the contract, already complete on the medium.
+- `bootstrap` debootstraps from `file://` the on-ISO repo, then bind-mounts the
+  store into the target chroot behind a **temporary** trusted `file://` apt
+  source so in-chroot `apt-get install` resolves the base packages, the whole
+  custom stack (by package name), and the OpenZFS debs from the prebuilt pool.
+- The temporary source and bind mount are torn down at cleanup. The installed
+  system's **permanent** apt sources are the real Debian mirror, so future
+  online `apt update`s work. The store is **not** copied into the target.
 
-   ```bash
-   sudo ./installer.sh --phase=cache \
-     --cache-dir=/path/on/real/storage
-   ```
+Freshness/version checking is a **build-time** concern: `deb_needs_rebuild`
+recompiles a component at ISO-creation only when its release tag is newer than
+the pooled `.deb`. Install time does no version checks — the shipped debs are
+already newest.
 
-   This downloads the complete .deb
-   closure (live tools, debootstrap base, target base, bootloaders,
-   Hyprland build deps, greetd, and uwsm's runtime deps) indexed with
-   `apt-ftparchive` as a `file://` repo, source archives for every
-   source-built component at its resolved release tag, and the
-   ZFSBootMenu EFI binary.
-2. Carry the cache directory to the target machine (it must be on real
-   storage, not the live overlay).
-3. Run `sudo ./installer.sh --offline --cache-dir=/path/to/cache ...`.
-   Offline runs validate the cache first and fail with a precise list of
-   anything missing.
-
-Warning: offline live-session preflight installs zfs-dkms against the
-running live kernel, so the cache must have been built against the same
-live-ISO kernel version (matching `linux-headers`). This is checked.
-
-Online runs install `linux-headers-$(uname -r)` (the running kernel), not
-`linux-headers-amd64` (the archive's newest), because zfs-dkms must build
-for the kernel the live session is actually running. If the mirror no
-longer carries headers for the live ISO's kernel — typically because a
-newer point release shipped — preflight fails early with instructions to
-boot a current live ISO.
-
-Either way, the complete cache is copied into the installed system at
-`/var/cache/hypr-deb/` (with a README) so the target can rebuild Hyprland
-or reinstall packages fully offline later.
+The `--online` fallback (or a plain networked install from a stock live ISO)
+debootstraps from the Debian mirror and writes Debian sources; it still
+installs the full custom stack, preferring the ISO's prebuilt debs when the
+repo is present and otherwise compiling from source (`build_stack`, the GCC-15
+path). Online runs install `linux-headers-$(uname -r)` (the running kernel),
+not `linux-headers-amd64` (the archive's newest), because zfs-dkms must build
+for the kernel the live session is actually running. If the mirror no longer
+carries headers for the live ISO's kernel — typically because a newer point
+release shipped — preflight fails early with instructions to boot a current
+live ISO.
 
 ## Bootloader choice
 
@@ -409,22 +467,29 @@ Source policy:
   resolved tag are parsed, and every dependency's resolved tag must satisfy
   them. On any mismatch the run aborts with a requirement-vs.-resolved
   matrix. No silent downgrades.
-- Builds run **inside the target** (chroot, or on first boot), so binaries
-  link against exactly the userland that runs them. The build uses GCC 15
-  from a pinned sid source where required. Artifacts install to
-  `/usr/local`; build trees under `/var/tmp` are deleted after installation.
-- **OpenZFS comes from upstream, not trixie**, on every networked installation:
-  the latest release builds in the chroot as native `openzfs-*` packages
-  replacing Debian's 2.3.x, with modules dkms-signed by the machine's MOK
-  key. Offline installs keep repo 2.3.x (the cache carries no zfs source).
-  The pool itself is created by the live session's 2.3.x, so its feature
-  set stays conservative until you `zpool upgrade` deliberately.
+- Source compilation runs **inside a chroot** against exactly the userland
+  that runs the binaries — at *ISO-creation* on the build host (the prebuilt
+  path), or in the target chroot / on first boot for a networked install. The
+  build uses GCC 15 from a pinned sid source where required. Compiled stack
+  artifacts install to `/usr` (the packaged `.debs` lay down `/usr/bin`,
+  `/usr/lib`); the hand-written glue scripts stay under `/usr/local`. Build
+  trees under `/var/tmp` are deleted after packaging.
+- The **offline-from-ISO install compiles nothing** — it `apt-get install`s
+  the stack debs (already built at ISO creation) by name from the on-ISO repo.
+- **OpenZFS comes from upstream, not trixie**: the latest release is built as
+  native `openzfs-*` packages replacing Debian's 2.3.x, with modules
+  dkms-signed by the machine's MOK key. For offline-from-ISO installs these
+  debs are prebuilt into the on-ISO repo and installed from there; a networked
+  install builds them in the chroot. The pool itself is created by the live
+  session's 2.3.x, so its feature set stays conservative until you
+  `zpool upgrade` deliberately.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
 a successful build and verify, purged (`apt-get purge --autoremove`), leaving
 only the Hyprland artifacts and their runtime libraries. Use
-`--keep-build-deps` to keep the toolchain installed; either way the cached
-build-dep .debs stay in `/var/cache/hypr-deb` for offline reinstallation.
+`--keep-build-deps` to keep the toolchain installed. (Compilation happens at
+ISO-creation for the offline path, so a freshly installed offline system
+carries no build toolchain at all.)
 
 `--build-on-firstboot` stages the sources and cached DEBs in the target and
 installs a one-shot systemd unit (`hypr-deb-firstboot.service`) that runs

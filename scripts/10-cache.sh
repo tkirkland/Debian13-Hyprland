@@ -117,38 +117,36 @@ cache_populate_zbm() {
   fetch_zbm_efi "${CACHE_DIR}/zfsbootmenu.EFI"
 }
 
+# Validate the offline apt repo that debootstrap and in-chroot apt consume.
+# Checks CACHE_REPO_DIR — which defaults to ${CACHE_DIR}/repo but preflight
+# redirects to the on-ISO store (ISO_MEDIUM_REPO) when booted from our offline
+# ISO — so the SAME gate covers both the install-from-ISO path and the legacy
+# install-populated-cache path. The repo IS the offline contract: it carries
+# the debootstrap base, the prebuilt custom stack debs (HYPR_BUILD_ORDER), and
+# the OpenZFS debs — the full closure apt resolves against. Source tarballs and
+# the ZBM EFI are BUILD-TIME artifacts (produced under CACHE_DIR at ISO
+# creation, never shipped in the repo) and are no longer part of the offline
+# install contract, so they are not validated here.
 cache_validate() {
-  local problems=() pkg_index="" fname="" name="" tag=""
-  pkg_index="${CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages"
+  local problems=() pkg_index="" fname=""
+  pkg_index="${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages"
 
   [[ -f "${pkg_index}" ]] || problems+=("repo index missing: ${pkg_index}")
-  [[ -f "${CACHE_DIR}/repo/dists/${SUITE}/Release" ]] ||
+  [[ -f "${CACHE_REPO_DIR}/dists/${SUITE}/Release" ]] ||
     problems+=("repo Release file missing")
   if [[ -f "${pkg_index}" ]]; then
     while IFS= read -r fname; do
-      [[ -f "${CACHE_DIR}/repo/${fname}" ]] ||
+      [[ -f "${CACHE_REPO_DIR}/${fname}" ]] ||
         problems+=("deb missing from pool: ${fname}")
     done < <(awk '/^Filename: /{print $2}' "${pkg_index}")
   fi
-
-  if [[ -f "${CACHE_DIR}/sources/MANIFEST" ]]; then
-    while read -r name tag; do
-      [[ -f "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" ]] ||
-        problems+=("source tarball missing: ${name}-${tag}.tar.gz")
-    done <"${CACHE_DIR}/sources/MANIFEST"
-  else
-    problems+=("sources manifest missing: ${CACHE_DIR}/sources/MANIFEST")
-  fi
-
-  [[ -f "${CACHE_DIR}/zfsbootmenu.EFI" ]] ||
-    problems+=("zfsbootmenu.EFI missing")
 
   if ((${#problems[@]} > 0)); then
     local p=""
     for p in "${problems[@]}"; do warn "cache: ${p}"; done
     fatal "Cache validation failed (${#problems[@]} problem(s))."
   fi
-  info "Cache valid: ${CACHE_DIR}"
+  info "Cache repo valid: ${CACHE_REPO_DIR}"
 }
 
 phase_cache() {
