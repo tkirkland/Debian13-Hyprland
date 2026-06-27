@@ -383,6 +383,13 @@ install_addon_artifacts() {
 # The GitHub API names the latest release; the .deb asset embeds the version
 # without the leading 'v'. apt resolves the (minimal) dependencies.
 install_chezmoi() {
+  # chezmoi ships only as a GitHub release, not in the offline pool. Online
+  # installs fetch it; an offline install skips it (it is a userland dotfile
+  # manager, not boot-critical) so the install still completes and boots.
+  ((NETWORK_AVAILABLE)) || {
+    warn "Offline: skipping chezmoi (GitHub-only; install after first online boot)."
+    return 0
+  }
   local tag="" ver="" url=""
   tag="$(curl -fsSL --retry 3 \
     "${CHEZMOI_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
@@ -408,6 +415,13 @@ install_chezmoi() {
 # unzip + fontconfig come from TARGET_BASE_PACKAGES; fc-cache makes the fonts
 # resolvable.
 install_lythmono_fonts() {
+  # LythMono ships only as GitHub release zips, not in the offline pool. Skip
+  # offline -- cosmetic fonts are not boot-critical, so the install still
+  # completes; they can be added after the first online boot.
+  ((NETWORK_AVAILABLE)) || {
+    warn "Offline: skipping LythMono fonts (GitHub-only)."
+    return 0
+  }
   local tag="" v=""
   tag="$(curl -fsSL --retry 3 \
     "${LYTHMONO_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
