@@ -314,6 +314,25 @@ step_assemble() {
     || fatal "iso-assemble failed"
 }
 
+# 6b) Stage the ZFSBootMenu EFI INSIDE the offline store so iso-assemble grafts
+#     it onto the ISO at /hypr-repo/zfsbootmenu.EFI. install_zbm reads it from
+#     there on an offline install (preflight redirects CACHE_REPO_DIR to the
+#     on-ISO store). fetch_zbm_efi lives in scripts/50-boot.sh, outside the
+#     critical top-level source order, so source it lazily like step_zfs does
+#     for 40-system.sh.
+step_stage_zbm() {
+  local dest="${CACHE_DIR}/repo/zfsbootmenu.EFI"
+  if [[ -f "${dest}" ]]; then
+    info "[build] reusing staged ZFSBootMenu EFI (${dest})"
+    return 0
+  fi
+  if ! declare -f fetch_zbm_efi >/dev/null 2>&1; then
+    source "${REPO_ROOT}/scripts/50-boot.sh"
+  fi
+  info "[build] staging ZFSBootMenu EFI into the offline store (${dest})"
+  fetch_zbm_efi "${dest}"
+}
+
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
@@ -321,6 +340,7 @@ run_heavy_build() {
   step_zfs                  # 4
   step_reindex              # 5
   step_depsim               # 6
+  step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
   step_assemble             # 7
   kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
   teardown_chroot_binds     # 9 (also via trap)

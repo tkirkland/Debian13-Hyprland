@@ -197,10 +197,11 @@ cache_populate_zbm() {
 # ISO — so the SAME gate covers both the install-from-ISO path and the legacy
 # install-populated-cache path. The repo IS the offline contract: it carries
 # the debootstrap base, the prebuilt custom stack debs (HYPR_BUILD_ORDER), and
-# the OpenZFS debs — the full closure apt resolves against. Source tarballs and
-# the ZBM EFI are BUILD-TIME artifacts (produced under CACHE_DIR at ISO
-# creation, never shipped in the repo) and are no longer part of the offline
-# install contract, so they are not validated here.
+# the OpenZFS debs — the full closure apt resolves against. Source tarballs are
+# BUILD-TIME artifacts (produced under CACHE_DIR at ISO creation, never shipped)
+# so they are not validated here. The ZFSBootMenu EFI IS shipped inside the repo
+# (zfsbootmenu.EFI, grafted to /hypr-repo) for offline --bootloader=zbm, but it
+# is not an apt artifact, so install_zbm validates it, not this apt-repo gate.
 cache_validate() {
   local problems=() pkg_index="" fname=""
   pkg_index="${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages"
