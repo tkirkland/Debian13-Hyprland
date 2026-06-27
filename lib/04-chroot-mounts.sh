@@ -12,6 +12,21 @@ mount_chroot_binds() {
   local t="${TARGET}"
   mkdir -p "${t}/dev" "${t}/dev/pts" "${t}/proc" "${t}/sys" "${t}/run"
 
+  # Isolate mount propagation before binding shared host filesystems in.
+  # /run, /dev and /sys are `shared` mounts, and the target tree shares a
+  # propagation lineage with /, so a plain `mount --bind /run ${t}/run`
+  # propagates BACK and stacks a second /run tmpfs over the host's own /run.
+  # That shadow hides the iso9660 live medium — and the offline package store
+  # mounted under /run/live/medium — for the rest of the run, which makes the
+  # offline bootstrap abort with "package store missing". Making the target
+  # subtree a slave mount first (the arch-chroot approach) lets propagation flow
+  # host->target only, never back onto the host. Idempotent: mount_chroot_binds
+  # runs twice (ensure_target_ready + phase_bootstrap). The ISO builder path
+  # (HYPR_PRIVATE_RUN=1, fresh tmpfs /run) is unaffected but equally safe.
+  if mountpoint -q "${t}"; then
+    mount --make-rslave "${t}" || fatal "Failed to make ${t} a slave mount"
+  fi
+
   mount --bind /dev "${t}/dev" || fatal "Failed to bind-mount ${t}/dev"
   track_mount "${t}/dev"
   mount --bind /dev/pts "${t}/dev/pts" || fatal "Failed to bind-mount ${t}/dev/pts"
