@@ -1,28 +1,40 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# iso-assemble.sh — inject the offline apt repo into a copy of the stock live
-# ISO as a PLAIN top-level DATA DIRECTORY (decided: NOT inside the squashfs),
-# preserving the original El-Torito BIOS + EFI boot setup.
+# iso-assemble.sh — build an offline live ISO by EMBEDDING the apt repo and the
+# installer tree INSIDE the live root filesystem (the squashfs), at
+# ${LIVE_STORE_ROOT} (default /opt/hypr-deb), then repacking the ISO.
+#
+# This supersedes the earlier "plain top-level data directory on the ISO9660
+# medium" layout (/hypr-repo + /hypr-installer, visible at /run/live/medium/...).
+# Embedding in the squashfs puts the store in the LIVE ROOT (/opt/hypr-deb/repo)
+# instead of under /run/live/medium, which:
+#   * makes the store impossible to shadow via a /run bind mount (the
+#     mount-propagation class of bug), and
+#   * removes the dependency on the medium staying mounted/visible mid-install.
 #
 # Usage: iso-assemble.sh STOCK_ISO REPO_DIR OUT_ISO
+#   HYPR_INSTALLER_DIR=<dir>   optional filtered installer tree to embed too
 #
-# HOST SAFETY: this tool only reads STOCK_ISO/REPO_DIR and writes into a fresh
-# mktemp workdir and the (non-existent) OUT_ISO. It runs no apt/dpkg/chroot and
-# never writes under system paths. The heavy xorriso extract/repack is kept in
-# functions and is exercised for real only in Phase 3b integration.
+# HOST SAFETY: reads STOCK_ISO / REPO_DIR / HYPR_INSTALLER_DIR; writes only into
+# a fresh mktemp workdir and the (non-existent) OUT_ISO. It runs no apt/dpkg/
+# chroot and never writes under system paths. It DOES require root + xorriso +
+# squashfs-tools: the live squashfs is unsquashed and remade as root so the
+# stock tree's and the staged store's ownership/perms/xattrs are preserved.
 
 set -euo pipefail
 
-# Top-level directory name under which the repo is injected on the ISO.
-ISO_DATA_SUBDIR="${ISO_DATA_SUBDIR:-hypr-repo}"
-# Top-level directory for the installer tree (when HYPR_INSTALLER_DIR is set).
-ISO_INSTALLER_SUBDIR="${ISO_INSTALLER_SUBDIR:-hypr-installer}"
+# In-squashfs (live-root) parent for the embedded store + installer.
+LIVE_STORE_ROOT="${LIVE_STORE_ROOT:-/opt/hypr-deb}"
+LIVE_REPO_SUBDIR="${LIVE_REPO_SUBDIR:-repo}"
+LIVE_INSTALLER_SUBDIR="${LIVE_INSTALLER_SUBDIR:-installer}"
+# Path of the live root squashfs inside the ISO (Debian live default).
+ISO_LIVE_SQUASHFS="${ISO_LIVE_SQUASHFS:-/live/filesystem.squashfs}"
 # Stock paths to drop from the output ISO: Debian's own live-installer (d-i)
 # pool + metadata, which this distro never uses (it installs via our own
-# installer + /hypr-repo). Removing them reclaims the ~200 base .debs that would
-# otherwise be duplicated in /hypr-repo/pool. The live session (booted from
-# /live/filesystem.squashfs) is untouched; only d-i boot-menu entries break.
-# Space-separated; override via HYPR_ISO_STRIP, empty to keep everything.
+# installer + the embedded store). Removing them reclaims the ~200 base .debs.
+# The live session (booted from /live/filesystem.squashfs) is untouched; only
+# d-i boot-menu entries break. Space-separated; HYPR_ISO_STRIP overrides, empty
+# keeps everything.
 ISO_STRIP_PATHS="${HYPR_ISO_STRIP-/pool /pool-udeb /install /dists}"
 
 # Minimal logging shims so the lib can be sourced standalone in tests without
@@ -47,44 +59,105 @@ validate_repo_layout() {
   return 0
 }
 
-# add_repo_to_iso STOCK_ISO REPO_DIR OUT_ISO
-# Copy STOCK_ISO to OUT_ISO with REPO_DIR added as the top-level /ISO_DATA_SUBDIR,
-# replaying the stock ISO's El-Torito BIOS + EFI boot images so OUT_ISO stays
-# bootable. Uses NATIVE xorriso (NOT `-as mkisofs`, which rejects -indev): -indev
-# loads the stock image, -outdev targets a NEW file, -boot_image any replay
-# preserves the original boot setup, -map grafts the repo tree, -commit writes it.
-# No full extraction needed.
-add_repo_to_iso() {
-  local stock_iso="$1" repo_dir="$2" out_iso="$3"
-  local -a args=(
-    -indev "${stock_iso}"
-    -outdev "${out_iso}"
-    -boot_image any replay
-    -volid 'HYPR_OFFLINE'
-  )
-  # Strip the unused Debian d-i pool/metadata. -abort_on NEVER makes a missing
-  # path non-fatal (a different stock layout just strips less); restore strict
-  # aborting immediately after.
+# stage_live_payload STAGE_DIR REPO_DIR [INSTALLER_DIR]
+# Build the directory tree that gets grafted onto the live root, mirroring the
+# in-root layout exactly:
+#   STAGE_DIR/${LIVE_STORE_ROOT}/${LIVE_REPO_SUBDIR}/       <- the apt repo
+#   STAGE_DIR/${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}/  <- the installer tree
+# Pure filesystem staging (no squashfs/xorriso) so it is unit-testable. cp -a
+# preserves ownership, timestamps and exec bits.
+stage_live_payload() {
+  local stage="${1:?stage dir}" repo="${2:?repo dir}" installer="${3:-}"
+  local base="${stage%/}${LIVE_STORE_ROOT}"
+  mkdir -p "${base}/${LIVE_REPO_SUBDIR}"
+  cp -a "${repo%/}/." "${base}/${LIVE_REPO_SUBDIR}/"
+  if [[ -n "${installer}" ]]; then
+    [[ -d "${installer}" ]] || fatal "installer dir not found: ${installer}"
+    mkdir -p "${base}/${LIVE_INSTALLER_SUBDIR}"
+    cp -a "${installer%/}/." "${base}/${LIVE_INSTALLER_SUBDIR}/"
+  fi
+}
+
+# extract_stock_squashfs STOCK_ISO OUT_FILE
+# Copy the live root squashfs out of the (read-only) stock ISO so it can be
+# unsquashed and rebuilt. Native xorriso osirrox extraction; no full ISO unpack.
+# Heavy; exercised for real only in the build integration path.
+extract_stock_squashfs() {
+  local stock="$1" out="$2"
+  xorriso -osirrox on -indev "${stock}" \
+    -extract "${ISO_LIVE_SQUASHFS}" "${out}"
+}
+
+# detect_squashfs_params SQUASHFS  ->  echoes "COMPRESSOR BLOCKSIZE"
+# Read the stock squashfs's compressor and block size so the rebuilt image
+# matches it. mksquashfs otherwise defaults to gzip / 128K, which would both
+# bloat the image and mismatch Debian's live squashfs (zstd, larger blocks).
+# Seam kept separate so it is unit-testable with a stubbed unsquashfs.
+detect_squashfs_params() {
+  local sqfs="$1" out="" comp="" bsize=""
+  out="$(unsquashfs -s "${sqfs}" 2>/dev/null)" || return 1
+  comp="$(printf '%s\n' "${out}" | awk '/^Compression/ {print $2; exit}')"
+  bsize="$(printf '%s\n' "${out}" | awk '/^Block size/ {print $3; exit}')"
+  [[ -n "${comp}" && -n "${bsize}" ]] || return 1
+  printf '%s %s\n' "${comp}" "${bsize}"
+}
+
+# rebuild_live_squashfs STOCK_SQUASHFS STAGE_DIR OUT_SQUASHFS
+# Produce OUT_SQUASHFS = STOCK_SQUASHFS with STAGE_DIR's tree merged into the
+# live root. mksquashfs "append" must NOT be used here: appending a source whose
+# top-level entry (opt) collides with an existing directory renames it to opt_1
+# instead of merging — the store would land at /opt_1/hypr-deb. Instead unsquash
+# the stock tree, graft the staged store under the existing /opt with `cp -a` (a
+# true recursive directory union), and remake the squashfs with the stock's own
+# compressor and block size. Run as root so unsquashfs/mksquashfs preserve
+# ownership, permissions and xattrs. Heavy; build-integration only.
+rebuild_live_squashfs() {
+  local stock_sqfs="$1" stage="$2" out_sqfs="$3"
+  local comp="" bsize="" root=""
+  read -r comp bsize < <(detect_squashfs_params "${stock_sqfs}") \
+    || fatal "could not read compressor/block size from ${stock_sqfs}"
+  # Keep the unsquashed tree under out_sqfs's dir (the caller's mktemp workdir),
+  # so assemble()'s EXIT trap reclaims it even if a step below fails under set -e.
+  root="${out_sqfs%/*}/unsquash-root"
+  unsquashfs -f -d "${root}" "${stock_sqfs}"
+  cp -a "${stage}/." "${root}/"
+  mksquashfs "${root}" "${out_sqfs}" -noappend -no-progress -no-recovery \
+    -comp "${comp}" -b "${bsize}"
+  rm -rf "${root}"
+}
+
+# build_write_iso_args STOCK_ISO NEW_SQUASHFS OUT_ISO
+# Emit (one per line) the native-xorriso argv that writes OUT_ISO = STOCK_ISO
+# with the live squashfs replaced by NEW_SQUASHFS and the d-i pool stripped,
+# replaying the stock El-Torito BIOS + EFI boot images so OUT_ISO stays bootable.
+# Split out as a pure seam so the argv is unit-testable without xorriso.
+build_write_iso_args() {
+  local stock="$1" sqfs="$2" out="$3"
+  # Ordering is load-bearing (Debian RepackBootableISO): acquire input/output,
+  # THEN manipulate the tree (-rm_r / -map), THEN replay the boot equipment, THEN
+  # commit. Running `-boot_image any replay` BEFORE the edits can lose the
+  # BIOS/UEFI boot setup. -compliance/-padding keep the hybrid image robust.
+  printf '%s\n' -indev "${stock}" -outdev "${out}" -volid HYPR_OFFLINE
   if [[ -n "${ISO_STRIP_PATHS}" ]]; then
     local -a strip
     read -r -a strip <<<"${ISO_STRIP_PATHS}"
-    args+=(-abort_on NEVER -rm_r "${strip[@]}" -- -abort_on FAILURE)
+    printf '%s\n' -abort_on NEVER -rm_r "${strip[@]}" -- -abort_on FAILURE
   fi
-  args+=(-map "${repo_dir%/}" "/${ISO_DATA_SUBDIR}")
-  # Optionally graft the installer tree so the booted live ISO can run the
-  # installer fully offline (no git clone). HYPR_INSTALLER_DIR is a prepared,
-  # filtered copy (no tools/docs/tests/.git) staged by build-iso.
-  if [[ -n "${HYPR_INSTALLER_DIR:-}" ]]; then
-    [[ -d "${HYPR_INSTALLER_DIR}" ]] \
-      || fatal "HYPR_INSTALLER_DIR not a directory: ${HYPR_INSTALLER_DIR}"
-    args+=(-map "${HYPR_INSTALLER_DIR%/}" "/${ISO_INSTALLER_SUBDIR}")
-  fi
-  args+=(-commit)
+  printf '%s\n' -map "${sqfs}" "${ISO_LIVE_SQUASHFS}"
+  printf '%s\n' -boot_image any replay -compliance no_emul_toc -padding included
+  printf '%s\n' -commit
+}
+
+# write_iso_with_squashfs STOCK_ISO NEW_SQUASHFS OUT_ISO — run the xorriso write.
+write_iso_with_squashfs() {
+  local -a args=()
+  mapfile -t args < <(build_write_iso_args "$1" "$2" "$3")
   xorriso "${args[@]}"
 }
 
 # assemble STOCK_ISO REPO_DIR OUT_ISO
-# Validate, then write OUT_ISO = STOCK_ISO + /ISO_DATA_SUBDIR. Echoes OUT_ISO.
+# Validate, embed the repo (+ optional installer) into the live squashfs, and
+# write OUT_ISO. Echoes OUT_ISO.
 assemble() {
   local stock_iso="${1:-}" repo_dir="${2:-}" out_iso="${3:-}"
 
@@ -95,9 +168,32 @@ assemble() {
   validate_repo_layout "${repo_dir}" \
     || fatal "repo dir lacks dists/ and pool/: ${repo_dir}"
   [[ -e "${out_iso}" ]] && fatal "refusing to clobber existing OUT_ISO: ${out_iso}"
+  local installer_dir="${HYPR_INSTALLER_DIR:-}"
+  [[ -n "${installer_dir}" && ! -d "${installer_dir}" ]] \
+    && fatal "HYPR_INSTALLER_DIR not a directory: ${installer_dir}"
+  # The path args become positional xorriso tokens; a newline would split one
+  # token into two and corrupt the invocation. Reject it outright.
+  case "${stock_iso}${repo_dir}${out_iso}${installer_dir}" in
+    *$'\n'*) fatal "path arguments must not contain newlines" ;;
+  esac
 
-  info "iso-assemble: writing ${out_iso} = stock ISO + /${ISO_DATA_SUBDIR}"
-  add_repo_to_iso "${stock_iso}" "${repo_dir}" "${out_iso}"
+  local work
+  work="$(mktemp -d)"
+  # iso-assemble runs as its own bash process (build-iso invokes it via `bash
+  # iso-assemble.sh`), so this EXIT trap does not clobber the caller's traps.
+  # shellcheck disable=SC2064
+  trap "rm -rf '${work}'" EXIT
+  local stock_sqfs="${work}/stock.squashfs" new_sqfs="${work}/filesystem.squashfs"
+  local stage="${work}/stage"
+
+  info "iso-assemble: extracting ${ISO_LIVE_SQUASHFS} from the stock ISO"
+  extract_stock_squashfs "${stock_iso}" "${stock_sqfs}"
+  info "iso-assemble: staging repo${installer_dir:+ + installer} under ${LIVE_STORE_ROOT}"
+  stage_live_payload "${stage}" "${repo_dir}" "${installer_dir}"
+  info "iso-assemble: rebuilding the live squashfs with the embedded store"
+  rebuild_live_squashfs "${stock_sqfs}" "${stage}" "${new_sqfs}"
+  info "iso-assemble: writing ${out_iso} (stock ISO + embedded store in the root)"
+  write_iso_with_squashfs "${stock_iso}" "${new_sqfs}" "${out_iso}"
 
   printf '%s\n' "${out_iso}"
 }
