@@ -37,6 +37,10 @@ isolate_target_propagation() {
   # Root dataset already mounted -> isolation happened on its original mount; a
   # late make-private cannot retract copies, so this is correctly a no-op.
   [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  # ${TARGET} must exist before the self-bind: ensure_target_ready imports the
+  # pool with -N (no mount) and never mkdir's it (the dataset mount used to
+  # create it), so create it here to be self-sufficient regardless of caller.
+  mkdir -p "${TARGET}"
   mountpoint -q "${TARGET}" || mount --bind "${TARGET}" "${TARGET}" ||
     fatal "Failed to self-bind ${TARGET} for mount-propagation isolation."
   mount --make-private "${TARGET}" ||
