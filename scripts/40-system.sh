@@ -173,7 +173,14 @@ install_zfs_from_source() {
     "${TARGET}"/var/tmp/*.buildinfo
   git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
     "${ZFS_REPO_URL}" "${TARGET}/var/tmp/openzfs"
-  in_target "
+  # The build step (autogen → configure → make native-deb-utils → assert the
+  # required packages were built) is shared. The in-target install tail below
+  # it (filter+install the .debs, purge pam, regenerate the PAM stack) only
+  # matters when zfs is going into a real target. When seeding an offline pool
+  # (ZFS_DEB_POOL set) the buildroot is thrown away, so skip the tail and stop
+  # after the build + copy-to-pool. With ZFS_DEB_POOL unset the concatenated
+  # script is byte-for-byte identical to the original installer in_target call.
+  local zfs_script="
     set -e
     export DEBIAN_FRONTEND=noninteractive
     # Drop any live-kernel modules package from an earlier failed attempt.
@@ -189,7 +196,9 @@ install_zfs_from_source() {
       openzfs-zfs-zed; do
       ls /var/tmp/\${p}_*.deb >/dev/null 2>&1 ||
         { echo \"required package not built: \${p}\" >&2; exit 1; }
-    done
+    done"
+  if [[ -z "${ZFS_DEB_POOL:-}" ]]; then
+    zfs_script+="
     debs=\"\$(ls /var/tmp/*.deb |
       grep -Ev 'zfs-modules|test|dracut|dbg|-dev|pam' || true)\"
     [[ -n \"\${debs}\" ]] ||
@@ -206,6 +215,8 @@ install_zfs_from_source() {
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
   "
+  fi
+  in_target "${zfs_script}"
   # Optionally seed an offline pool with the same filtered .debs (copy, so
   # the in-target install above is unaffected). Resolved host-side.
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
@@ -219,9 +230,13 @@ install_zfs_from_source() {
   fi
   # dkms rebuilds (and re-signs) the zfs module on every kernel update;
   # the toolchain must survive the Hyprland build-dep purge and its
-  # `apt-get autoremove --purge`.
-  in_target "apt-mark manual ${ZFS_BUILD_PACKAGES[*]} >/dev/null"
-  in_target "zfs version" || true
+  # `apt-get autoremove --purge`. Only meaningful for a real target: when
+  # seeding the offline pool (ZFS_DEB_POOL set) nothing was installed in this
+  # throwaway buildroot, so apt-mark and the zfs-version smoke test are skipped.
+  if [[ -z "${ZFS_DEB_POOL:-}" ]]; then
+    in_target "apt-mark manual ${ZFS_BUILD_PACKAGES[*]} >/dev/null"
+    in_target "zfs version" || true
+  fi
   rm -rf "${TARGET}/var/tmp/openzfs"
 }
 
@@ -368,6 +383,13 @@ install_addon_artifacts() {
 # The GitHub API names the latest release; the .deb asset embeds the version
 # without the leading 'v'. apt resolves the (minimal) dependencies.
 install_chezmoi() {
+  # chezmoi ships only as a GitHub release, not in the offline pool. Online
+  # installs fetch it; an offline install skips it (it is a userland dotfile
+  # manager, not boot-critical) so the install still completes and boots.
+  ((NETWORK_AVAILABLE)) || {
+    warn "Offline: skipping chezmoi (GitHub-only; install after first online boot)."
+    return 0
+  }
   local tag="" ver="" url=""
   tag="$(curl -fsSL --retry 3 \
     "${CHEZMOI_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
@@ -393,6 +415,13 @@ install_chezmoi() {
 # unzip + fontconfig come from TARGET_BASE_PACKAGES; fc-cache makes the fonts
 # resolvable.
 install_lythmono_fonts() {
+  # LythMono ships only as GitHub release zips, not in the offline pool. Skip
+  # offline -- cosmetic fonts are not boot-critical, so the install still
+  # completes; they can be added after the first online boot.
+  ((NETWORK_AVAILABLE)) || {
+    warn "Offline: skipping LythMono fonts (GitHub-only)."
+    return 0
+  }
   local tag="" v=""
   tag="$(curl -fsSL --retry 3 \
     "${LYTHMONO_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \

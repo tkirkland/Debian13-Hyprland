@@ -64,6 +64,14 @@ export TARGET
 # Cache/pool live inside the workspace (override lib/00-config.sh's defaults).
 CACHE_DIR="${ISO_WORKSPACE}/cache"
 POOL="${CACHE_DIR}/repo/pool"
+# Shared debootstrap .deb cache. The buildroot debootstrap (step_bootstrap_chroot)
+# fills it on the SINGLE base download; the closure debootstrap (10-cache.sh,
+# sourced in-process) reuses it via --cache-dir, so the trixie base is fetched
+# once and reused instead of being re-downloaded. EXPORTED so the in-process
+# 10-cache.sh sees it; the installer phase_cache leaves it UNSET (10-cache.sh
+# references it defensively, so that path is unchanged — no --cache-dir).
+DEBOOTSTRAP_CACHE="${CACHE_DIR}/debs-cache"
+export DEBOOTSTRAP_CACHE
 # Chroot-internal staging root for DESTDIR installs (host-visible at
 # ${TARGET}${BUILD_STAGE_REL}; chroot-visible at ${BUILD_STAGE_REL}).
 BUILD_STAGE_REL="${BUILD_STAGE_REL:-/var/tmp/hypr-stage}"
@@ -107,8 +115,22 @@ step_bootstrap_chroot() {
   else
     info "[build] debootstrap ${SUITE} -> ${TARGET}"
     mkdir -p "${TARGET}"
-    debootstrap "${SUITE}" "${TARGET}" "${MIRROR}" \
+    # --cache-dir seeds the shared deb cache on this SINGLE base download; the
+    # closure debootstrap in 10-cache.sh reuses it instead of re-fetching base.
+    debootstrap --cache-dir="${DEBOOTSTRAP_CACHE}" "${SUITE}" "${TARGET}" "${MIRROR}" \
       || fatal "debootstrap failed for ${SUITE} -> ${TARGET}"
+  fi
+  # Harvest the base .debs from the buildroot's apt archives into the pool. This
+  # is THE single base download/harvest for the build-iso path (the dedicated
+  # --download-only bootstrap pass in 10-cache.sh is dropped). Placed after the
+  # resume/else block so it also runs on resume; cp -n is idempotent. At step 1
+  # the buildroot archives hold the freshly debootstrapped base set (no in_target
+  # apt has run yet this invocation). POOL is created by main() before
+  # run_heavy_build; mkdir -p here keeps the harvest self-contained. Empty-glob
+  # safe via the compgen guard.
+  mkdir -p "${POOL}"
+  if compgen -G "${TARGET}/var/cache/apt/archives/*.deb" >/dev/null; then
+    cp -n "${TARGET}/var/cache/apt/archives/"*.deb "${POOL}/"
   fi
   # CRITICAL host-safety: mount_chroot_binds binds the host's live /run (systemd
   # + dbus sockets) into the buildroot. Without policy-rc.d exit 101, a package
@@ -223,7 +245,17 @@ step_depsim() {
   info "[build] simulating full install against the offline pool only"
   local simroot
   simroot="$(mktemp -d "${ISO_WORKSPACE}/depsim.XXXXXX")"
-  debootstrap "${SUITE}" "${simroot}" "${MIRROR}" \
+  # Bootstrap the throwaway base DIRECTLY from the offline pool — ZERO network.
+  # step_reindex (step 5) already wrote ${CACHE_DIR}/repo/dists/${SUITE}/{Release,
+  # main/binary-${ARCH}/Packages}, and the base debs were pooled at step 1, so the
+  # pool can bootstrap a full base system offline. This drops the 4th base download
+  # AND strengthens the test (proves the pool is self-sufficient for base bootstrap).
+  # --no-check-gpg: the pool's apt-ftparchive Release is unsigned (no Release.gpg/
+  # InRelease), so signature verification must be disabled — verified empirically
+  # against this exact pool layout with debootstrap 1.0.141 (file:// + --no-check-gpg
+  # installs the base successfully; a file:// debootstrap WITHOUT it fails on the
+  # missing Release.gpg).
+  debootstrap --no-check-gpg "${SUITE}" "${simroot}" "file://${CACHE_DIR}/repo" \
     || { rm -rf "${simroot}"; fatal "depsim: debootstrap failed"; }
   printf 'deb [trusted=yes] file://%s/repo %s main\n' "${CACHE_DIR}" "${SUITE}" \
     >"${simroot}/etc/apt/sources.list"
@@ -282,6 +314,25 @@ step_assemble() {
     || fatal "iso-assemble failed"
 }
 
+# 6b) Stage the ZFSBootMenu EFI INSIDE the offline store so iso-assemble grafts
+#     it onto the ISO at /hypr-repo/zfsbootmenu.EFI. install_zbm reads it from
+#     there on an offline install (preflight redirects CACHE_REPO_DIR to the
+#     on-ISO store). fetch_zbm_efi lives in scripts/50-boot.sh, outside the
+#     critical top-level source order, so source it lazily like step_zfs does
+#     for 40-system.sh.
+step_stage_zbm() {
+  local dest="${CACHE_DIR}/repo/zfsbootmenu.EFI"
+  if [[ -f "${dest}" ]]; then
+    info "[build] reusing staged ZFSBootMenu EFI (${dest})"
+    return 0
+  fi
+  if ! declare -f fetch_zbm_efi >/dev/null 2>&1; then
+    source "${REPO_ROOT}/scripts/50-boot.sh"
+  fi
+  info "[build] staging ZFSBootMenu EFI into the offline store (${dest})"
+  fetch_zbm_efi "${dest}"
+}
+
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
@@ -289,6 +340,7 @@ run_heavy_build() {
   step_zfs                  # 4
   step_reindex              # 5
   step_depsim               # 6
+  step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
   step_assemble             # 7
   kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
   teardown_chroot_binds     # 9 (also via trap)
@@ -331,7 +383,7 @@ main() {
   trap 'teardown_chroot_binds' EXIT
   trap 'teardown_chroot_binds' ERR
 
-  mkdir -p "${ISO_WORKSPACE}" "${POOL}"
+  mkdir -p "${ISO_WORKSPACE}" "${POOL}" "${DEBOOTSTRAP_CACHE}"
   run_heavy_build
 }
 

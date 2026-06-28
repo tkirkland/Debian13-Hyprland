@@ -140,6 +140,19 @@ write_target_apt_sources() {
 # Requires mount_chroot_binds to have run first (the store is bound under /run).
 setup_target_iso_repo() {
   local mnt="${TARGET}${TARGET_ISO_REPO_MNT}"
+  # The offline store must actually exist before we bind it. On a resumed run
+  # the "already bootstrapped" short-circuit in run_debootstrap returns early
+  # and never reaches cache_validate, so this is the ONLY guard against a
+  # vanished store -- e.g. /run/live/medium got unmounted after preflight set
+  # CACHE_REPO_DIR to the on-ISO repo. Without it, `mount --bind` of a missing
+  # source dies with a cryptic kernel "special device ... does not exist".
+  if [[ ! -d "${CACHE_REPO_DIR}" ||
+    ! -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]; then
+    fatal "Offline package store missing or incomplete at ${CACHE_REPO_DIR}" \
+      "(no dists/${SUITE}/main/binary-${ARCH}/Packages). The live medium" \
+      "(/run/live/medium) may have been unmounted since preflight; re-mount it" \
+      "and re-run, or pass --online to install from the network."
+  fi
   mkdir -p "${mnt}"
   if ! mountpoint -q "${mnt}"; then
     mount --bind "${CACHE_REPO_DIR}" "${mnt}" ||
