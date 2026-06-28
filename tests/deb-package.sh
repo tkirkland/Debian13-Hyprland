@@ -103,4 +103,75 @@ else
   echo "  skip: dpkg-deb not installed (gate test)"
 fi
 
+# --- Auto shared-lib dependency derivation (dpkg-shlibdeps), issue #82 --------
+# Our source-built debs supersede Debian's wayland/xkbcommon via Provides, so
+# auto-derived deps naming those must be stripped; real deps (libre2-11) kept;
+# manual HYPR_DEB_DEPENDS entries merged with manual winning.
+declare -gA HYPR_DEB_PROVIDES=(
+  [wayland]="libwayland-client0, libwayland-server0"
+  [xkbcommon]="libxkbcommon0"
+)
+
+prov="$(_self_provided_names)"
+assert_contains "${prov}" " libwayland-client0 " "_self_provided_names is space-bounded"
+assert_contains "${prov}" " libxkbcommon0 " "_self_provided_names spans multiple Provides keys"
+
+stripped="$(_strip_self_provided "libc6 (>= 2.34), libwayland-client0 (>= 1.20), libre2-11, libxkbcommon0")"
+assert_contains "${stripped}" "libre2-11" "_strip keeps a real external dep"
+assert_contains "${stripped}" "libc6 (>= 2.34)" "_strip keeps libc6 with its version"
+case "${stripped}" in
+  *libwayland-client0*|*libxkbcommon0*)
+    echo "  FAIL: superseded libs not stripped" >&2; TEST_FAILURES=$((TEST_FAILURES+1)) ;;
+  *) echo "  ok: superseded wayland/xkbcommon deps stripped" ;;
+esac
+
+merged="$(_merge_depends "libc6, libwayland-client0, libgcc-s1" "libc6 (>= 2.34), libre2-11")"
+assert_contains "${merged}" "libwayland-client0" "_merge keeps a manual-only dep"
+assert_contains "${merged}" "libre2-11" "_merge adds an auto-only dep"
+assert_contains "${merged}" "libc6," "_merge: unversioned manual libc6 wins"
+case "${merged}" in
+  *"libc6 (>= 2.34)"*)
+    echo "  FAIL: auto libc6 duplicated despite manual" >&2; TEST_FAILURES=$((TEST_FAILURES+1)) ;;
+  *) echo "  ok: _merge dedups by package name" ;;
+esac
+
+# shlibdeps_scan is a no-op (empty) without dpkg-shlibdeps -> manual-map fallback.
+if ! command -v dpkg-shlibdeps >/dev/null 2>&1; then
+  assert_eq "" "$(shlibdeps_scan "$(mktemp -d)" amd64)" "shlibdeps_scan no-op without dpkg-shlibdeps"
+fi
+
+# With a fake dpkg-shlibdeps + an ELF-magic file, shlibdeps_scan parses output.
+# Use a .so fixture (matched by find -name '*.so*'): the exec-bit branch is not
+# detectable on the Windows dev host, but the name branch is portable.
+fbin="$(mktemp -d)"
+make_fake "${fbin}" dpkg-shlibdeps 'echo "shlibs:Depends=libc6 (>= 2.34), libre2-11, libwayland-client0 (>= 1.20)"'
+fdest="$(mktemp -d)"; mkdir -p "${fdest}/usr/lib"
+printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000' >"${fdest}/usr/lib/libhyprland.so.0"
+scanned="$(PATH="${fbin}:${PATH}" shlibdeps_scan "${fdest}" amd64)"
+assert_contains "${scanned}" "libre2-11" "shlibdeps_scan parses shlibs:Depends"
+assert_contains "${scanned}" "libwayland-client0" "shlibdeps_scan returns raw (unstripped) deps"
+rm -rf "${fbin}" "${fdest}"
+
+# End-to-end: package_to_deb auto-derives, strips superseded, and writes Depends.
+if command -v dpkg-deb >/dev/null; then
+  ptmp="$(mktemp -d)"; ppool="${ptmp}/pool"; pdest="${ptmp}/stage"
+  mkdir -p "${ppool}" "${pdest}/usr/lib"
+  printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000' >"${pdest}/usr/lib/libhyprland.so.0"
+  fb2="$(mktemp -d)"
+  make_fake "${fb2}" dpkg-shlibdeps 'echo "shlibs:Depends=libre2-11, libwayland-server0 (>= 1.20), libgcc-s1"'
+  out="$(PATH="${fb2}:${PATH}" package_to_deb "${pdest}" hyprland 0.55.4-1 amd64 "" "${ppool}")"
+  dep="$(dpkg-deb -f "${out}" Depends)"
+  assert_contains "${dep}" "libre2-11" "package_to_deb declares auto-derived libre2-11 (#82)"
+  case "${dep}" in
+    *libwayland-server0*)
+      echo "  FAIL: superseded libwayland-server0 leaked into Depends" >&2; TEST_FAILURES=$((TEST_FAILURES+1)) ;;
+    *) echo "  ok: superseded wayland dep kept out of the deb Depends" ;;
+  esac
+  rm -rf "${ptmp}" "${fb2}"
+else
+  echo "  skip: dpkg-deb not installed (shlibdeps integration)"
+fi
+
+HYPR_DEB_PROVIDES=()
+
 finish_test
