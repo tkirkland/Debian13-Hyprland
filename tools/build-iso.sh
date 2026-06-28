@@ -233,6 +233,45 @@ step_zfs() {
   ZFS_DEB_POOL="${POOL}" install_zfs_from_source
 }
 
+# 4.5) Pool the runtime closure the built debs now DECLARE. Part A (dpkg-shlibdeps
+#    in package_to_deb) makes the source/ZFS debs declare real shared-lib deps
+#    (e.g. Hyprland -> libre2-11; issue #82) that the step-2 name-list closure
+#    (cache_populate_debs, resolved BEFORE the source debs existed) never pulled.
+#    Without this, those debs are absent from the pool and step_depsim would abort
+#    the build. The buildroot is still networked with full apt, so fetch each
+#    declared dep's .deb and harvest it. Names our own debs supersede via Provides
+#    (Debian's libwayland-*/libxkbcommon*) are dropped — they are kept out of the
+#    pool on purpose and satisfied by our debs' versioned Provides.
+step_runtime_closure() {
+  local d names provided n
+  provided="$(_self_provided_names)"
+  names="$(
+    for d in "${POOL}"/*.deb; do
+      [[ -e "${d}" ]] || continue
+      dpkg-deb -f "${d}" Depends 2>/dev/null
+    done | tr ',' '\n' | sed 's/(.*)//; s/[[:space:]]//g' | sort -u
+  )"
+  local -a want=()
+  while IFS= read -r n; do
+    [[ -n "${n}" ]] || continue
+    [[ "${provided}" == *" ${n} "* ]] && continue
+    want+=("${n}")
+  done <<<"${names}"
+  ((${#want[@]})) || return 0
+  info "[build] pooling runtime closure of ${#want[@]} declared dep(s)"
+  # apt-get download fetches each named .deb regardless of install state (so an
+  # already-installed runtime lib like libre2-11 is still captured even though
+  # apt considers it satisfied). Best-effort per name; step_depsim is the gate.
+  in_target "
+    cd /var/cache/apt/archives 2>/dev/null || exit 0
+    export DEBIAN_FRONTEND=noninteractive
+    for p in ${want[*]}; do apt-get download \"\${p}\" >/dev/null 2>&1 || true; done
+  "
+  if compgen -G "${TARGET}/var/cache/apt/archives/*.deb" >/dev/null; then
+    cp -n "${TARGET}/var/cache/apt/archives/"*.deb "${POOL}/"
+  fi
+}
+
 # 5) Re-index after the source stack + ZFS landed new .debs.
 step_reindex() {
   cache_index_repo
@@ -338,6 +377,7 @@ run_heavy_build() {
   step_cache                # 2
   step_build_stack          # 3
   step_zfs                  # 4
+  step_runtime_closure      # 4.5: pool the runtime deps the built debs declare
   step_reindex              # 5
   step_depsim               # 6
   step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
