@@ -86,6 +86,11 @@ in_target() {
 kill_target_processes() {
   command -v fuser >/dev/null 2>&1 || return 0
   mountpoint -q "${TARGET}" 2>/dev/null || return 0
+  # Only ever fuser-kill a real ZFS ${TARGET} (the chroot). When ${TARGET} is
+  # merely the propagation self-bind (a bind of the host root; see
+  # isolate_target_propagation in scripts/30-bootstrap.sh), fuser -M -m would
+  # target the HOST filesystem and -k would kill live-system processes.
+  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] || return 0
   if fuser -k -M -m "${TARGET}" 2>/dev/null; then
     warn "Killed processes still using ${TARGET} before teardown."
     sleep 1

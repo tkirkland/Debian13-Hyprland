@@ -58,6 +58,7 @@ on_error() {
       report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
     fi
   fi
+  release_target_propagation
   exit "${exit_code}"
 }
 

@@ -27,5 +27,8 @@ phase_cleanup() {
       report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
     fi
   fi
+  # Remove the mount-propagation self-bind now that the datasets are unmounted
+  # and the pool exported (no-op when isolation was never set up).
+  release_target_propagation
   info "Cleanup done. Remove the live medium and reboot."
 }
