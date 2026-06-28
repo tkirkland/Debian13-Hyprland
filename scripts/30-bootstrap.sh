@@ -12,6 +12,47 @@ TARGET_ISO_REPO_MNT="/run/hypr-repo"
 # Target-relative path of the temporary offline apt source (removed at cleanup).
 ISO_TEMP_SOURCE_REL="etc/apt/sources.list.d/hypr-iso-temp.sources"
 
+# --- Mount-propagation isolation (so `zpool export` does not fail "pool busy") -
+# ${TARGET}'s parent (/) is a `shared` mount, so when ZFS mounts the pool's
+# datasets under altroot=${TARGET} each mount(2) propagates into the private
+# mount namespaces systemd clones for sandboxed services (systemd-udevd has
+# PrivateMounts=yes, systemd-logind has ProtectSystem=strict). Those service-ns
+# copies independently pin the datasets, so the global `zfs unmount -a` +
+# `zpool export -f` at cleanup leave the pool busy and the export fails.
+#
+# Pin ${TARGET} into a PRIVATE mount subtree BEFORE any dataset mounts onto it:
+# a self-bind makes ${TARGET} its own mount, make-private severs it from /'s
+# shared peer group, and the root dataset (plus its children, via zfs mount -a)
+# then stacks INSIDE the private subtree and never propagates out. This is the
+# dataset->service-ns counterpart of the host->target make-rslave in
+# mount_chroot_binds (lib/04-chroot-mounts.sh): opposite propagation directions,
+# and they nest correctly.
+#
+# Because the self-bind makes ${TARGET} a mountpoint before any ZFS mount, the
+# dataset-mount guards below test FSTYPE==zfs (is the ROOT dataset mounted?),
+# NOT bare `mountpoint -q` (which the self-bind would satisfy spuriously and so
+# wrongly skip the dataset mount). release_target_propagation removes the
+# self-bind at cleanup and on the failure path.
+isolate_target_propagation() {
+  # Root dataset already mounted -> isolation happened on its original mount; a
+  # late make-private cannot retract copies, so this is correctly a no-op.
+  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  mountpoint -q "${TARGET}" || mount --bind "${TARGET}" "${TARGET}" ||
+    fatal "Failed to self-bind ${TARGET} for mount-propagation isolation."
+  mount --make-private "${TARGET}" ||
+    fatal "Failed to make ${TARGET} a private mount subtree."
+}
+
+# Remove the propagation-isolation self-bind. Run after the datasets are
+# zfs-unmounted and the pool exported. No-op unless only the bare self-bind
+# remains: it never unmounts a live ZFS ${TARGET}.
+release_target_propagation() {
+  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  mountpoint -q "${TARGET}" 2>/dev/null || return 0
+  umount "${TARGET}" 2>/dev/null || umount -l "${TARGET}" 2>/dev/null ||
+    warn "Could not remove ${TARGET} propagation self-bind."
+}
+
 mount_target_tree() {
   info "Mounting target tree at ${TARGET}..."
   mkdir -p "${TARGET}"
@@ -25,8 +66,9 @@ mount_target_tree() {
   # Resumed runs reach here with the tree already mounted by
   # ensure_target_ready (zfs mount refuses a second mount, killing the
   # run under set -e), so every mount is guarded. zfs mount -a is
-  # natively idempotent.
-  if ! mountpoint -q "${TARGET}"; then
+  # natively idempotent. Isolate propagation BEFORE the root dataset mounts.
+  isolate_target_propagation
+  if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then
     zfs mount "${ROOT_DATASET}"
   fi
   zfs mount -a
@@ -46,7 +88,8 @@ ensure_target_ready() {
     # the noauto root dataset would be shadowed by the root overlay-mount.
     zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null || return 0
   fi
-  if ! mountpoint -q "${TARGET}"; then
+  isolate_target_propagation
+  if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then
     zfs mount "${ROOT_DATASET}"
     zfs mount -a
   fi
