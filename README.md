@@ -171,14 +171,18 @@ already the newest — there is no version checking at install time.
 Boot the resulting `OUT_ISO`, get root, and run the baked installer:
 
 ```bash
-sudo /run/live/medium/hypr-installer/installer.sh --bootloader=zbm --rtc=utc
+sudo /opt/hypr-deb/installer/installer.sh --bootloader=zbm --rtc=utc
 ```
 
-Preflight detects the live medium at `/run/live/medium`, finds the package
-store at `/run/live/medium/hypr-repo`, and makes **offline the default**: it
-debootstraps from `file://` the on-ISO repo and `apt-get install`s the entire
-custom stack by package name from the prebuilt `.debs` — no source compile, no
-network. Pass `--online` to force the networked path instead, or `--offline`
+The installer and package store are embedded in the live root filesystem (the
+squashfs) under `/opt/hypr-deb` — not as loose directories on the medium — so
+the store can't be shadowed by a `/run` bind mount and survives regardless of
+the medium's mount state. Preflight finds the package store at
+`/opt/hypr-deb/repo` (falling back to `/run/live/medium/hypr-repo` on older
+ISOs) and makes **offline the default**: it debootstraps from `file://` the
+on-ISO repo and `apt-get install`s the entire custom stack by package name from
+the prebuilt `.debs` — no source compile, no network. Pass `--online` to force
+the networked path instead, or `--offline`
 to refuse the network outright.
 
 The on-ISO store also carries the **NVIDIA driver** — both flavors (open and

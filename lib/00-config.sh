@@ -107,9 +107,13 @@ TARGET_CACHE_DIR="/var/cache/hypr-deb"
 # store (ISO_MEDIUM_REPO) when booted from our offline ISO — so the store can
 # be used without moving CACHE_DIR itself.
 CACHE_REPO_DIR="${CACHE_REPO_DIR:-${CACHE_DIR}/repo}"
-# Where the on-ISO package store is mounted in the booted live environment.
-# The medium is mounted at /run/live/medium; our apt-ftparchive repo
-# (dists/ + pool/) lives under hypr-repo there.
+# Where the embedded apt-ftparchive store (dists/ + pool/) lives INSIDE the live
+# root filesystem (the squashfs) when the ISO was built by tools/iso-assemble.sh.
+# preflight probes this first: an in-root store cannot be shadowed by a /run bind
+# mount and does not depend on the medium staying visible mid-install.
+ISO_LIVE_REPO="${ISO_LIVE_REPO:-/opt/hypr-deb/repo}"
+# Fallback for older ISOs that shipped the store as a top-level data directory on
+# the medium (mounted at /run/live/medium) rather than embedded in the squashfs.
 ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
 
 # --- Bootloader ---------------------------------------------------------------

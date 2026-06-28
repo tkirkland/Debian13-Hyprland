@@ -204,22 +204,27 @@ select_disks() {
 # Whether the on-ISO package store was found (set by discover_iso_repo).
 ISO_STORE_PRESENT=0
 
-# Discover the on-ISO package store. When booted from our offline ISO the
-# medium (mounted at /run/live/medium) carries an apt-ftparchive repo
-# (dists/ + pool/) at ISO_MEDIUM_REPO. Its presence — a Packages index under
-# dists/ — points the offline machinery at the medium (CACHE_REPO_DIR) and
-# makes offline-from-store the DEFAULT mode (see check_network). This runs
+# Discover the on-ISO package store. When booted from our offline ISO the store
+# is an apt-ftparchive repo (dists/ + pool/) shipped either embedded in the live
+# root (ISO_LIVE_REPO, current ISOs) or as a top-level directory on the medium
+# (ISO_MEDIUM_REPO, older ISOs). Probe the in-root path first. Its presence — a
+# Packages index under dists/ — points the offline machinery at it (CACHE_REPO_DIR)
+# and makes offline-from-store the DEFAULT mode (see check_network). This runs
 # regardless of the --offline/--online flags so a forced-offline install also
 # installs from the store.
 discover_iso_repo() {
   ISO_STORE_PRESENT=0
-  local idx=""
-  idx="$(find "${ISO_MEDIUM_REPO}/dists" -type f -name Packages -print -quit \
-    2>/dev/null || true)"
-  [[ -n "${idx}" ]] || return 0
-  ISO_STORE_PRESENT=1
-  CACHE_REPO_DIR="${ISO_MEDIUM_REPO}"
-  info "On-ISO package store found: ${CACHE_REPO_DIR}"
+  local root="" idx=""
+  for root in "${ISO_LIVE_REPO}" "${ISO_MEDIUM_REPO}"; do
+    [[ -n "${root}" ]] || continue
+    idx="$(find "${root}/dists" -type f -name Packages -print -quit \
+      2>/dev/null || true)"
+    [[ -n "${idx}" ]] || continue
+    ISO_STORE_PRESENT=1
+    CACHE_REPO_DIR="${root}"
+    info "On-ISO package store found: ${CACHE_REPO_DIR}"
+    return 0
+  done
 }
 
 # Decide the install mode. Precedence:
