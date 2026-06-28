@@ -80,4 +80,53 @@ fi
 assert_contains "${out}" "zfs mount -a" \
   "zfs mount -a still runs (natively idempotent)"
 
+echo "test: setup_target_iso_repo refuses to bind a missing/incomplete offline store"
+# On a resumed run (target already bootstrapped) run_debootstrap returns early
+# and never calls cache_validate, so setup_target_iso_repo is the only guard
+# against a vanished offline store (e.g. /run/live/medium unmounted after
+# preflight). It must fail with an actionable message, not a raw bind-mount.
+run_iso_repo() { # $1 = CACHE_REPO_DIR
+  bash -c '
+    set -euo pipefail
+    calls="'"${tmp}"'/iso_calls"
+    : >"${calls}"
+    source scripts/30-bootstrap.sh
+    # Stubs AFTER the source so they override functions defined in the script.
+    info() { :; }
+    warn() { :; }
+    fatal() { echo "FATAL: $*"; exit 1; }
+    mount() { echo "mount $*" >>"${calls}"; }   # stub: always "succeeds"
+    mountpoint() { return 1; }                   # target mnt not yet mounted
+    write_iso_temp_source() { echo "wrote_temp_source" >>"${calls}"; }
+    TARGET="'"${tmp}"'/target"
+    SUITE=trixie
+    ARCH=amd64
+    CACHE_REPO_DIR="'"$1"'"
+    setup_target_iso_repo
+    cat "${calls}"
+  '
+}
+
+missing="${tmp}/nope-repo"
+if out="$(run_iso_repo "${missing}" 2>&1)"; then
+  echo "  FAIL: setup_target_iso_repo succeeded with a missing store" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  assert_contains "${out}" "FATAL:" "missing store is fatal"
+  assert_contains "${out}" "${missing}" "fatal names the missing store path"
+  if printf '%s\n' "${out}" | grep -q "^mount "; then
+    echo "  FAIL: attempted bind-mount despite missing store" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: no bind-mount attempted when store is missing"
+  fi
+fi
+
+good="${tmp}/good-repo"
+mkdir -p "${good}/dists/trixie/main/binary-amd64"
+: >"${good}/dists/trixie/main/binary-amd64/Packages"
+out="$(run_iso_repo "${good}")"
+assert_contains "${out}" "mount --bind ${good}" "valid store gets bind-mounted"
+assert_contains "${out}" "wrote_temp_source" "valid store writes the temp source"
+
 finish_test
