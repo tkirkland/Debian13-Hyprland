@@ -249,7 +249,7 @@ step_runtime_closure() {
     for d in "${POOL}"/*.deb; do
       [[ -e "${d}" ]] || continue
       dpkg-deb -f "${d}" Depends 2>/dev/null
-    done | tr ',' '\n' | sed 's/(.*)//; s/[[:space:]]//g' | sort -u
+    done | tr ',|' '\n' | sed 's/(.*)//; s/[[:space:]]//g' | sort -u
   )"
   local -a want=()
   while IFS= read -r n; do
