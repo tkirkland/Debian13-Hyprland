@@ -89,12 +89,117 @@ _versioned_provides() {
   printf '%s' "${out}"
 }
 
+# Union of package names our OWN debs satisfy via Provides (the source-compiled
+# wayland/xkbcommon supersede Debian's libwayland-*/libxkbcommon*). Auto-derived
+# deps naming these must be dropped: Debian's superseded libs are deliberately
+# kept out of the offline pool, and our debs satisfy the reverse-deps via a
+# versioned Provides. Derived from HYPR_DEB_PROVIDES so adding a Provides
+# automatically extends the filter. Emits a space-delimited, space-bounded set
+# (" a b c ") for `[[ "${set}" == *" ${name} "* ]]` membership tests.
+_self_provided_names() {
+  local key tok out=" "
+  local IFS=','
+  for key in "${!HYPR_DEB_PROVIDES[@]}"; do
+    for tok in ${HYPR_DEB_PROVIDES[${key}]}; do
+      tok="${tok#"${tok%%[![:space:]]*}"}"
+      tok="${tok%"${tok##*[![:space:]]}"}"
+      [[ -n "${tok}" ]] && out+="${tok} "
+    done
+  done
+  printf '%s' "${out}"
+}
+
+# Build-host only. Derive the real shared-library Depends of the staged ELF tree
+# under DESTDIR ($1) via dpkg-shlibdeps. Echoes a bare "pkg (>= ver), ..." string
+# (empty on failure). No-op (rc 0, no output) when dpkg-shlibdeps is absent, so
+# the Windows dev host and the fake-driven suite fall back to HYPR_DEB_DEPENDS.
+# -l <staged libdirs>: resolve the package's OWN bundled sonames (libhyprutils,
+#   our compiled wayland/xkbcommon) internally -> no spurious external dep.
+# --ignore-missing-info: a still-unresolved internal soname warns, never aborts.
+# --admindir: dpkg-shlibdeps maps soname->package via this dpkg db; the -dev/
+#   runtime soname packages live in the BUILDROOT (${TARGET}), not the host, so
+#   point there when TARGET is set (override with HYPR_SHLIBDEPS_ADMINDIR).
+shlibdeps_scan() {
+  local destdir="$1" arch="${2:-${ARCH:-amd64}}"
+  command -v dpkg-shlibdeps >/dev/null 2>&1 || return 0
+  [[ -d "${destdir}/usr" ]] || return 0
+  local -a elves=() f
+  while IFS= read -r -d '' f; do
+    LC_ALL=C head -c4 "${f}" 2>/dev/null | grep -qa $'\x7fELF' && elves+=("${f}")
+  done < <(find "${destdir}/usr" -type f \( -perm -u+x -o -name '*.so*' \) -print0 2>/dev/null)
+  ((${#elves[@]})) || return 0
+  # dpkg-shlibdeps wants the private-lib dir ATTACHED to -l (-l<dir>, NOT -l <dir>);
+  # a separate token is parsed as a binary to analyze ("Is a directory" error).
+  local -a libdirs=("-l${destdir}/usr/lib") d
+  for d in "${destdir}"/usr/lib/*-linux-gnu; do
+    [[ -d "${d}" ]] && libdirs+=("-l${d}")
+  done
+  local admindir="${HYPR_SHLIBDEPS_ADMINDIR:-${TARGET:+${TARGET}/var/lib/dpkg}}"
+  local -a admin=()
+  [[ -n "${admindir}" ]] && admin=(--admindir="${admindir}")
+  local work out
+  work="$(mktemp -d)"
+  mkdir -p "${work}/debian"
+  # dpkg-shlibdeps reads ./debian/control (CWD) for the package name+arch; the
+  # 3-line stub is the minimum. It lives in a throwaway dir, never in the .deb.
+  printf 'Source: hypr-deb\nPackage: hypr-deb\nArchitecture: %s\n' "${arch}" \
+    >"${work}/debian/control"
+  out="$(cd "${work}" && dpkg-shlibdeps -O --ignore-missing-info \
+    "${admin[@]}" "${libdirs[@]}" "${elves[@]}" 2>/dev/null \
+    | sed -n 's/^shlibs:Depends=//p')"
+  rm -rf "${work}"
+  printf '%s' "${out}"
+}
+
+# Drop tokens whose package name is one our own debs Provide (see
+# _self_provided_names). Input/output are "pkg (>= v), pkg2, ..." Depends strings.
+_strip_self_provided() {
+  local deps="$1" tok name out="" provided
+  provided="$(_self_provided_names)"
+  local IFS=','
+  for tok in ${deps}; do
+    tok="${tok#"${tok%%[![:space:]]*}"}"
+    tok="${tok%"${tok##*[![:space:]]}"}"
+    [[ -n "${tok}" ]] || continue
+    name="${tok%% *}"
+    [[ "${provided}" == *" ${name} "* ]] && continue
+    out="${out:+${out}, }${tok}"
+  done
+  printf '%s' "${out}"
+}
+
+# Merge a manual Depends string ($1) with an auto-derived one ($2), de-duped by
+# package NAME with the MANUAL token winning (keeps the curated swww/hypr-dim
+# entries, which our wayland Provides satisfies, over an auto duplicate).
+_merge_depends() {
+  local auto="$2" tok name seen=" " out="" combined="$1"
+  [[ -n "${auto}" ]] && combined="${combined:+${combined}, }${auto}"
+  local IFS=','
+  for tok in ${combined}; do
+    tok="${tok#"${tok%%[![:space:]]*}"}"
+    tok="${tok%"${tok##*[![:space:]]}"}"
+    [[ -n "${tok}" ]] || continue
+    name="${tok%% *}"
+    [[ "${seen}" == *" ${name} "* ]] && continue
+    seen+="${name} "
+    out="${out:+${out}, }${tok}"
+  done
+  printf '%s' "${out}"
+}
+
 # Stage a control file into DESTDIR and build pool/<name>_<ver>_<arch>.deb.
 # Echoes the resulting .deb path. DESTDIR must already contain the installed tree.
 package_to_deb() {
   local destdir="$1" name="$2" version="$3" arch="$4" depends="$5" pool="$6"
   local provides="${HYPR_DEB_PROVIDES[${name}]:-}"
   [[ -n "${provides}" ]] && provides="$(_versioned_provides "${provides}" "${version%-*}")"
+  # Auto-derive real shared-lib deps from the staged ELF tree (build host only;
+  # no-op without dpkg-shlibdeps). Strip libs our debs supersede, then merge with
+  # the hand-curated HYPR_DEB_DEPENDS entry (manual wins). Fixes silent runtime
+  # failures from undeclared deps (e.g. Hyprland needing libre2-11; issue #82).
+  local auto
+  auto="$(_strip_self_provided "$(shlibdeps_scan "${destdir}" "${arch}")")"
+  [[ -n "${auto}" ]] && depends="$(_merge_depends "${depends}" "${auto}")"
   write_control "${destdir}" "${name}" "${version}" "${arch}" "${depends}" \
     "${HYPR_DEB_CONFLICTS[${name}]:-}" "${HYPR_DEB_REPLACES[${name}]:-}" \
     "${provides}"
