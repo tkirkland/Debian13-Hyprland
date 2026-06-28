@@ -129,4 +129,33 @@ out="$(run_iso_repo "${good}")"
 assert_contains "${out}" "mount --bind ${good}" "valid store gets bind-mounted"
 assert_contains "${out}" "wrote_temp_source" "valid store writes the temp source"
 
+echo "test: isolate_target_propagation creates the target before self-binding"
+# Regression: ensure_target_ready imports the pool with -N and never mkdir's
+# ${TARGET}, so isolate_target_propagation must create it itself or the self-bind
+# dies with 'mount point does not exist'.
+iso2="$(bash -c '
+  set -uo pipefail
+  calls="'"${tmp}"'/iso2_calls"; : >"${calls}"
+  source scripts/30-bootstrap.sh
+  info() { :; }; warn() { :; }
+  fatal() { echo "FATAL: $*"; exit 1; }
+  findmnt() { return 1; }      # ${TARGET} has no fstype (not a mount)
+  mountpoint() { return 1; }   # ${TARGET} is not a mountpoint
+  mount() { echo "mount $*" >>"${calls}"; }
+  TARGET="'"${tmp}"'/fresh-target"   # deliberately absent
+  isolate_target_propagation && echo "ISOLATE_OK"
+  [[ -d "${TARGET}" ]] && echo "TARGET_CREATED"
+  cat "${calls}"
+' 2>&1)"
+assert_contains "${iso2}" "ISOLATE_OK" "isolate succeeds when the target is absent"
+assert_contains "${iso2}" "TARGET_CREATED" "isolate creates the target directory"
+assert_contains "${iso2}" "mount --bind ${tmp}/fresh-target ${tmp}/fresh-target" \
+  "self-binds the freshly created target"
+if printf '%s\n' "${iso2}" | grep -q "FATAL:"; then
+  echo "  FAIL: isolate fataled on an absent target" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no fatal on an absent target"
+fi
+
 finish_test
