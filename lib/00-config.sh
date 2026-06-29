@@ -681,8 +681,8 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
-# --skip-cache: no offline cache is populated or embedded (saves several
-# GB — important in live sessions where CACHE_DIR is RAM-backed).
+# --skip-cache: no offline cache is populated or embedded (saves several GB
+# at build time).
 SKIP_CACHE="${SKIP_CACHE:-0}"
 # --ntp: space-separated NTP servers written into the target's
 # systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
