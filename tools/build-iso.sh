@@ -266,6 +266,11 @@ step_runtime_closure() {
   while IFS= read -r n; do
     [[ -n "${n}" ]] || continue
     [[ "${provided}" == *" ${n} "* ]] && continue
+    # Skip a dep whose .deb is ALREADY in the pool (named ${name}_${ver}_${arch}.deb)
+    # — cache_populate_debs pooled most of these at step 1, so re-fetching them is
+    # pure wasted apt-get download. Conservative: step_depsim remains the hard
+    # offline-completeness gate, so any genuinely-missing dep is still caught.
+    compgen -G "${POOL}/${n}_*.deb" >/dev/null && continue
     want+=("${n}")
   done <<<"${names}"
   ((${#want[@]})) || return 0

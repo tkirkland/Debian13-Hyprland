@@ -89,4 +89,28 @@ echo "test: step_build_stack hoists install_build_deps (runs once for N componen
   exit 1
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
+echo "test: step_runtime_closure skips deps already in the pool"
+# shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_runtime_closure
+(
+  POOL="$(mktemp -d)"; TARGET="$(mktemp -d)"
+  : >"${POOL}/main_1.0-1_amd64.deb"          # the deb whose Depends we read
+  : >"${POOL}/libpooled1_1.0-1_amd64.deb"    # an already-pooled dep -> must be skipped
+  _self_provided_names() { printf ' '; }
+  # Every pooled deb reports the same Depends: one already pooled, one missing.
+  dpkg-deb() { [[ "$1" == "-f" ]] && echo "libpooled1 (>= 1.0), libmissing1"; }
+  info() { :; }
+  RC_CAP="$(mktemp)"
+  in_target() { printf '%s\n' "$*" >>"${RC_CAP}"; }
+  step_runtime_closure
+  rccap="$(cat "${RC_CAP}")"
+  rm -rf "${POOL}" "${TARGET}"; rm -f "${RC_CAP}"
+  rc=0
+  [[ "${rccap}" == *libmissing1* ]] || { echo "  FAIL: un-pooled dep libmissing1 not queued for download" >&2; rc=1; }
+  if [[ "${rccap}" == *libpooled1* ]]; then
+    echo "  FAIL: already-pooled dep libpooled1 was re-downloaded" >&2; rc=1
+  fi
+  ((rc == 0)) && echo "  ok: already-pooled dep skipped, only the missing dep is fetched"
+  exit "${rc}"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
 finish_test
