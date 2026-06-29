@@ -106,6 +106,15 @@ echo "test: live_extras_chroot_script enables sshd on boot only when openssh-ser
 with_ssh="$(live_extras_chroot_script "git openssh-client openssh-server")"
 assert_contains "${with_ssh}" "apt-get install -y --no-install-recommends git openssh-client openssh-server" \
   "installs the requested live extras"
+assert_contains "${with_ssh}" "Dir::Etc::SourceList=/etc/apt/sources.list.d/zz-live-extras-build.list" \
+  "live-extras apt uses an explicit online source list, not the build-absent live medium"
+assert_contains "${with_ssh}" "deb http://deb.debian.org/debian trixie main" \
+  "live-extras installs from the online Debian mirror at build time"
+if [[ "${with_ssh}" != *"/run/live/medium"* ]]; then
+  echo "  ok: live-extras install does not reference the build-absent live medium"
+else
+  echo "  FAIL: live-extras install still references /run/live/medium" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
 assert_contains "${with_ssh}" "SYSTEMD_OFFLINE=1 systemctl enable ssh.service" \
   "explicitly enables sshd on boot (offline) when openssh-server is present"
 no_ssh="$(live_extras_chroot_script "git")"
