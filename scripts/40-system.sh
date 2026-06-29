@@ -109,20 +109,18 @@ install_base_packages() {
   if [[ "${VIRT_TYPE}" == "vmware" ]]; then
     pkgs+=(open-vm-tools open-vm-tools-desktop)
   fi
-  if ((NETWORK_AVAILABLE)); then
-    # The upstream openzfs-* build replaces these; installing Debian's
-    # first would only churn (and dkms-build) packages we remove again.
-    for p in "${pkgs[@]}"; do
-      case " ${ZFS_DEBIAN_PACKAGES[*]} " in
-        *" ${p} "*) continue ;;
-      esac
-      filtered+=("${p}")
-    done
-    pkgs=("${filtered[@]}")
-  else
-    warn "Offline install: keeping Debian's OpenZFS 2.3.x (the cache" \
-      "does not carry the upstream source tree)."
-  fi
+  # Upstream OpenZFS replaces Debian's zfs-* on BOTH paths: online builds it from
+  # source (install_zfs_from_source), offline installs the prebuilt upstream debs
+  # from the on-ISO pool (install_zfs_offline). Either way, installing Debian's
+  # zfs-* first would only churn (and dkms-build) packages we immediately replace,
+  # so filter them out of the base set unconditionally.
+  for p in "${pkgs[@]}"; do
+    case " ${ZFS_DEBIAN_PACKAGES[*]} " in
+      *" ${p} "*) continue ;;
+    esac
+    filtered+=("${p}")
+  done
+  pkgs=("${filtered[@]}")
   # man-db re-indexes every installed man page on each apt transaction's
   # trigger phase — there are ~10 transactions across the install, minutes
   # of CPU on bare metal. Disable its auto-update for the chroot's lifetime
@@ -139,7 +137,33 @@ install_base_packages() {
   "
   if ((NETWORK_AVAILABLE)); then
     install_zfs_from_source
+  else
+    install_zfs_offline
   fi
+}
+
+# Offline counterpart to install_zfs_from_source: the upstream OpenZFS debs were
+# already built into the on-ISO pool at build time (tools/build-iso.sh step_zfs),
+# so install them BY NAME from the file:// store the bootstrap phase set up,
+# replacing Debian's 2.3.x — NO network, NO source build. Mirrors the source
+# path's install tail: keep the pam module out (the build filter never pools it,
+# but purge defensively if a prior attempt pulled it, then regenerate the PAM
+# stack from clean profiles), and apt-mark the metapackages manual so the later
+# Hyprland build-dep autoremove cannot reap them.
+install_zfs_offline() {
+  info "Installing upstream OpenZFS from the offline store (replaces Debian's zfs-*)..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${ZFS_UPSTREAM_PACKAGES[*]}
+    if dpkg-query -W 'openzfs*pam*' >/dev/null 2>&1; then
+      apt-get purge -y 'openzfs*pam*'
+    fi
+    rm -f /usr/share/pam-configs/*zfs*
+    pam-auth-update --package
+    apt-mark manual ${ZFS_UPSTREAM_PACKAGES[*]} >/dev/null
+  "
+  in_target "zfs version" || true
 }
 
 # ZFS_DEB_POOL (optional): when non-empty, the produced .debs that pass the

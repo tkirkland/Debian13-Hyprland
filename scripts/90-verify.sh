@@ -169,12 +169,11 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
-  # Networked installs replace Debian's zfs with the upstream build;
-  # offline installs legitimately keep the repo 2.3.x packages.
-  if ((NETWORK_AVAILABLE)); then
-    vcheck "upstream openzfs installed" in_target \
-      "dpkg -s openzfs-zfsutils >/dev/null"
-  fi
+  # BOTH paths replace Debian's zfs with the upstream build (online from source,
+  # offline from the on-ISO pool via install_zfs_offline), so the upstream package
+  # must be present regardless of network — verify it unconditionally.
+  vcheck "upstream openzfs installed" in_target \
+    "dpkg -s openzfs-zfsutils >/dev/null"
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
      grep -qx '${ROOT_DATASET}'"
