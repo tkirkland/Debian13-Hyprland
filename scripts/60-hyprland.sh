@@ -354,7 +354,7 @@ purge_build_deps() {
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
       xargs -r apt-mark manual
   "
-  info "Purging build dependencies (cached debs remain in ${TARGET_CACHE_DIR})..."
+  info "Purging build dependencies..."
   # dkms rebuilds (and re-signs) the zfs module on every kernel update, so
   # ZFS_BUILD_PACKAGES must stay installed for the system's lifetime.
   # Several of them overlap the Hyprland build deps (build-essential,
@@ -1273,9 +1273,12 @@ stage_firstboot() {
   done
   install_build_deps # toolchain present so firstboot works offline
 
-  # Authoritative manifest so the staged resolve_all_tags works offline.
-  local manifest="${TARGET}${TARGET_CACHE_DIR}/sources/MANIFEST"
-  mkdir -p "${TARGET}${TARGET_CACHE_DIR}/sources"
+  # Authoritative manifest so the staged resolve_all_tags works offline. Lives
+  # next to the staged source trees (${HYPR_SRC_DIR}/sources), a target-internal
+  # path — NOT the removed install-time cache. The firstboot runner sets
+  # CACHE_DIR=${HYPR_SRC_DIR} so resolve_all_tags reads it from here.
+  local manifest="${TARGET}${HYPR_SRC_DIR}/sources/MANIFEST"
+  mkdir -p "${TARGET}${HYPR_SRC_DIR}/sources"
   : >"${manifest}"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     echo "${name} ${HYPR_RESOLVED_TAG["${name}"]}" >>"${manifest}"
@@ -1294,7 +1297,7 @@ source /usr/local/lib/hypr-deb/01-log.sh
 source /usr/local/lib/hypr-deb/60-hyprland.sh
 TARGET=""           # build on the running system
 NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
-CACHE_DIR="${TARGET_CACHE_DIR}"
+CACHE_DIR="${HYPR_SRC_DIR}"
 KEEP_BUILD_DEPS=${KEEP_BUILD_DEPS}
 resolve_all_tags
 check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"

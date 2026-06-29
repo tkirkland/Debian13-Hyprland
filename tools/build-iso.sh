@@ -66,6 +66,11 @@ TARGET="${ISO_WORKSPACE}/buildroot"
 export TARGET
 # Cache/pool live inside the workspace (override lib/00-config.sh's defaults).
 CACHE_DIR="${ISO_WORKSPACE}/cache"
+# CACHE_REPO_DIR no longer derives from CACHE_DIR (it defaults to the on-ISO
+# store ISO_LIVE_REPO now), so the build MUST repoint it at the workspace pool
+# explicitly — otherwise cache_repo_exists/cache_validate would check the wrong
+# path and the build's populate/index/resume-skip logic would misfire.
+CACHE_REPO_DIR="${CACHE_DIR}/repo"
 POOL="${CACHE_DIR}/repo/pool"
 # Shared debootstrap .deb cache. The buildroot debootstrap (step_bootstrap_chroot)
 # fills it on the SINGLE base download; the closure debootstrap (10-cache.sh,
