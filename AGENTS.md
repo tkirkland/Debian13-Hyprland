@@ -23,6 +23,17 @@ bash tests/run-all.sh    # the full fake-driven test suite
 
 ## Architecture invariants
 
+- **Offline completeness (non-negotiable).** Network is IRRELEVANT to install
+  success. ANYTHING the installer puts into the target OS MUST be bundled on the
+  ISO at build time (harvested into the offline store/pool by `tools/build-iso.sh`,
+  the same way the `.debs` are) and installed from that LOCAL copy. The offline
+  default must install everything; an `--online` path may exist ONLY as an
+  optional accelerator — never gate, skip, or fail an installed artifact on
+  connectivity. When you find a runtime fetch (`curl`/`git clone`/online apt/a
+  GitHub release) or a `((NETWORK_AVAILABLE))` skip around something installed,
+  the fix is: harvest it at build time + consume locally (never add a network
+  branch). Settled offenders now bundled: chezmoi `.deb`, LythMono fonts,
+  upstream OpenZFS debs, the `assets/wallpapers` submodule.
 - `installer.sh` is a thin orchestrator. All real work lives in `lib/`
   (shared helpers) and `scripts/` (one module per phase). Modules are
   **sourced, never executed**: they start with `# shellcheck shell=bash`,
