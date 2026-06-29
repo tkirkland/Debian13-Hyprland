@@ -94,6 +94,24 @@ else
 fi
 rm -rf "${repo3}" "${inst3}" "${stage3}"
 
+echo "test: live_extras_chroot_script enables sshd on boot only when openssh-server is baked in"
+with_ssh="$(live_extras_chroot_script "git openssh-client openssh-server")"
+assert_contains "${with_ssh}" "apt-get install -y --no-install-recommends git openssh-client openssh-server" \
+  "installs the requested live extras"
+assert_contains "${with_ssh}" "SYSTEMD_OFFLINE=1 systemctl enable ssh.service" \
+  "explicitly enables sshd on boot (offline) when openssh-server is present"
+no_ssh="$(live_extras_chroot_script "git")"
+if [[ "${no_ssh}" != *"systemctl enable"* ]]; then
+  echo "  ok: no ssh enable emitted when openssh-server is absent"
+else
+  echo "  FAIL: enabled sshd without openssh-server in the set" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+if bash -n <(printf '%s\n' "${with_ssh}"); then
+  echo "  ok: emitted chroot payload is valid shell"
+else
+  echo "  FAIL: chroot payload is not valid shell" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+
 echo "test: build_write_iso_args replaces the live squashfs and strips d-i"
 args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
 assert_contains "${args}" "-map" "maps a file into the ISO"
