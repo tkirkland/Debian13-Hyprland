@@ -392,41 +392,44 @@ install_chezmoi() {
   "
 }
 
-# LythMono is not packaged; install every variant from its GitHub release (one
-# zip of TTFs per variant) into the system font path so all users get it. The
-# variant set (LYTHMONO_VARIANTS) mirrors the fonts on the reference machine.
-# unzip + fontconfig come from TARGET_BASE_PACKAGES; fc-cache makes the fonts
-# resolvable.
-install_lythmono_fonts() {
-  # LythMono ships only as GitHub release zips, not in the offline pool. Skip
-  # offline -- cosmetic fonts are not boot-critical, so the install still
-  # completes; they can be added after the first online boot.
-  ((NETWORK_AVAILABLE)) || {
-    warn "Offline: skipping LythMono fonts (GitHub-only)."
-    return 0
-  }
-  local tag="" v=""
-  tag="$(curl -fsSL --retry 3 \
-    "${LYTHMONO_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
-    2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
-  [[ -n "${tag}" ]] || fatal "Could not resolve the latest LythMono release."
-  info "Installing LythMono ${tag} fonts (${#LYTHMONO_VARIANTS[@]} variants)..."
-  rm -rf "${TARGET}/var/tmp/lythmono"
-  install -d "${TARGET}/var/tmp/lythmono"
+# Build-time harvester (the build host is online): download every LythMono
+# variant zip and EXTRACT its TTFs into DEST, so the ISO ships the fonts in the
+# offline store (DEST = ${CACHE_DIR}/repo/${LYTHMONO_STORE_SUBDIR}, grafted to
+# ${CACHE_REPO_DIR}/${LYTHMONO_STORE_SUBDIR} on the ISO). install_lythmono_fonts
+# copies them from there at install time — NO network. Pairs with build-iso's
+# step_stage_fonts (run only at build). LYTHMONO_VERSION pins the release; empty
+# resolves the latest tag (build-time only). unzip comes from LIVE_TOOL_PACKAGES
+# on the build host.
+harvest_lythmono_fonts() {
+  local dest="${1:?dest dir}" v="" tag="${LYTHMONO_VERSION:-}" tmp=""
+  [[ -n "${tag}" ]] ||
+    tag="$(resolve_latest_release_tag "${LYTHMONO_REPO_URL}" "${LYTHMONO_TAG_PATTERN}")"
+  info "Harvesting LythMono ${tag} fonts (${#LYTHMONO_VARIANTS[@]} variants) into ${dest}..."
+  install -d "${dest}"
+  tmp="$(mktemp -d)"
   for v in "${LYTHMONO_VARIANTS[@]}"; do
-    curl -fsSL --retry 3 -o "${TARGET}/var/tmp/lythmono/${v}.zip" \
+    curl -fsSL --retry 3 -o "${tmp}/${v}.zip" \
       "${LYTHMONO_REPO_URL}/releases/download/${tag}/${v}.zip" ||
-      fatal "Failed to download LythMono variant ${v} (${tag})."
+      { rm -rf "${tmp}"; fatal "Failed to harvest LythMono variant ${v} (${tag})."; }
+    unzip -o -j -q "${tmp}/${v}.zip" '*.ttf' -d "${dest}"
   done
-  in_target "
-    set -e
-    install -d /usr/local/share/fonts/LythMono
-    for z in /var/tmp/lythmono/*.zip; do
-      unzip -o -j -q \"\${z}\" '*.ttf' -d /usr/local/share/fonts/LythMono
-    done
-    fc-cache -f /usr/local/share/fonts/LythMono
-    rm -rf /var/tmp/lythmono
-  "
+  rm -rf "${tmp}"
+}
+
+# LythMono is not packaged. Its TTFs are harvested into the offline store at
+# build time (harvest_lythmono_fonts); install them from that LOCAL store path
+# into the system font path so all users get them, fully OFFLINE — NO GitHub
+# fetch, no network branch. fontconfig (fc-cache) comes from TARGET_BASE_PACKAGES.
+install_lythmono_fonts() {
+  local src="${CACHE_REPO_DIR}/${LYTHMONO_STORE_SUBDIR}"
+  if ! compgen -G "${src}/*.ttf" >/dev/null 2>&1; then
+    warn "LythMono fonts absent from the offline store (${src}); skipping."
+    return 0
+  fi
+  info "Installing LythMono fonts from the offline store (${src})..."
+  install -d "${TARGET}/usr/local/share/fonts/LythMono"
+  cp "${src}"/*.ttf "${TARGET}/usr/local/share/fonts/LythMono/"
+  in_target "fc-cache -f /usr/local/share/fonts/LythMono"
 }
 
 create_user() {
