@@ -117,6 +117,8 @@ else
 fi
 assert_contains "${with_ssh}" "SYSTEMD_OFFLINE=1 systemctl enable ssh.service" \
   "explicitly enables sshd on boot (offline) when openssh-server is present"
+assert_contains "${with_ssh}" "rm -rf /var/lib/apt/lists/* /var/cache/apt/*.bin" \
+  "cleanup tail removes the regenerable apt binary caches (pkgcache/srcpkgcache.bin) from the squashfs"
 no_ssh="$(live_extras_chroot_script "git")"
 if [[ "${no_ssh}" != *"systemctl enable"* ]]; then
   echo "  ok: no ssh enable emitted when openssh-server is absent"
