@@ -59,4 +59,34 @@ fi
 unset -f git
 rm -rf "${wroot}"
 
+echo "test: step_build_stack hoists install_build_deps (runs once for N components)"
+# Run in a subshell so the collaborator stubs/globals don't leak into later tests.
+# SC2317: the stubs are invoked indirectly by step_build_stack; SC2034: the maps
+# are consumed by the function under test, not this scope.
+# shellcheck disable=SC2317,SC2034
+(
+  HYPR_BUILD_ORDER=(aaa bbb ccc)
+  declare -A HYPR_REPO_URL=([aaa]=u [bbb]=u [ccc]=u)
+  declare -A HYPR_TAG_PATTERN=() HYPR_DEB_DEPENDS=() HYPR_RESOLVED_TAG=()
+  TARGET="$(mktemp -d)"; POOL="$(mktemp -d)"; ARCH=amd64; BUILD_STAGE_REL=/bs
+  resolve_latest_release_tag() { echo v1.0.0; }
+  tag_to_debver() { echo 1.0.0-1; }
+  deb_needs_rebuild() { return 0; }          # always rebuild -> loop body runs each iter
+  stage_source() { :; }
+  build_one() { :; }
+  package_to_deb() { :; }
+  in_target() { :; }
+  cp() { :; }                                # shadow the buildroot /usr copy
+  bdcount=0
+  install_build_deps() { bdcount=$((bdcount + 1)); }
+  step_build_stack
+  rm -rf "${TARGET}" "${POOL}"
+  if [[ "${bdcount}" == "1" ]]; then
+    echo "  ok: install_build_deps invoked once for 3 rebuilt components"
+    exit 0
+  fi
+  echo "  FAIL: install_build_deps ran ${bdcount}x (expected 1, must be hoisted)" >&2
+  exit 1
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
 finish_test

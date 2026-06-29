@@ -174,6 +174,11 @@ step_cache() {
 #    build_component_to_deb) so DESTDIR lands inside the buildroot.
 step_build_stack() {
   local name tag debver stagerel
+  # The build-dep set (HYPR_BUILD_PACKAGES) is identical for every component, so
+  # install it ONCE before the loop instead of re-running install_build_deps per
+  # rebuilt component (up to 21x). Pure build-time speedup; same packages land.
+  # Mirrors the already-hoisted installer path (scripts/60-hyprland.sh build_stack).
+  install_build_deps
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     tag="$(resolve_latest_release_tag \
       "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
@@ -185,7 +190,6 @@ step_build_stack() {
       # shellcheck disable=SC2034  # consumed by stage_source/build_one via 60-hyprland.sh
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       stage_source "${name}"
-      install_build_deps
       HYPR_DESTDIR="${stagerel}" build_one "${name}"
       package_to_deb "${TARGET}${stagerel}" "${name}" "${debver}" \
         "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${POOL}"
