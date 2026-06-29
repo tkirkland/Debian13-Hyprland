@@ -160,6 +160,10 @@ step_cache() {
     info "[build] populating offline .deb cache in ${CACHE_DIR}"
     cache_populate_debs
   fi
+  # chezmoi is a GitHub-only .deb (not in the Debian closure above): harvest it
+  # into the pool so the target installs it offline by name. Own reuse guard, so
+  # it runs even on the cache_repo_exists resume path.
+  cache_populate_chezmoi
   cache_index_repo
 }
 
