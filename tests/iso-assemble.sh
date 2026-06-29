@@ -28,15 +28,71 @@ if [[ -x "${base}/${LIVE_INSTALLER_SUBDIR}/installer.sh" ]]; then
 else
   echo "  FAIL: installer not embedded (or exec bit lost)" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
-# installer is optional: repo-only staging must not create the installer subdir.
+# Convenience symlink in the live home points at the embedded entry (absolute,
+# so it resolves against the live root at runtime — not the stage dir).
+link="${stage}${LIVE_USER_HOME}/${LIVE_INSTALLER_ENTRY}"
+want="${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}/${LIVE_INSTALLER_ENTRY}"
+if [[ -L "${link}" && "$(readlink "${link}")" == "${want}" ]]; then
+  echo "  ok: ~/${LIVE_INSTALLER_ENTRY} symlink -> ${want}"
+else
+  echo "  FAIL: live-home installer symlink missing or wrong target" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# A REAL (non-symlink) unattended launcher sits alongside the installer symlink.
+# It must carry the unattended flags a symlink cannot, run the embedded installer
+# as root, and (with the default EMPTY password) still be valid bash.
+auto="${stage}${LIVE_USER_HOME}/${LIVE_AUTOINSTALL_ENTRY}"
+if [[ -f "${auto}" && ! -L "${auto}" && -x "${auto}" ]]; then
+  echo "  ok: ~/${LIVE_AUTOINSTALL_ENTRY} is a real executable script (not a symlink)"
+else
+  echo "  FAIL: autoinstall launcher missing or not a real exec script" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+autobody="$(cat "${auto}")"
+assert_contains "${autobody}" "--yes" "launcher passes --yes"
+assert_contains "${autobody}" "--bootloader=grub" "launcher passes --bootloader=grub"
+assert_contains "${autobody}" "--rtc=local" "launcher passes --rtc=local"
+assert_contains "${autobody}" "TARGET_USERNAME=me" "launcher exports TARGET_USERNAME=me"
+assert_contains "${autobody}" "sudo env" "launcher acquires root via sudo env"
+assert_contains "${autobody}" "USER_PASSWORD=''" "empty-default password embeds as valid quoted token"
+assert_contains "${autobody}" \
+  "${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}/${LIVE_INSTALLER_ENTRY}" \
+  "launcher invokes the embedded installer entry"
+if bash -n "${auto}"; then
+  echo "  ok: generated launcher is valid bash (empty-password default)"
+else
+  echo "  FAIL: generated launcher is not valid bash" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# installer is optional: repo-only staging must not create the installer subdir,
+# the convenience symlink, OR the autoinstall launcher.
 stage2="$(mktemp -d)"; stage_live_payload "${stage2}" "${repo}"
 if [[ -d "${stage2}${LIVE_STORE_ROOT}/${LIVE_REPO_SUBDIR}/dists" \
-   && ! -e "${stage2}${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}" ]]; then
-  echo "  ok: installer staging is optional"
+   && ! -e "${stage2}${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}" \
+   && ! -e "${stage2}${LIVE_USER_HOME}/${LIVE_AUTOINSTALL_ENTRY}" ]]; then
+  echo "  ok: installer + autoinstall staging is optional"
 else
   echo "  FAIL: repo-only staging mishandled" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
 rm -rf "${repo}" "${inst}" "${stage}" "${stage2}"
+
+echo "test: stage_autoinstall_launcher embeds an arbitrary password safely (no injection)"
+repo3="$(mktemp -d)"; mkdir -p "${repo3}/dists" "${repo3}/pool"
+inst3="$(mktemp -d)"; printf '#!/bin/sh\n' >"${inst3}/installer.sh"
+stage3="$(mktemp -d)"
+# A password loaded with shell metacharacters: spaces, both quote types, a $, a
+# semicolon and an `rm -rf` payload. Safe %q quoting must neutralise all of it.
+pw="p@ss 'w\"o\$rd;rm -rf /"
+LIVE_AUTOINSTALL_PASSWORD="${pw}" stage_live_payload "${stage3}" "${repo3}" "${inst3}"
+auto3="${stage3}${LIVE_USER_HOME}/${LIVE_AUTOINSTALL_ENTRY}"
+autobody3="$(cat "${auto3}")"
+# The embedded form must be exactly what printf %q produces, so the value round-
+# trips back to the original and cannot escape its token.
+assert_contains "${autobody3}" "$(printf 'USER_PASSWORD=%q' "${pw}")" \
+  "password embedded exactly as the printf %q-quoted token"
+if bash -n "${auto3}"; then
+  echo "  ok: launcher with a metacharacter-laden password is valid bash (no injection)"
+else
+  echo "  FAIL: special-character password broke launcher syntax" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+rm -rf "${repo3}" "${inst3}" "${stage3}"
 
 echo "test: build_write_iso_args replaces the live squashfs and strips d-i"
 args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
