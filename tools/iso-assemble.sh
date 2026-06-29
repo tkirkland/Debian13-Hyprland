@@ -232,6 +232,15 @@ live_extras_chroot_script() {
     *" openssh-server "*)
       script+=" SYSTEMD_OFFLINE=1 systemctl enable ssh.service &&" ;;
   esac
+  # Neuter systemd-ssh-generator (systemd >=256): it queries the local AF_VSOCK
+  # CID to set up ssh-over-vsock and, in a VM with no vhost-vsock device, exits 1
+  # on every boot/daemon-reload, spamming "Failed to query local AF_VSOCK CID".
+  # Mask it by symlinking to /dev/null in /etc (which outranks /usr/lib in the
+  # generator search order, so a systemd upgrade never clobbers it). Done
+  # UNCONDITIONALLY (the generator ships with systemd, not openssh-server) and
+  # touches ONLY the generator -- the real sshd (ssh.service) is untouched.
+  script+=" mkdir -p /etc/systemd/system-generators &&"
+  script+=" ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator &&"
   script+=" rm -f ${list} && apt-get clean && rm -rf /var/lib/apt/lists/*"
   printf '%s' "${script}"
 }
