@@ -14,6 +14,9 @@ rm -rf "${good}" "${bad}"
 
 echo "test: stage_live_payload embeds repo (+ installer) under the live root"
 repo="$(mktemp -d)"; mkdir -p "${repo}/dists/trixie" "${repo}/pool"; echo x >"${repo}/pool/a.deb"
+# LythMono TTFs are staged into the store at build time (build-iso step_stage_fonts)
+# under repo/lythmono; the whole store is grafted by cp -a, so they must ride along.
+mkdir -p "${repo}/lythmono"; echo ttf >"${repo}/lythmono/LythMono.ttf"
 inst="$(mktemp -d)"; printf '#!/bin/sh\n' >"${inst}/installer.sh"; chmod +x "${inst}/installer.sh"
 stage="$(mktemp -d)"
 stage_live_payload "${stage}" "${repo}" "${inst}"
@@ -22,6 +25,11 @@ if [[ -f "${base}/${LIVE_REPO_SUBDIR}/pool/a.deb" && -d "${base}/${LIVE_REPO_SUB
   echo "  ok: repo embedded at ${LIVE_STORE_ROOT}/${LIVE_REPO_SUBDIR}"
 else
   echo "  FAIL: repo not embedded under the live root" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+if [[ -f "${base}/${LIVE_REPO_SUBDIR}/lythmono/LythMono.ttf" ]]; then
+  echo "  ok: LythMono TTFs ride the embedded store (offline font install source)"
+else
+  echo "  FAIL: LythMono TTFs not embedded under the live store" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
 if [[ -x "${base}/${LIVE_INSTALLER_SUBDIR}/installer.sh" ]]; then
   echo "  ok: installer embedded with exec bit preserved"

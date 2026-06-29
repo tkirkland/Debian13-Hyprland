@@ -394,6 +394,26 @@ step_stage_zbm() {
   fetch_zbm_efi "${dest}"
 }
 
+# 6c) Stage the LythMono TTFs INSIDE the offline store so iso-assemble grafts
+#     them onto the ISO at ${CACHE_REPO_DIR}/${LYTHMONO_STORE_SUBDIR}.
+#     install_lythmono_fonts (scripts/40-system.sh) copies them from there on an
+#     OFFLINE install — NO GitHub fetch. harvest_lythmono_fonts lives in
+#     40-system.sh, outside the critical top-level source order, so source it
+#     lazily exactly like step_zfs does (preserving the chroot-backed in_target).
+step_stage_fonts() {
+  local dest="${CACHE_DIR}/repo/${LYTHMONO_STORE_SUBDIR}"
+  if compgen -G "${dest}/*.ttf" >/dev/null 2>&1; then
+    info "[build] reusing staged LythMono fonts (${dest})"
+    return 0
+  fi
+  if ! declare -f harvest_lythmono_fonts >/dev/null 2>&1; then
+    # shellcheck disable=SC1091  # validated repo-relative path
+    source "${REPO_ROOT}/scripts/40-system.sh"
+  fi
+  info "[build] staging LythMono fonts into the offline store (${dest})"
+  harvest_lythmono_fonts "${dest}"
+}
+
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
@@ -403,6 +423,7 @@ run_heavy_build() {
   step_reindex              # 5
   step_depsim               # 6
   step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
+  step_stage_fonts          # 6c: ship LythMono TTFs inside the offline store
   step_assemble             # 7
   kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
   teardown_chroot_binds     # 9 (also via trap)

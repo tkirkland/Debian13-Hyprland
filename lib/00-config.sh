@@ -532,10 +532,19 @@ ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
 # latest release tag at BUILD time only (the build host is online).
 CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
 CHEZMOI_VERSION="${CHEZMOI_VERSION:-}"
-# LythMono font: installed from its GitHub release (one zip of TTFs per
-# variant) into the system font path. Every variant family below is fetched —
-# the full set installed on the reference machine.
+# LythMono font: GitHub-only (one zip of TTFs per variant). The TTFs are
+# HARVESTED at BUILD time (harvest_lythmono_fonts) and EXTRACTED into the offline
+# store under LYTHMONO_STORE_SUBDIR, which iso-assemble grafts onto the ISO at
+# ${CACHE_REPO_DIR}/lythmono; install_lythmono_fonts copies them from there into
+# the system font path OFFLINE — no GitHub fetch at install time. Every variant
+# family below is harvested — the full set installed on the reference machine.
+# LYTHMONO_VERSION pins the release deterministically (e.g. 1.0.0); empty resolves
+# the latest tag at BUILD time only.
 LYTHMONO_REPO_URL="${LYTHMONO_REPO_URL:-https://github.com/tkirkland/LythMono}"
+LYTHMONO_VERSION="${LYTHMONO_VERSION:-}"
+LYTHMONO_TAG_PATTERN="${LYTHMONO_TAG_PATTERN:-^v?[0-9]+\.[0-9]+\.[0-9]+$}"
+# Subdir under the offline store root (CACHE_REPO_DIR) holding the extracted TTFs.
+LYTHMONO_STORE_SUBDIR="${LYTHMONO_STORE_SUBDIR:-lythmono}"
 LYTHMONO_VARIANTS=(
   LythMono LythMonoNerdFont
   LythMonoRound LythMonoRoundNerdFont
