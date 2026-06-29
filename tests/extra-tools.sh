@@ -15,6 +15,13 @@ fatal() {
 
 source scripts/40-system.sh
 
+# install_chezmoi / install_lythmono_fonts fetch from GitHub only on the online
+# path and skip when offline; preflight sets NETWORK_AVAILABLE at runtime. This
+# test exercises the online fetch, so establish that precondition explicitly
+# (without it, the bare ((NETWORK_AVAILABLE)) guard is an unbound var under set -u).
+# shellcheck disable=SC2034  # consumed by the sourced scripts/40-system.sh
+NETWORK_AVAILABLE=1
+
 # A fake curl: log every invocation; answer the GitHub "releases/latest" API
 # with a tag_name, and for a download (-o FILE) create the file so the caller
 # proceeds. Lets us assert the exact URLs the installer would fetch without a
