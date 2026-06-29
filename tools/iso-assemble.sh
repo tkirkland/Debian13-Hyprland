@@ -202,6 +202,27 @@ rebuild_live_squashfs() {
   rm -rf "${root}"
 }
 
+# live_extras_chroot_script PACKAGES
+# Emit (stdout) the `sh -c` payload run inside the live-root chroot to install the
+# extras. When openssh-server is in the set, append an explicit offline
+# `systemctl enable ssh.service` so sshd is enabled to start on live boot:
+# Debian's postinst normally enables it, but doing it explicitly makes the
+# behaviour guaranteed (and unit-testable) instead of an implicit maintainer-
+# script side effect. SYSTEMD_OFFLINE=1 forces systemctl to act purely on the
+# filesystem (there is no running manager / D-Bus in the build chroot). Pure
+# (string only), so tests can assert the payload without a real chroot.
+live_extras_chroot_script() {
+  local pkgs="$1" script=""
+  script="apt-get update -qq &&"
+  script+=" apt-get install -y --no-install-recommends ${pkgs} &&"
+  case " ${pkgs} " in
+    *" openssh-server "*)
+      script+=" SYSTEMD_OFFLINE=1 systemctl enable ssh.service &&" ;;
+  esac
+  script+=" apt-get clean && rm -rf /var/lib/apt/lists/*"
+  printf '%s' "${script}"
+}
+
 # install_live_extras LIVE_ROOT
 # apt-install LIVE_EXTRA_PACKAGES into the unsquashed live root so they ride in
 # the rebuilt squashfs. Runs on the online build host, against the live image's
@@ -222,10 +243,8 @@ install_live_extras() {
   done
   info "iso-assemble: baking live extras into the squashfs: ${LIVE_EXTRA_PACKAGES}"
   local rc=0
-  chroot "${root}" env DEBIAN_FRONTEND=noninteractive sh -c '
-    apt-get update -qq &&
-    apt-get install -y --no-install-recommends '"${LIVE_EXTRA_PACKAGES}"' &&
-    apt-get clean && rm -rf /var/lib/apt/lists/*' || rc=$?
+  chroot "${root}" env DEBIAN_FRONTEND=noninteractive sh -c \
+    "$(live_extras_chroot_script "${LIVE_EXTRA_PACKAGES}")" || rc=$?
   for m in "${mounted[@]}"; do umount -l "${m}" 2>/dev/null || true; done
   rm -f "${resolv}"
   [[ -n "${resolv_bak}" ]] && mv "${resolv_bak}" "${resolv}"
