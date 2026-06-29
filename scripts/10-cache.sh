@@ -147,6 +147,31 @@ SRC
   info "Pool populated: $(find "${pool}" -name '*.deb' | wc -l) packages"
 }
 
+# chezmoi (dotfile manager) is GitHub-only, not in Debian. Harvest its official
+# .deb into the pool at BUILD time so the target apt-installs it OFFLINE by name
+# (install_chezmoi, scripts/40-system.sh) — no GitHub fetch at install time. The
+# build host is online. CHEZMOI_VERSION pins the release deterministically; empty
+# resolves the latest tag (build-time only). resolve_latest_release_tag lives in
+# scripts/60-hyprland.sh (sourced before any phase, and by tools/build-iso.sh).
+# Idempotent: reuses an already-pooled deb so resumed builds skip the fetch.
+cache_populate_chezmoi() {
+  local pool="${CACHE_DIR}/repo/pool" ver="${CHEZMOI_VERSION:-}" tag="" url="" dest=""
+  if [[ -z "${ver}" ]]; then
+    tag="$(resolve_latest_release_tag "${CHEZMOI_REPO_URL}")"
+    ver="${tag#v}"
+  fi
+  dest="${pool}/chezmoi_${ver}_amd64.deb"
+  if [[ -f "${dest}" ]]; then
+    info "reuse pooled chezmoi ${ver}"
+    return 0
+  fi
+  url="${CHEZMOI_REPO_URL}/releases/download/v${ver}/chezmoi_${ver}_linux_amd64.deb"
+  mkdir -p "${pool}"
+  info "Harvesting chezmoi ${ver} into the pool (${url##*/})..."
+  curl -fsSL --retry 3 -o "${dest}" "${url}" ||
+    fatal "Failed to harvest chezmoi ${ver} into the pool (${url})."
+}
+
 cache_index_repo() {
   local repo="${CACHE_DIR}/repo"
   local bindir="dists/${SUITE}/main/binary-${ARCH}"
@@ -226,6 +251,12 @@ cache_validate() {
       grep -qx "Package: ${want}" "${pkg_index}" ||
         problems+=("NVIDIA driver deb missing from pool index: ${want}")
     done
+
+    # chezmoi (GitHub-only dotfile manager) is harvested into the pool at build
+    # time (cache_populate_chezmoi) on every populate path and installed offline
+    # by name (install_chezmoi), so it must be indexed — assert it.
+    grep -qx "Package: chezmoi" "${pkg_index}" ||
+      problems+=("chezmoi deb missing from pool index")
   fi
 
   if ((${#problems[@]} > 0)); then
@@ -239,6 +270,7 @@ cache_validate() {
 phase_cache() {
   if ((NETWORK_AVAILABLE)); then
     cache_populate_debs
+    cache_populate_chezmoi
     cache_index_repo
     cache_populate_sources
     cache_populate_zbm

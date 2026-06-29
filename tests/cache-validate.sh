@@ -37,6 +37,9 @@ seed_pkg() {
 }
 : >"${pkgindex}"
 seed_pkg fake
+# chezmoi is harvested into the pool on every populate path and installed offline
+# by name, so the offline contract requires it indexed.
+seed_pkg chezmoi
 for nv in cuda-keyring \
   nvidia-open nvidia-kernel-open-dkms \
   nvidia-driver nvidia-kernel-dkms \

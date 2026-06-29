@@ -378,35 +378,18 @@ install_addon_artifacts() {
   fi
 }
 
-# chezmoi is not packaged for Debian; install its official .deb (latest
-# release) so the dotfile manager is present system-wide as /usr/bin/chezmoi.
-# The GitHub API names the latest release; the .deb asset embeds the version
-# without the leading 'v'. apt resolves the (minimal) dependencies.
+# chezmoi is not packaged for Debian. Its official .deb is harvested into the
+# offline pool at build time (cache_populate_chezmoi, scripts/10-cache.sh), so it
+# installs by NAME from the on-ISO file:// store the bootstrap phase set up —
+# fully OFFLINE, NO GitHub fetch, no network branch. apt resolves the (minimal)
+# dependencies from the same store.
 install_chezmoi() {
-  # chezmoi ships only as a GitHub release, not in the offline pool. Online
-  # installs fetch it; an offline install skips it (it is a userland dotfile
-  # manager, not boot-critical) so the install still completes and boots.
-  ((NETWORK_AVAILABLE)) || {
-    warn "Offline: skipping chezmoi (GitHub-only; install after first online boot)."
-    return 0
-  }
-  local tag="" ver="" url=""
-  tag="$(curl -fsSL --retry 3 \
-    "${CHEZMOI_REPO_URL/github.com/api.github.com\/repos}/releases/latest" \
-    2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | cut -d'"' -f4 || true)"
-  [[ -n "${tag}" ]] || fatal "Could not resolve the latest chezmoi release."
-  ver="${tag#v}"
-  url="${CHEZMOI_REPO_URL}/releases/download/${tag}/chezmoi_${ver}_linux_amd64.deb"
-  info "Installing chezmoi ${tag} (${url##*/})..."
-  rm -f "${TARGET}/var/tmp/chezmoi.deb"
-  curl -fsSL --retry 3 -o "${TARGET}/var/tmp/chezmoi.deb" "${url}" ||
-    fatal "Failed to download chezmoi (${tag})."
+  info "Installing chezmoi from the offline store..."
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y /var/tmp/chezmoi.deb
+    apt-get install -y chezmoi
   "
-  rm -f "${TARGET}/var/tmp/chezmoi.deb"
 }
 
 # LythMono is not packaged; install every variant from its GitHub release (one

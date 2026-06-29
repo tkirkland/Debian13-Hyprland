@@ -524,10 +524,14 @@ HYPR_BUILD_PACKAGES=(
 ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
 ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
 
-# chezmoi (dotfile manager) is not in Debian; installed from its official .deb
-# (latest GitHub release) so the tool is present system-wide as
-# /usr/bin/chezmoi. The .deb asset embeds the version without the leading 'v'.
+# chezmoi (dotfile manager) is not in Debian; its official .deb is HARVESTED into
+# the offline pool at BUILD time (cache_populate_chezmoi) and apt-installed by
+# name OFFLINE at install time (install_chezmoi) — never fetched at install time.
+# The .deb asset embeds the version without the leading 'v'. CHEZMOI_VERSION pins
+# the harvested release deterministically (e.g. 2.62.0); empty resolves the
+# latest release tag at BUILD time only (the build host is online).
 CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
+CHEZMOI_VERSION="${CHEZMOI_VERSION:-}"
 # LythMono font: installed from its GitHub release (one zip of TTFs per
 # variant) into the system font path. Every variant family below is fetched —
 # the full set installed on the reference machine.
