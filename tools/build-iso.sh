@@ -20,7 +20,10 @@
 
 set -euo pipefail
 
-TOOLS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f resolves any symlink (e.g. the convenience link in the ISO output
+# dir) to the real script, so TOOLS_DIR/REPO_ROOT point at the repo, not the
+# symlink's directory.
+TOOLS_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
 REPO_ROOT="$(cd -- "${TOOLS_DIR}/.." && pwd)"
 # lib/00-config.sh reads addons/*.list relative to the cwd, so anchor there.
 cd "${REPO_ROOT}"
@@ -346,9 +349,24 @@ step_assemble() {
   for item in installer.sh lib scripts addons assets README.md STRUCTURE.md; do
     [[ -e "${REPO_ROOT}/${item}" ]] && cp -a "${REPO_ROOT}/${item}" "${payload}/"
   done
+  # Recreation fails if the target ISO already exists, so clear any prior build
+  # first. Only reached under --confirm; STOCK_ISO is a different path, never touched.
+  if [[ -e "${OUT_ISO}" ]]; then
+    info "[build] removing existing ${OUT_ISO}"
+    rm -f "${OUT_ISO}"
+  fi
   info "[build] assembling ${OUT_ISO}"
   # Invoke via bash so it works regardless of the script's execute bit.
+  # iso-assemble runs as its OWN bash process, so it sees only env that is
+  # exported or inline-prefixed here. Forward the unattended-autoinstall knobs;
+  # LIVE_AUTOINSTALL_PASSWORD is the security-critical one — it is supplied at
+  # build time and defaults EMPTY (never hardcoded/committed). iso-assemble.sh
+  # defaults the rest itself, so these prefixes only pass through operator values.
   HYPR_INSTALLER_DIR="${payload}" \
+    LIVE_AUTOINSTALL_PASSWORD="${LIVE_AUTOINSTALL_PASSWORD:-}" \
+    LIVE_AUTOINSTALL_BOOTLOADER="${LIVE_AUTOINSTALL_BOOTLOADER:-grub}" \
+    LIVE_AUTOINSTALL_RTC="${LIVE_AUTOINSTALL_RTC:-local}" \
+    LIVE_AUTOINSTALL_USERNAME="${LIVE_AUTOINSTALL_USERNAME:-me}" \
     bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${CACHE_DIR}/repo" "${OUT_ISO}" \
     || fatal "iso-assemble failed"
 }
