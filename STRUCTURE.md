@@ -47,9 +47,15 @@ addons/                     drop-in vendor .deb/.run artifacts and
 tests/                      fake-driven test suites + run-all.sh.
 tools/build-iso.sh          build-host entry point: compile the stack to
                             .debs, build OpenZFS, index the offline repo, and
-                            repack a self-sufficient ISO (with installer +
-                            /hypr-repo). Dry-run by default; --confirm builds.
-tools/iso-assemble.sh       xorriso repack: inject /hypr-repo + /hypr-installer.
+                            repack a self-sufficient ISO (installer + store
+                            under /opt/hypr-deb). Dry-run by default; --confirm
+                            builds. Set LIVE_AUTOINSTALL_PASSWORD to emit the
+                            unattended ~/autoinstall.sh launcher in the ISO.
+tools/iso-assemble.sh       graft the offline store + installer into the live
+                            squashfs under /opt/hypr-deb, bake live extras
+                            (git + ssh, sshd enabled on boot), drop
+                            ~/installer.sh (interactive) and ~/autoinstall.sh
+                            (unattended) in the live home, then xorriso-repack.
 tools/check.sh              bash -n + shellcheck gate.
 docs/superpowers/           original design spec and implementation plan.
 ```

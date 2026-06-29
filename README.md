@@ -174,6 +174,16 @@ Boot the resulting `OUT_ISO`, get root, and run the baked installer:
 sudo /opt/hypr-deb/installer/installer.sh --bootloader=zbm --rtc=utc
 ```
 
+For a hands-off install, the live user's home also carries **`~/autoinstall.sh`**
+— a generated launcher that runs the embedded installer fully unattended
+(`--yes --bootloader=grub --rtc=local`, as user `me`). Supply the password at
+build time via `LIVE_AUTOINSTALL_PASSWORD=…` in the `tools/build-iso.sh`
+environment; that value is baked into the launcher in **plaintext inside the
+ISO** and is **never committed to the repo** (the default build leaves it
+empty). Bootloader / RTC / username are overridable via the `LIVE_AUTOINSTALL_*`
+knobs at the top of `tools/iso-assemble.sh`; the plain `~/installer.sh` symlink
+remains for an interactive run.
+
 The installer and package store are embedded in the live root filesystem (the
 squashfs) under `/opt/hypr-deb` — not as loose directories on the medium — so
 the store can't be shadowed by a `/run` bind mount and survives regardless of
