@@ -233,6 +233,11 @@ install_zfs_from_source() {
   local zfs_script="
     set -e
     export DEBIAN_FRONTEND=noninteractive
+    # native-deb-utils drives dpkg-buildpackage/debhelper, which generates and
+    # then discards -dbgsym debs. noautodbgsym tells dh_strip not to produce them
+    # at all (build-time waste). It only suppresses auto -dbgsym packages, so the
+    # required openzfs-* debs asserted below are unaffected.
+    export DEB_BUILD_OPTIONS=noautodbgsym
     # Drop any live-kernel modules package from an earlier failed attempt.
     if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
       apt-get purge -y 'openzfs-zfs-modules-*'
