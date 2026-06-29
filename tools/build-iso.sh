@@ -339,6 +339,22 @@ step_depsim() {
   fi
 }
 
+# ensure_wallpapers_checked_out [REPO_ROOT_OVERRIDE]
+# Check out the assets/wallpapers shallow submodule so step_assemble bakes the
+# actual images onto the ISO. The offline install copies wallpapers from this
+# bundled tree (never the network), so an empty submodule would silently ship a
+# wallpaper-less offline system. Idempotent (no-op once populated); fatal on
+# failure. The build host is online, so fetching here is correct. Takes the repo
+# root as an argument so tests can point it at a fixture.
+ensure_wallpapers_checked_out() {
+  local root="$1"
+  [[ -f "${root}/.gitmodules" ]] || return 0
+  [[ -z "$(ls -A "${root}/assets/wallpapers" 2>/dev/null || true)" ]] || return 0
+  info "[build] checking out the wallpaper submodule for the offline ISO"
+  git -C "${root}" submodule update --init --depth 1 -- assets/wallpapers ||
+    fatal "could not check out assets/wallpapers; the offline ISO would ship no wallpapers"
+}
+
 # 7) Assemble the final ISO (xorriso, runs in tools/iso-assemble.sh): inject the
 #    offline repo AND a filtered copy of the installer tree, so the booted live
 #    ISO can run the installer fully offline (no git clone).
@@ -347,6 +363,9 @@ step_assemble() {
   local payload="${ISO_WORKSPACE}/installer-payload"
   rm -rf "${payload}"
   mkdir -p "${payload}"
+  # Wallpapers ride the ISO as plain files: make sure the shallow submodule is
+  # checked out before copying assets/, so the offline install has them locally.
+  ensure_wallpapers_checked_out "${REPO_ROOT}"
   # Ship only what the target install needs; exclude host-only build tooling
   # (tools/), docs/, tests/, and VCS. Missing optional items are ignored.
   local item

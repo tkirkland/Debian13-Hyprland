@@ -659,9 +659,11 @@ HYPRIDLE_CONF
 stage_wallpapers() {
   local src="assets/wallpapers"
   local dest="${TARGET}/usr/share/backgrounds/hypr-deb"
-  # The set is a shallow submodule. Online clones that skipped
-  # --recurse-submodules leave it empty; init it when a network is available.
-  # Offline/ISO builds ship it already checked out.
+  # The set is a shallow submodule. The ISO build checks it out before baking
+  # assets onto the medium (build-iso.sh ensure_wallpapers_checked_out), so the
+  # offline install always copies it from the local tree below. The git init
+  # here is only a convenience for running the installer from a bare clone with
+  # a network; success never depends on it.
   if [[ -z "$(ls -A "${src}" 2>/dev/null || true)" ]]; then
     if ((${NETWORK_AVAILABLE:-0})); then
       info "Initializing wallpaper submodule..."

@@ -39,4 +39,24 @@ fi
 echo "test: an unknown argument is rejected (does not silently build)"
 assert_fails "unknown arg rejected" bash "${HERE}/../tools/build-iso.sh" --frobnicate
 
+echo "test: ensure_wallpapers_checked_out bundles the submodule for the offline ISO"
+wroot="$(mktemp -d)"
+printf '[submodule "assets/wallpapers"]\n' >"${wroot}/.gitmodules"
+mkdir -p "${wroot}/assets/wallpapers"
+gitlog="${wroot}/git.log"; : >"${gitlog}"
+git() { printf '%s\n' "$*" >>"${gitlog}"; }
+ensure_wallpapers_checked_out "${wroot}"          # empty submodule -> must check out
+assert_contains "$(<"${gitlog}")" "submodule update --init --depth 1 -- assets/wallpapers" \
+  "empty wallpaper submodule is checked out at build time (offline ISO needs it bundled)"
+echo img >"${wroot}/assets/wallpapers/a.jpg"; : >"${gitlog}"
+ensure_wallpapers_checked_out "${wroot}"          # already populated -> no network
+if [[ ! -s "${gitlog}" ]]; then
+  echo "  ok: a populated submodule triggers no checkout (idempotent, no network)"
+else
+  echo "  FAIL: re-checked-out an already populated wallpaper submodule" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+unset -f git
+rm -rf "${wroot}"
+
 finish_test
