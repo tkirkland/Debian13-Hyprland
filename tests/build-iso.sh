@@ -24,13 +24,17 @@ assert_build_sandbox "${ISO_WORKSPACE}" "${TARGET}" \
   || { echo "  FAIL: resolved sandbox rejected" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 
 echo "test: no-args dry-run needs no root, mutates nothing, exits 0"
-if out="$(bash "${HERE}/../tools/build-iso.sh" 2>&1)"; then rc=0; else rc=$?; fi
+# Point the dry-run at a unique, nonexistent workspace so this "created nothing"
+# check is immune to leftovers a real build may have left under the default
+# /var/tmp/hypr-iso-build path (which previously false-failed this assertion).
+dryws="$(mktemp -u)"
+if out="$(ISO_WORKSPACE="${dryws}" bash "${HERE}/../tools/build-iso.sh" 2>&1)"; then rc=0; else rc=$?; fi
 assert_eq "0" "${rc}" "dry-run exits 0 without --confirm (no root required)"
-assert_contains "${out}" "DRY-RUN"          "dry-run announces itself"
-assert_contains "${out}" "${ISO_WORKSPACE}" "dry-run prints the plan"
+assert_contains "${out}" "DRY-RUN"   "dry-run announces itself"
+assert_contains "${out}" "${dryws}"  "dry-run prints the plan (its workspace path)"
 # No workspace should be created by a dry-run.
-if [[ -e "${ISO_WORKSPACE}" ]]; then
-  echo "  FAIL: dry-run created ${ISO_WORKSPACE}" >&2
+if [[ -e "${dryws}" ]]; then
+  echo "  FAIL: dry-run created ${dryws}" >&2
   TEST_FAILURES=$((TEST_FAILURES+1))
 else
   echo "  ok: dry-run created no workspace"
@@ -110,6 +114,27 @@ echo "test: step_runtime_closure skips deps already in the pool"
     echo "  FAIL: already-pooled dep libpooled1 was re-downloaded" >&2; rc=1
   fi
   ((rc == 0)) && echo "  ok: already-pooled dep skipped, only the missing dep is fetched"
+  exit "${rc}"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
+echo "test: restore_build_ownership hands the workspace back to the sudo user (not left root-owned)"
+# shellcheck disable=SC2317  # chown stub invoked indirectly by restore_build_ownership
+(
+  ISO_WORKSPACE="$(mktemp -d)"; OUT_ISO="${ISO_WORKSPACE}/out.iso"; : >"${OUT_ISO}"
+  chlog="${ISO_WORKSPACE}/chown.log"; : >"${chlog}"
+  chown() { printf '%s\n' "$*" >>"${chlog}"; }
+  SUDO_UID=1000 SUDO_GID=1000 restore_build_ownership
+  got="$(<"${chlog}")"
+  : >"${chlog}"
+  unset SUDO_UID SUDO_GID
+  restore_build_ownership                       # no sudo -> must be a no-op
+  noop="$(<"${chlog}")"
+  rm -rf "${ISO_WORKSPACE}"
+  rc=0
+  [[ "${got}" == *"-R 1000:1000"* && "${got}" == *out.iso* ]] \
+    || { echo "  FAIL: did not chown workspace+iso to the sudo user (got: ${got})" >&2; rc=1; }
+  [[ -z "${noop}" ]] || { echo "  FAIL: chowned even without SUDO_UID set" >&2; rc=1; }
+  ((rc == 0)) && echo "  ok: chowns to SUDO_UID:SUDO_GID under sudo, no-op otherwise"
   exit "${rc}"
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 

@@ -442,6 +442,17 @@ step_stage_fonts() {
   harvest_lythmono_fonts "${dest}"
 }
 
+# restore_build_ownership
+# The build runs as root (sudo), so everything it writes under the workspace and
+# the output ISO is left root-owned — stranding the operator and re-tripping the
+# dry-run test. Hand it back to the user who invoked sudo (SUDO_UID/SUDO_GID).
+# No-op when not run under sudo (real root login: nothing to hand back).
+restore_build_ownership() {
+  [[ -n "${SUDO_UID:-}" ]] || return 0
+  chown -R "${SUDO_UID}:${SUDO_GID:-${SUDO_UID}}" \
+    "${ISO_WORKSPACE}" "${OUT_ISO}" 2>/dev/null || true
+}
+
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
@@ -490,8 +501,11 @@ main() {
   assert_stage_under_target "${TARGET}" "${BUILD_STAGE_REL}" \
     || fatal "unsafe BUILD_STAGE_REL (escapes buildroot): ${BUILD_STAGE_REL}"
 
-  # Mounts must never leak, even on failure.
-  trap 'teardown_chroot_binds' EXIT
+  # Mounts must never leak, even on failure; and the root build must not leave
+  # root-owned droppings in the operator's workspace/output (which strand the
+  # user and re-trip the dry-run test on the next run). restore_build_ownership
+  # runs last on EXIT, after the binds are torn down.
+  trap 'teardown_chroot_binds; restore_build_ownership' EXIT
   trap 'teardown_chroot_binds' ERR
 
   mkdir -p "${ISO_WORKSPACE}" "${POOL}" "${DEBOOTSTRAP_CACHE}"
