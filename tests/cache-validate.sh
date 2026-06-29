@@ -46,8 +46,37 @@ for nv in cuda-keyring \
   nvidia-driver-pinning-595 nvidia-driver-pinning-610; do
   seed_pkg "${nv}"
 done
+# The offline path also installs the upstream OpenZFS debs by name from the pool
+# (install_zfs_offline), so the offline contract requires them indexed too.
+# run_validate leaves NETWORK_AVAILABLE empty (= offline), so they are asserted.
+for z in openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed; do
+  seed_pkg "${z}"
+done
 out="$(run_validate)"
-assert_contains "${out}" "Cache repo valid" "complete repo passes"
+assert_contains "${out}" "Cache repo valid" "complete repo passes (offline contract)"
+
+# Gating: the upstream OpenZFS assertion fires ONLY offline. With the openzfs
+# debs removed from the index, the OFFLINE validate must fail naming them, but
+# the ONLINE validate (which builds zfs from source, never from the pool) passes.
+zfsless="${tmp}/zfsless"
+mkdir -p "${zfsless}/dists/trixie/main/binary-amd64" "${zfsless}/pool"
+touch "${zfsless}/dists/trixie/Release"
+zi="${zfsless}/dists/trixie/main/binary-amd64/Packages"
+: >"${zi}"
+for pk in fake chezmoi cuda-keyring \
+  nvidia-open nvidia-kernel-open-dkms nvidia-driver nvidia-kernel-dkms \
+  nvidia-driver-pinning-595 nvidia-driver-pinning-610; do
+  printf 'Package: %s\nFilename: pool/%s.deb\n\n' "${pk}" "${pk}" >>"${zi}"
+  touch "${zfsless}/pool/${pk}.deb"
+done
+out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
+  NETWORK_AVAILABLE=0; cache_validate' 2>&1 || true)"
+assert_contains "${out}" "upstream OpenZFS deb missing" "offline requires upstream OpenZFS debs"
+out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
+  NETWORK_AVAILABLE=1; cache_validate' 2>&1 || true)"
+assert_contains "${out}" "Cache repo valid" "online validate does not require pooled OpenZFS"
 
 # Missing NVIDIA debs -> fails the offline contract.
 nv_only="${tmp}/nvonly"

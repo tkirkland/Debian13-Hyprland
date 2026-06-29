@@ -257,6 +257,18 @@ cache_validate() {
     # by name (install_chezmoi), so it must be indexed — assert it.
     grep -qx "Package: chezmoi" "${pkg_index}" ||
       problems+=("chezmoi deb missing from pool index")
+
+    # Offline path installs the UPSTREAM OpenZFS debs by name from the pool
+    # (install_zfs_offline); those are built into the pool ONLY by build-iso
+    # (step_zfs). The online path builds zfs from source and the installer's own
+    # self-populate cache never pools zfs, so assert the upstream debs ONLY when
+    # this install will actually consume them from the store (offline).
+    if ! ((NETWORK_AVAILABLE)); then
+      for want in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
+        grep -qx "Package: ${want}" "${pkg_index}" ||
+          problems+=("upstream OpenZFS deb missing from pool index: ${want}")
+      done
+    fi
   fi
 
   if ((${#problems[@]} > 0)); then
