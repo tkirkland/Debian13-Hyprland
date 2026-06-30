@@ -85,8 +85,8 @@ POOL="${CACHE_DIR}/repo/pool"
 # fills it on the SINGLE base download; the closure debootstrap (10-cache.sh,
 # sourced in-process) reuses it via --cache-dir, so the trixie base is fetched
 # once and reused instead of being re-downloaded. EXPORTED so the in-process
-# 10-cache.sh sees it; the installer phase_cache leaves it UNSET (10-cache.sh
-# references it defensively, so that path is unchanged — no --cache-dir).
+# 10-cache.sh sees it; when unset (any other caller) 10-cache.sh references it
+# defensively, so that path passes no --cache-dir.
 DEBOOTSTRAP_CACHE="${CACHE_DIR}/debs-cache"
 export DEBOOTSTRAP_CACHE
 # Chroot-internal staging root for DESTDIR installs (host-visible at

@@ -85,7 +85,7 @@ this mode). Configure the VM as follows:
   disk that is mounted (e.g., a fourth disk you formatted for caching) is
   excluded from candidacy and therefore safe.
 - **Memory/CPU:** 8 GB+ RAM and 4+ vCPUs recommended. The live overlay is
-  RAM-backed — use `--skip-cache` and `--jobs=2` on small VMs.
+  RAM-backed — use `--jobs=2` on small VMs.
 - **Display:** enable "Accelerate 3D graphics" with 1 GB+ graphics memory
   BEFORE the first boot of the installed system. Without it, vmwgfx
   reports shader model "Legacy" and Hyprland's renderer cannot start.
@@ -237,8 +237,6 @@ Common flags (see `--help` for the full list):
                                        default; mirror of --offline)
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
---skip-cache                           skip the cache phase (no offline repo
-                                       populate/validate)
 --autologin                            start Hyprland without the login prompt
 --rtc=<utc|local>                      hardware clock interpretation, required
                                        (utc, or local for Windows dual boot;
@@ -323,7 +321,6 @@ chroot binds automatically.
 
 ```
 preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
-cache       validate the on-ISO repo (offline) or populate a cache (--online)
 storage     destroy/wipe/partition/mdadm/ZFS (the destructive gate lives here)
 bootstrap   mount target, debootstrap, bind mounts, Debian apt sources
 system      identity, packages, add-ons, user, ZFS boot support, initramfs
@@ -341,10 +338,10 @@ model above: the network-bearing work happens once on the build host
 booted target installs entirely from the on-ISO package store at
 `/run/live/medium/hypr-repo`, with **no network**:
 
-- The `cache` phase runs `cache_validate` against the on-ISO repo
+- The `bootstrap` phase runs `cache_validate` against the on-ISO repo
   (`CACHE_REPO_DIR`, pointed at the store by preflight) and fails with a precise
-  list if any indexed `.deb` is missing from the pool. It does **not** populate
-  anything offline — the repo is the contract, already complete on the medium.
+  list if any indexed `.deb` is missing from the pool. The repo is the contract,
+  already complete on the medium — nothing is populated at install time.
 - `bootstrap` debootstraps from `file://` the on-ISO repo, then bind-mounts the
   store into the target chroot behind a **temporary** trusted `file://` apt
   source so in-chroot `apt-get install` resolves the base packages, the whole

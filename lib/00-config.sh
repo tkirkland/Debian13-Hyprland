@@ -100,9 +100,9 @@ RTC_MODE="${RTC_MODE:-}"
 
 # --- Cache (network-preferred, offline-complete) -----------------------------
 # Build-time .deb pool root. tools/build-iso.sh overrides this to its workspace
-# and is the ONLY place that POPULATES a cache; on an install it is used solely
-# by the --online self-populate path (phase_cache). Offline installs never read
-# from it — they resolve everything from the on-ISO store via CACHE_REPO_DIR.
+# and is the ONLY place that POPULATES a cache: it is a build-time pool only.
+# Installs never read from it — they resolve everything from the on-ISO store
+# via CACHE_REPO_DIR.
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
 # Where the embedded apt-ftparchive store (dists/ + pool/) lives INSIDE the live
 # root filesystem (the squashfs) when the ISO was built by tools/iso-assemble.sh.
@@ -681,9 +681,6 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
-# --skip-cache: no offline cache is populated or embedded (saves several GB
-# at build time).
-SKIP_CACHE="${SKIP_CACHE:-0}"
 # --ntp: space-separated NTP servers written into the target's
 # systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
 # Empty (the default) leaves timesyncd on Debian's stock pool/DHCP behaviour;

@@ -40,7 +40,7 @@ out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
   source lib/03-state.sh; source lib/04-chroot-mounts.sh
   for f in scripts/*.sh; do source "$f"; done
-  for fn in phase_preflight phase_cache phase_storage phase_bootstrap \
+  for fn in phase_preflight phase_storage phase_bootstrap \
             phase_system phase_boot phase_hyprland phase_verify \
             phase_cleanup ensure_target_ready; do
     declare -f "$fn" >/dev/null || { echo "MISSING $fn"; exit 1; }
