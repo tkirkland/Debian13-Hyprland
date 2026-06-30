@@ -28,6 +28,15 @@ REPO_ROOT="$(cd -- "${TOOLS_DIR}/.." && pwd)"
 # lib/00-config.sh reads addons/*.list relative to the cwd, so anchor there.
 cd "${REPO_ROOT}"
 
+# Optional, gitignored per-operator overrides sourced here if present (e.g. a
+# throwaway-VM autoinstall password). The file is UNTRACKED, so anything it sets
+# is structurally incapable of riding a develop->master merge — that is the point:
+# values that must never reach the shared branch live here, not in committed source.
+if [[ -f "${TOOLS_DIR}/build-iso.local" ]]; then
+  # shellcheck source=/dev/null
+  source "${TOOLS_DIR}/build-iso.local"
+fi
+
 # This builder runs on the operator's own machine, whose running kernel
 # (uname -r) is NOT in the Debian archive. Pin the kernel-headers metapackage
 # (which IS, and matches linux-image-amd64 in TARGET_BASE_PACKAGES) BEFORE
