@@ -241,7 +241,11 @@ live_extras_chroot_script() {
   # touches ONLY the generator -- the real sshd (ssh.service) is untouched.
   script+=" mkdir -p /etc/systemd/system-generators &&"
   script+=" ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator &&"
-  script+=" rm -f ${list} && apt-get clean && rm -rf /var/lib/apt/lists/*"
+  script+=" rm -f ${list} && apt-get clean &&"
+  # apt-get clean empties the archive cache but leaves the binary package
+  # indexes (/var/cache/apt/{pkgcache,srcpkgcache}.bin); drop them too so the
+  # rebuilt live squashfs does not carry stale, regenerable caches.
+  script+=" rm -rf /var/lib/apt/lists/* /var/cache/apt/*.bin"
   printf '%s' "${script}"
 }
 
