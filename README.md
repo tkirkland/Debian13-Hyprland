@@ -264,7 +264,6 @@ Common flags (see `--help` for the full list):
                                        (optional; empty keeps Debian's stock
                                        pool/DHCP servers). Time sync is
                                        installed and enabled either way
---cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
 --fresh                                discard phase state and start over
 --yes                                  unattended mode; requires USER_PASSWORD
 --verbose                              stream full command output to the console

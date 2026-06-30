@@ -81,6 +81,23 @@ EOF
   info "timesyncd pinned to NTP servers: ${NTP_SERVERS}"
 }
 
+# Neuter systemd-ssh-generator (systemd >=256) in the installed target. The
+# generator sets up ssh-over-vsock socket activation by querying the local
+# AF_VSOCK CID; on hardware/VMs with no vhost-vsock device that query fails and
+# the generator exits 1 on every boot/daemon-reload, spamming the journal with
+# "Failed to query local AF_VSOCK CID: Cannot assign requested address". It is
+# shipped by systemd itself and is entirely independent of the real sshd
+# (openssh-server's ssh.service), so masking it has ZERO impact on ssh. Mask =
+# symlink to /dev/null under /etc/systemd/system-generators, which outranks
+# /usr/lib/systemd/system-generators, so a systemd dpkg upgrade never undoes it.
+neuter_ssh_vsock_generator() {
+  in_target "
+    set -e
+    mkdir -p /etc/systemd/system-generators
+    ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+  "
+}
+
 # dkms signs every module it builds with this keypair and the boot phase
 # signs loader EFI binaries with it. Debian's dkms would generate it on
 # demand, but the zfs-dkms postinst (during install_base_packages) is the
@@ -601,6 +618,7 @@ phase_system() {
   install_lythmono_fonts
   configure_locale_tz
   configure_time_sync
+  neuter_ssh_vsock_generator
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
   # captures the modprobe.d/modules-load.d drop-ins without a second rebuild.

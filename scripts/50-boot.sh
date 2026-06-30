@@ -190,22 +190,18 @@ fetch_zbm_efi() {
 
 install_zbm() {
   # Resolve the ZFSBootMenu EFI. The build ships it inside the on-ISO store
-  # (/hypr-repo/zfsbootmenu.EFI), which preflight redirects CACHE_REPO_DIR to
-  # when booted offline -- so an offline install finds it there. Fall back to a
-  # network-populated CACHE_DIR copy, then to a live download.
-  local efi_src="" cand=""
-  for cand in "${CACHE_DIR}/zfsbootmenu.EFI" "${CACHE_REPO_DIR}/zfsbootmenu.EFI"; do
-    if [[ -f "${cand}" ]]; then
-      efi_src="${cand}"
-      break
-    fi
-  done
-  if [[ -z "${efi_src}" ]]; then
+  # (${CACHE_REPO_DIR}/zfsbootmenu.EFI, e.g. /opt/hypr-deb/repo or
+  # /run/live/medium/hypr-repo, which preflight points CACHE_REPO_DIR at) -- so
+  # an offline install finds it there with no second cache. With no store and a
+  # network, fall back to a live download into a temp file.
+  local efi_src=""
+  if [[ -f "${CACHE_REPO_DIR}/zfsbootmenu.EFI" ]]; then
+    efi_src="${CACHE_REPO_DIR}/zfsbootmenu.EFI"
+  else
     ((NETWORK_AVAILABLE)) || fatal "ZFSBootMenu EFI not found offline (looked in" \
-      "${CACHE_DIR} and ${CACHE_REPO_DIR}). The ISO is missing it; rebuild the ISO" \
+      "${CACHE_REPO_DIR}). The ISO is missing it; rebuild the ISO" \
       "or install with --bootloader=grub."
-    efi_src="${CACHE_DIR}/zfsbootmenu.EFI"
-    mkdir -p "${CACHE_DIR}"
+    efi_src="$(mktemp)"
     fetch_zbm_efi "${efi_src}"
   fi
   mkdir -p "${TARGET}${ESP_MOUNT}/EFI/zbm"
