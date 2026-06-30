@@ -55,18 +55,19 @@ phase_verify() {
       install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
       runuser -u '${TARGET_USERNAME}' -- \
         env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
-        /usr/local/bin/Hyprland --version
+        /usr/bin/Hyprland --version
       rm -rf /tmp/hypr-verify-rt
     "
     vcheck "Hyprland links resolve" in_target \
-      "! ldd /usr/local/bin/Hyprland | grep -q 'not found'"
+      "! ldd /usr/bin/Hyprland | grep -q 'not found'"
     # guiutils builds every util from its root CMakeLists; if a future tag
     # drops or renames the welcome util, fail loudly here (issue #11).
     vcheck "welcome app installed" \
-      test -x "${TARGET}/usr/local/bin/hyprland-welcome"
+      test -x "${TARGET}/usr/bin/hyprland-welcome"
   fi
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
+  vcheck "systemd-timesyncd enabled" in_target "systemctl is-enabled systemd-timesyncd"
   vcheck "uwsm present" in_target "command -v uwsm"
   # greetd spawns the greeter with no PATH (PAM env only): the binary the
   # config names must exist at exactly that absolute path.
@@ -74,8 +75,8 @@ phase_verify() {
     "${TARGET}/etc/greetd/config.toml" 2>/dev/null || true)"
   vcheck "greetd session command binary exists (${greeter_bin:-none})" bash -c \
     "[[ -n '${greeter_bin}' && -x '${TARGET}${greeter_bin}' ]]"
-  vcheck "session launcher at /usr/local/bin/uwsm" \
-    test -x "${TARGET}/usr/local/bin/uwsm"
+  vcheck "session launcher at /usr/bin/uwsm" \
+    test -x "${TARGET}/usr/bin/uwsm"
   # The quiet-VT wrapper both session modes launch through (issue #12).
   vcheck "session wrapper at /usr/local/bin/hypr-session" \
     test -x "${TARGET}/usr/local/bin/hypr-session"
@@ -86,19 +87,15 @@ phase_verify() {
     test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.lua"
 
   # NVIDIA (issue #4): only when a GPU was detected and a driver chosen.
-  # Offline installs legitimately skip the package (warned at install).
+  # Both flavors install offline from /hypr-repo now (Phase 5), so this is
+  # checked regardless of network. nvidia-driver (the shared userspace) is
+  # present for BOTH flavors — nvidia-open Depends on it — so it is a flavor-
+  # agnostic probe that also holds under the pre-Turing proprietary fallback.
   if nvidia_install_requested; then
-    local nv_pkg="${NVIDIA_DRIVER}"
-    case "${nv_pkg}" in
-      open) nv_pkg="nvidia-open" ;;
-      debian) nv_pkg="nvidia-driver" ;;
-    esac
-    if ((NETWORK_AVAILABLE)); then
-      vcheck "NVIDIA driver package installed (${nv_pkg})" \
-        in_target "dpkg -s '${nv_pkg}' >/dev/null"
-      vcheck "nvidia-drm modeset configured" \
-        grep -q "nvidia-drm" "${TARGET}/etc/modprobe.d/nvidia-options.conf"
-    fi
+    vcheck "NVIDIA driver userspace installed (nvidia-driver)" \
+      in_target "dpkg -s nvidia-driver >/dev/null"
+    vcheck "nvidia-drm modeset configured" \
+      grep -q "nvidia-drm" "${TARGET}/etc/modprobe.d/nvidia-options.conf"
     vcheck "uwsm env carries NVIDIA variables" \
       grep -q "__GLX_VENDOR_LIBRARY_NAME" \
       "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env"
@@ -172,21 +169,17 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
-  # Networked installs replace Debian's zfs with the upstream build;
-  # offline installs legitimately keep the repo 2.3.x packages.
-  if ((NETWORK_AVAILABLE)); then
-    vcheck "upstream openzfs installed" in_target \
-      "dpkg -s openzfs-zfsutils >/dev/null"
-  fi
+  # BOTH paths replace Debian's zfs with the upstream build (online from source,
+  # offline from the on-ISO pool via install_zfs_offline), so the upstream package
+  # must be present regardless of network — verify it unconditionally.
+  vcheck "upstream openzfs installed" in_target \
+    "dpkg -s openzfs-zfsutils >/dev/null"
   vcheck "pool bootfs set" bash -c \
     "zpool get -H -o value bootfs '${POOL_NAME}' |
      grep -qx '${ROOT_DATASET}'"
-  if ((SKIP_CACHE)); then
-    info "skip: embedded cache check (--skip-cache)"
-  else
-    vcheck "embedded cache repo valid" \
-      test -f "${TARGET}${TARGET_CACHE_DIR}/repo/dists/${SUITE}/main/binary-${ARCH}/Packages"
-  fi
+  # The package store is ISO-only: the installed system's permanent apt
+  # sources are the real Debian mirror, and no repo is embedded in the target
+  # (embed_cache_in_target was removed). Nothing to verify in the target here.
 
   verify_report || fatal "Verification failed — installation is NOT complete."
   info "SUCCESS: bootable Debian + Hyprland conditions both met."

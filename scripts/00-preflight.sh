@@ -201,12 +201,59 @@ select_disks() {
   info "Targets: DISK1=${DISK1} DISK2=${DISK2} DISK3=${DISK3}"
 }
 
+# Whether the on-ISO package store was found (set by discover_iso_repo).
+ISO_STORE_PRESENT=0
+
+# Discover the on-ISO package store. When booted from our offline ISO the store
+# is an apt-ftparchive repo (dists/ + pool/) shipped either embedded in the live
+# root (ISO_LIVE_REPO, current ISOs) or as a top-level directory on the medium
+# (ISO_MEDIUM_REPO, older ISOs). Probe the in-root path first. Its presence — a
+# Packages index under dists/ — points the offline machinery at it (CACHE_REPO_DIR)
+# and makes offline-from-store the DEFAULT mode (see check_network). This runs
+# regardless of the --offline/--online flags so a forced-offline install also
+# installs from the store.
+discover_iso_repo() {
+  ISO_STORE_PRESENT=0
+  local root="" idx=""
+  for root in "${ISO_LIVE_REPO}" "${ISO_MEDIUM_REPO}"; do
+    [[ -n "${root}" ]] || continue
+    idx="$(find "${root}/dists" -type f -name Packages -print -quit \
+      2>/dev/null || true)"
+    [[ -n "${idx}" ]] || continue
+    ISO_STORE_PRESENT=1
+    CACHE_REPO_DIR="${root}"
+    info "On-ISO package store found: ${CACHE_REPO_DIR}"
+    return 0
+  done
+}
+
+# Decide the install mode. Precedence:
+#   --offline  -> forced offline (no network), install from CACHE_REPO_DIR
+#   --online   -> forced online, probe the mirror even if the store is present
+#   otherwise  -> offline when the on-ISO store is present, online (probe)
+#                 when it is absent
 check_network() {
   if ((OFFLINE)); then
     NETWORK_AVAILABLE=0
-    info "Offline mode forced (--offline)."
+    info "Mode: offline forced (--offline); repo ${CACHE_REPO_DIR}"
     return 0
   fi
+  if ((ONLINE)); then
+    probe_network
+    info "Mode: online forced (--online); network ${NETWORK_AVAILABLE}"
+    return 0
+  fi
+  if ((ISO_STORE_PRESENT)); then
+    NETWORK_AVAILABLE=0
+    info "Mode: offline by default (on-ISO store present; --online to override);" \
+      "repo ${CACHE_REPO_DIR}"
+    return 0
+  fi
+  probe_network
+}
+
+# Probe the configured mirror; sets NETWORK_AVAILABLE.
+probe_network() {
   if curl -fsI --max-time 10 "${MIRROR}/dists/${SUITE}/Release" >/dev/null 2>&1; then
     NETWORK_AVAILABLE=1
     info "Network: mirror reachable (${MIRROR})"
@@ -221,7 +268,9 @@ check_network() {
 # display-controller class (0x03xxxx) means an NVIDIA GPU is present.
 detect_nvidia_gpu() {
   HAS_NVIDIA_GPU=0
-  local dev="" vendor="" class=""
+  # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
+  NVIDIA_GPU_PRETURING=0
+  local dev="" vendor="" class="" device=""
   for dev in "${SYS_PCI_PATH}"/*; do
     [[ -r "${dev}/vendor" && -r "${dev}/class" ]] || continue
     read -r vendor <"${dev}/vendor"
@@ -229,6 +278,19 @@ detect_nvidia_gpu() {
     if [[ "${vendor}" == "0x10de" && "${class}" == 0x03* ]]; then
       # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
       HAS_NVIDIA_GPU=1
+      # The open kernel modules need Turing (TU1xx) or newer: those carry PCI
+      # device ids >= 0x1E00, while Pascal/Maxwell and older sit below and need
+      # the proprietary driver. An unreadable/odd id is treated as open-capable.
+      if [[ -r "${dev}/device" ]]; then
+        read -r device <"${dev}/device"
+        if [[ "${device}" =~ ^0x[0-9a-fA-F]+$ ]] && ((device < 0x1E00)); then
+          # shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
+          NVIDIA_GPU_PRETURING=1
+          info "NVIDIA GPU detected (PCI ${dev##*/}, device ${device}):" \
+            "pre-Turing — open kernel modules unsupported, will use proprietary."
+          return 0
+        fi
+      fi
       info "NVIDIA GPU detected (PCI ${dev##*/})."
       return 0
     fi
@@ -353,6 +415,7 @@ phase_preflight() {
       "to run in target, ${run_count} .run to stage"
   detect_virt
   detect_live_environment
+  discover_iso_repo
   check_network
   select_disks
   bootstrap_live_tools

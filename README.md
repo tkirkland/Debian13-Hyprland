@@ -127,9 +127,86 @@ DISK1/DISK2) and the ESP grows to 2G so that any of the three supported
 bootloaders fit, including kernel/initramfs copies for grub and
 systemd-boot.
 
-## Usage
+## Two ways to install
 
-From a Debian 13 live session (or an installed Debian system), as root:
+There are two supported models; pick one.
+
+1. **Offline from our ISO (recommended).** A two-stage flow. On a networked
+   build host you bake a self-sufficient ISO with `tools/build-iso.sh` — it
+   compiles the whole Hyprland stack to `.debs` at *ISO-creation* time (behind
+   the build-time freshness gate) and packs an `apt-ftparchive` repo plus the
+   installer tree onto the medium. You then boot that ISO on the target and run
+   the baked installer, which installs **fully offline** from the on-ISO store —
+   zero network. See [Offline-from-ISO](#offline-from-iso-recommended) below.
+
+2. **Networked install from a stock live ISO.** Boot any current Debian 13
+   live ISO, clone this repo, and run the installer; it debootstraps from the
+   Debian mirror and **compiles** the Hyprland stack from source during the
+   install. This is also the `--online` fallback path. See
+   [Networked install](#networked-install) below.
+
+Either way the **installed** system's permanent apt sources are the real Debian
+mirror, so future `apt update`s work normally. The on-ISO package store is
+ISO-only — it is never copied into the installed system.
+
+## Offline-from-ISO (recommended)
+
+**Stage A — build the ISO (networked build host).** From a clone of this repo
+on a machine with network access, as root:
+
+```bash
+# Dry-run first: prints the resolved build plan and mutates nothing.
+sudo tools/build-iso.sh
+# Then build for real (debootstrap, source compiles, OpenZFS build, repack):
+sudo tools/build-iso.sh --confirm
+```
+
+`STOCK_ISO` (the upstream Debian 13 live ISO to repack) and `OUT_ISO` (the
+output path) are env-overridable; see the top of `tools/build-iso.sh`. The
+build compiles each stack component at its latest release tag, gated by the
+build-time freshness check (`deb_needs_rebuild`), so the shipped `.debs` are
+already the newest — there is no version checking at install time.
+
+**Stage B — boot the ISO and install (target machine, no network needed).**
+Boot the resulting `OUT_ISO`, get root, and run the baked installer:
+
+```bash
+sudo /opt/hypr-deb/installer/installer.sh --bootloader=zbm --rtc=utc
+```
+
+For a hands-off install, the live user's home also carries **`~/autoinstall.sh`**
+— a generated launcher that runs the embedded installer fully unattended
+(`--yes --bootloader=grub --rtc=local`, as user `me`). Supply the password at
+build time via `LIVE_AUTOINSTALL_PASSWORD=…` in the `tools/build-iso.sh`
+environment; that value is baked into the launcher in **plaintext inside the
+ISO** and is **never committed to the repo** (the default build leaves it
+empty). Bootloader / RTC / username are overridable via the `LIVE_AUTOINSTALL_*`
+knobs at the top of `tools/iso-assemble.sh`; the plain `~/installer.sh` symlink
+remains for an interactive run.
+
+The installer and package store are embedded in the live root filesystem (the
+squashfs) under `/opt/hypr-deb` — not as loose directories on the medium — so
+the store can't be shadowed by a `/run` bind mount and survives regardless of
+the medium's mount state. Preflight finds the package store at
+`/opt/hypr-deb/repo` (falling back to `/run/live/medium/hypr-repo` on older
+ISOs) and makes **offline the default**: it debootstraps from `file://` the
+on-ISO repo and `apt-get install`s the entire custom stack by package name from
+the prebuilt `.debs` — no source compile, no network. Pass `--online` to force
+the networked path instead, or `--offline`
+to refuse the network outright.
+
+The on-ISO store also carries the **NVIDIA driver** — both flavors (open and
+proprietary) for branches 595 (the production default) and 610, sourced from
+NVIDIA's CUDA repo, not Debian non-free (that path was removed). When a GPU is
+detected the installer conditionally installs the flavor+branch you choose
+(`--nvidia`/`--nvidia-branch`, or the prompt) entirely from `/hypr-repo` with no
+network; trust comes from the staged `cuda-keyring`, and the dkms kernel module
+builds on the target against the cached `linux-headers`, MOK-signed like ZFS.
+
+## Networked install
+
+From a Debian 13 live session (or an installed Debian system) **without** our
+ISO, as root:
 
 ```bash
 # --recurse-submodules pulls the bundled wallpaper set (assets/wallpapers).
@@ -153,23 +230,40 @@ Common flags (see `--help` for the full list):
 ```
 --bootloader=<zbm|grub|systemd-boot>   bootloader (required with --yes)
 --build-on-firstboot                   defer the Hyprland build to first boot
---offline                              install only from the local cache
+--offline                              force offline; install only from the
+                                       on-ISO/local repo (no network)
+--online                               force network mode even when the on-ISO
+                                       store is present (overrides the offline
+                                       default; mirror of --offline)
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
---skip-cache                           omit the embedded offline cache
+--skip-cache                           skip the cache phase (no offline repo
+                                       populate/validate)
 --autologin                            start Hyprland without the login prompt
 --rtc=<utc|local>                      hardware clock interpretation, required
                                        (utc, or local for Windows dual boot;
                                        prompted if omitted)
---nvidia=<open|debian|none|package>    NVIDIA driver source when a GPU is
-                                       detected (default: prompt; unattended
-                                       uses "open" — NVIDIA's repo, open
-                                       kernel modules, production branch)
---nvidia-version=<ver>                 pin an exact NVIDIA version for
-                                       --nvidia=open (e.g. 610.43.02-1);
-                                       pinned installs are apt-mark held
+--nvidia=<open|proprietary|none>       NVIDIA driver flavor when a GPU is
+                                       detected — both flavors come from
+                                       NVIDIA's CUDA repo and are baked into the
+                                       on-ISO store, so either installs fully
+                                       offline (default: prompt; unattended uses
+                                       "open", or "proprietary" on a pre-Turing
+                                       GPU). "open" = open kernel modules
+                                       (Turing/RTX, GTX 16xx and newer);
+                                       "proprietary" = every GPU; "none" = skip
+--nvidia-branch=<595|610>              NVIDIA driver branch (default 595, the
+                                       production/certified branch; 610 = newer)
+--nvidia-version=<ver>                 pin an exact NVIDIA version, either flavor
+                                       (e.g. 610.43.02-1); pinned installs are
+                                       apt-mark held
 --jobs=<n>                             cap build parallelism
 --mirror=<url>                         Debian mirror (default deb.debian.org)
+--ntp="<servers>"                      space-separated NTP servers for the
+                                       installed system's systemd-timesyncd
+                                       (optional; empty keeps Debian's stock
+                                       pool/DHCP servers). Time sync is
+                                       installed and enabled either way
 --cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
 --fresh                                discard phase state and start over
 --yes                                  unattended mode; requires USER_PASSWORD
@@ -180,8 +274,14 @@ Common flags (see `--help` for the full list):
 
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
-`TIMEZONE`, `LOCALE`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`, and more — see
-`lib/00-config.sh`.
+`TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
+`HYPRDIM_REPO_URL` (source for the hypr-dim brightness daemon), and
+more — see `lib/00-config.sh`.
+
+The installed system has time synchronization enabled by default: `systemd-timesyncd`
+is installed and enabled in the target, so the clock stays disciplined after
+boot (Debian's stock NTP pool unless `--ntp`/`NTP_SERVERS` pins specific
+servers). timesyncd is a client only and never serves time to a LAN.
 
 With `--bootloader=grub`, the installer runs `os-prober` and adds chainloader
 menu entries for other detected OSes (e.g. Windows) — GRUB writes a static
@@ -224,9 +324,9 @@ chroot binds automatically.
 
 ```
 preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
-cache       populate or validate the offline cache (network needed to populate)
+cache       validate the on-ISO repo (offline) or populate a cache (--online)
 storage     destroy/wipe/partition/mdadm/ZFS (the destructive gate lives here)
-bootstrap   mount target, debootstrap, bind mounts, apt sources, embed cache
+bootstrap   mount target, debootstrap, bind mounts, Debian apt sources
 system      identity, packages, add-ons, user, ZFS boot support, initramfs
 boot        chosen bootloader install + NVRAM entry + ESP kernel-sync hook
 hyprland    tag resolution, compatibility gate, builds (or firstboot staging)
@@ -236,41 +336,39 @@ cleanup     unmount binds and target tree, export the pool
 
 ### Offline workflow
 
-The installer prefers the network but can run fully offline:
+Offline installation is the [Offline-from-ISO](#offline-from-iso-recommended)
+model above: the network-bearing work happens once on the build host
+(`tools/build-iso.sh --confirm`), which assembles a self-sufficient ISO. The
+booted target installs entirely from the on-ISO package store at
+`/run/live/medium/hypr-repo`, with **no network**:
 
-1. On a networked machine, run:
+- The `cache` phase runs `cache_validate` against the on-ISO repo
+  (`CACHE_REPO_DIR`, pointed at the store by preflight) and fails with a precise
+  list if any indexed `.deb` is missing from the pool. It does **not** populate
+  anything offline — the repo is the contract, already complete on the medium.
+- `bootstrap` debootstraps from `file://` the on-ISO repo, then bind-mounts the
+  store into the target chroot behind a **temporary** trusted `file://` apt
+  source so in-chroot `apt-get install` resolves the base packages, the whole
+  custom stack (by package name), and the OpenZFS debs from the prebuilt pool.
+- The temporary source and bind mount are torn down at cleanup. The installed
+  system's **permanent** apt sources are the real Debian mirror, so future
+  online `apt update`s work. The store is **not** copied into the target.
 
-   ```bash
-   sudo ./installer.sh --phase=cache \
-     --cache-dir=/path/on/real/storage
-   ```
+Freshness/version checking is a **build-time** concern: `deb_needs_rebuild`
+recompiles a component at ISO-creation only when its release tag is newer than
+the pooled `.deb`. Install time does no version checks — the shipped debs are
+already newest.
 
-   This downloads the complete .deb
-   closure (live tools, debootstrap base, target base, bootloaders,
-   Hyprland build deps, greetd, and uwsm's runtime deps) indexed with
-   `apt-ftparchive` as a `file://` repo, source archives for every
-   source-built component at its resolved release tag, and the
-   ZFSBootMenu EFI binary.
-2. Carry the cache directory to the target machine (it must be on real
-   storage, not the live overlay).
-3. Run `sudo ./installer.sh --offline --cache-dir=/path/to/cache ...`.
-   Offline runs validate the cache first and fail with a precise list of
-   anything missing.
-
-Warning: offline live-session preflight installs zfs-dkms against the
-running live kernel, so the cache must have been built against the same
-live-ISO kernel version (matching `linux-headers`). This is checked.
-
-Online runs install `linux-headers-$(uname -r)` (the running kernel), not
-`linux-headers-amd64` (the archive's newest), because zfs-dkms must build
-for the kernel the live session is actually running. If the mirror no
-longer carries headers for the live ISO's kernel — typically because a
-newer point release shipped — preflight fails early with instructions to
-boot a current live ISO.
-
-Either way, the complete cache is copied into the installed system at
-`/var/cache/hypr-deb/` (with a README) so the target can rebuild Hyprland
-or reinstall packages fully offline later.
+The `--online` fallback (or a plain networked install from a stock live ISO)
+debootstraps from the Debian mirror and writes Debian sources; it still
+installs the full custom stack, preferring the ISO's prebuilt debs when the
+repo is present and otherwise compiling from source (`build_stack`, the GCC-15
+path). Online runs install `linux-headers-$(uname -r)` (the running kernel),
+not `linux-headers-amd64` (the archive's newest), because zfs-dkms must build
+for the kernel the live session is actually running. If the mirror no longer
+carries headers for the live ISO's kernel — typically because a newer point
+release shipped — preflight fails early with instructions to boot a current
+live ISO.
 
 ## Bootloader choice
 
@@ -335,7 +433,10 @@ installer. GRUB needs nothing — its binary is Debian-signed.
 Scope is deliberately lean: a Debian base, compiled Hyprland, greetd +
 UWSM, a terminal (kitty), and a PipeWire/WirePlumber audio stack — no
 waybar or other desktop extras. NVIDIA support is opt-in (`--nvidia`, and
-only when a GPU is detected); on the Dell Precision 7780 a `modprobe.d`
+only when a GPU is detected) — both the open and proprietary flavors, for
+branches 595 and 610, are baked into the on-ISO store and install fully
+offline (the dkms module builds on the target); on the Dell Precision 7780 a
+`modprobe.d`
 drop-in forces the SOF SoundWire audio driver. UWSM is not packaged in
 Debian, so it is built from source (meson) at its latest release tag, like
 the hyprwm stack; its runtime dependencies (python3, python3-xdg,
@@ -368,6 +469,21 @@ wallpaper cycle, and the traditional `Print` screenshot cluster
 as the `assets/wallpapers` submodule, installed to
 `/usr/share/backgrounds/hypr-deb`.
 
+**External-display brightness** (issue #66): the `XF86MonBrightness` keys, the
+idle dim, and the lock screen all drive one logical brightness level across
+*every* connected display via the `brightness-sync` wrapper
+(`/usr/local/bin/brightness-sync`). Where a real hardware backlight exists it is
+set directly with `brightnessctl` — the internal panel, and external monitors
+exposed as `/sys/class/backlight` nodes by the `ddcci-dkms` driver over DDC/CI
+(`ddcutil`/`i2c-tools` provide the DDC/CI tooling; the `ddcci` and `i2c-dev`
+kernel modules are auto-loaded via `/etc/modules-load.d/ddcci.conf`, and the
+owner joins the `i2c` group). Displays with no controllable backlight fall back
+to **gamma** dimming via **hypr-dim**, a small Rust daemon (D-Bus `dev.hyprdim`)
+built from source like swww and run as a `graphical-session.target` user unit
+(`HYPRDIM_REPO_URL` overrides its source). There is no separate brightness flag:
+the subsystem is always installed and is a no-op on hardware with nothing to
+control.
+
 Source policy:
 
 - The **latest release tag** (semver-highest, pre-releases excluded — not
@@ -376,28 +492,36 @@ Source policy:
   latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
   hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
-  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, then UWSM.
-  (swww is a Rust/cargo build via a custom hook; the rest are CMake/meson.)
+  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hypr-dim, then
+  UWSM. (swww and hypr-dim are Rust/cargo builds via custom hooks; the rest are
+  CMake/meson.)
 - **Compatibility gate:** Hyprland's CMake version requirements at the
   resolved tag are parsed, and every dependency's resolved tag must satisfy
   them. On any mismatch the run aborts with a requirement-vs.-resolved
   matrix. No silent downgrades.
-- Builds run **inside the target** (chroot, or on first boot), so binaries
-  link against exactly the userland that runs them. The build uses GCC 15
-  from a pinned sid source where required. Artifacts install to
-  `/usr/local`; build trees under `/var/tmp` are deleted after installation.
-- **OpenZFS comes from upstream, not trixie**, on every networked installation:
-  the latest release builds in the chroot as native `openzfs-*` packages
-  replacing Debian's 2.3.x, with modules dkms-signed by the machine's MOK
-  key. Offline installs keep repo 2.3.x (the cache carries no zfs source).
-  The pool itself is created by the live session's 2.3.x, so its feature
-  set stays conservative until you `zpool upgrade` deliberately.
+- Source compilation runs **inside a chroot** against exactly the userland
+  that runs the binaries — at *ISO-creation* on the build host (the prebuilt
+  path), or in the target chroot / on first boot for a networked install. The
+  build uses GCC 15 from a pinned sid source where required. Compiled stack
+  artifacts install to `/usr` (the packaged `.debs` lay down `/usr/bin`,
+  `/usr/lib`); the hand-written glue scripts stay under `/usr/local`. Build
+  trees under `/var/tmp` are deleted after packaging.
+- The **offline-from-ISO install compiles nothing** — it `apt-get install`s
+  the stack debs (already built at ISO creation) by name from the on-ISO repo.
+- **OpenZFS comes from upstream, not trixie**: the latest release is built as
+  native `openzfs-*` packages replacing Debian's 2.3.x, with modules
+  dkms-signed by the machine's MOK key. For offline-from-ISO installs these
+  debs are prebuilt into the on-ISO repo and installed from there; a networked
+  install builds them in the chroot. The pool itself is created by the live
+  session's 2.3.x, so its feature set stays conservative until you
+  `zpool upgrade` deliberately.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
 a successful build and verify, purged (`apt-get purge --autoremove`), leaving
 only the Hyprland artifacts and their runtime libraries. Use
-`--keep-build-deps` to keep the toolchain installed; either way the cached
-build-dep .debs stay in `/var/cache/hypr-deb` for offline reinstallation.
+`--keep-build-deps` to keep the toolchain installed. (Compilation happens at
+ISO-creation for the offline path, so a freshly installed offline system
+carries no build toolchain at all.)
 
 `--build-on-firstboot` stages the sources and cached DEBs in the target and
 installs a one-shot systemd unit (`hypr-deb-firstboot.service`) that runs
