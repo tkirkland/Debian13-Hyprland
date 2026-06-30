@@ -5,3 +5,6 @@
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Per-operator build overrides (e.g. throwaway-VM autoinstall password) — never tracked
+tools/build-iso.local
