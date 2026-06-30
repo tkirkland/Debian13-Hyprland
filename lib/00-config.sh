@@ -99,14 +99,11 @@ LOCALE="${LOCALE:-en_US.UTF-8}"
 RTC_MODE="${RTC_MODE:-}"
 
 # --- Cache (network-preferred, offline-complete) -----------------------------
+# Build-time .deb pool root. tools/build-iso.sh overrides this to its workspace
+# and is the ONLY place that POPULATES a cache; on an install it is used solely
+# by the --online self-populate path (phase_cache). Offline installs never read
+# from it — they resolve everything from the on-ISO store via CACHE_REPO_DIR.
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
-# Inside the installed target the embedded copy always lives here:
-TARGET_CACHE_DIR="/var/cache/hypr-deb"
-# Location of the apt repo (pool/ + dists/) the offline machinery installs
-# from. Defaults under CACHE_DIR, but preflight redirects it to the on-ISO
-# store (ISO_MEDIUM_REPO) when booted from our offline ISO — so the store can
-# be used without moving CACHE_DIR itself.
-CACHE_REPO_DIR="${CACHE_REPO_DIR:-${CACHE_DIR}/repo}"
 # Where the embedded apt-ftparchive store (dists/ + pool/) lives INSIDE the live
 # root filesystem (the squashfs) when the ISO was built by tools/iso-assemble.sh.
 # preflight probes this first: an in-root store cannot be shadowed by a /run bind
@@ -115,6 +112,13 @@ ISO_LIVE_REPO="${ISO_LIVE_REPO:-/opt/hypr-deb/repo}"
 # Fallback for older ISOs that shipped the store as a top-level data directory on
 # the medium (mounted at /run/live/medium) rather than embedded in the squashfs.
 ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
+# Location of the apt repo (pool/ + dists/) the offline machinery installs from.
+# Defaults to the on-ISO store (ISO_LIVE_REPO) — decoupled from CACHE_DIR so an
+# offline install never depends on a second, install-time cache. preflight
+# redirects it to whichever store root is actually present (ISO_LIVE_REPO or
+# ISO_MEDIUM_REPO); tools/build-iso.sh overrides it to its workspace pool.
+# ISO_LIVE_REPO/ISO_MEDIUM_REPO MUST be defined above this line (set -u).
+CACHE_REPO_DIR="${CACHE_REPO_DIR:-${ISO_LIVE_REPO}}"
 
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
@@ -123,6 +127,11 @@ ZBM_REPO_URL="${ZBM_REPO_URL:-https://github.com/zbm-dev/zfsbootmenu}"
 # Fallback redirector, used only if the direct release-asset fetch fails.
 ZBM_EFI_URL="${ZBM_EFI_URL:-https://get.zfsbootmenu.org/efi}"
 ESP_MOUNT="/boot/efi"
+# Host efivarfs mount point. Bound into the install chroot by mount_chroot_binds
+# so `mokutil --import` (stage_mok_enrollment) can write the enrollment request
+# to NVRAM. Overridable purely so the fake-driven mount tests can point the
+# `-d` test + bind at a temp dir instead of the real host path.
+EFIVARS_DIR="${EFIVARS_DIR:-/sys/firmware/efi/efivars}"
 # quiet alone still lets kernel errors and systemd unit chatter paint the
 # console during boot and shutdown (issue #12): loglevel=3 keeps printk at
 # err-and-worse, systemd.show_status=auto shows unit lines only when boot
@@ -672,8 +681,8 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
-# --skip-cache: no offline cache is populated or embedded (saves several
-# GB — important in live sessions where CACHE_DIR is RAM-backed).
+# --skip-cache: no offline cache is populated or embedded (saves several GB
+# at build time).
 SKIP_CACHE="${SKIP_CACHE:-0}"
 # --ntp: space-separated NTP servers written into the target's
 # systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).

@@ -62,7 +62,6 @@ Options:
                         time.cloudflare.com"). Optional: empty (default) keeps
                         timesyncd on Debian's stock pool/DHCP servers. Time sync
                         is installed and enabled regardless.
-  --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
   --yes                 Unattended mode: skips the destructive confirmation
                         and refuses to reach any later prompt — requires
@@ -129,7 +128,6 @@ parse_args() {
         ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
       --ntp=*) NTP_SERVERS="${arg#*=}" ;;
-      --cache-dir=*) CACHE_DIR="${arg#*=}" ;;
       --fresh) FRESH=1 ;;
       --yes) ASSUME_YES=1 ;;
       --verbose) VERBOSE=1 ;;
