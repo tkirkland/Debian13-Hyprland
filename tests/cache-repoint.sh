@@ -126,4 +126,53 @@ else
   echo "  ok: RAM-backed CACHE_DIR warning removed from preflight"
 fi
 
+# --- removal grep gate: the install-side cache populate layer is gone ----------
+# phase_cache (the install-time populate orchestrator) must no longer be defined.
+if (
+  source lib/00-config.sh
+  source lib/01-log.sh
+  # shellcheck disable=SC1090
+  for f in scripts/*.sh; do source "$f"; done
+  declare -f phase_cache >/dev/null
+); then
+  echo "  FAIL: phase_cache is still defined" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: phase_cache removed (install-side populate orchestrator gone)"
+fi
+
+# --skip-cache must no longer be a parsed flag: passing it must FATAL as unknown.
+if (
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source lib/02-args.sh
+  parse_args --skip-cache
+) >/dev/null 2>&1; then
+  echo "  FAIL: --skip-cache is still accepted by parse_args" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: --skip-cache rejected (flag removed)"
+fi
+
+# SKIP_CACHE must not be referenced anywhere in active source.
+if grep -rqn 'SKIP_CACHE\|--skip-cache' lib/ scripts/ installer.sh; then
+  echo "  FAIL: SKIP_CACHE/--skip-cache still referenced in active code" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: SKIP_CACHE/--skip-cache removed from active code"
+fi
+
+# --phase=cache must be rejected now that the cache phase is gone.
+if (
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source lib/02-args.sh
+  parse_args --phase=cache
+) >/dev/null 2>&1; then
+  echo "  FAIL: --phase=cache is still accepted" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: --phase=cache rejected (cache phase removed)"
+fi
+
 finish_test

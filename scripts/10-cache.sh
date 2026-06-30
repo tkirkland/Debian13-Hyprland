@@ -37,8 +37,8 @@ cache_populate_debs() {
   mkdir -p "${pool}" "${work}"
 
   # Shared debootstrap deb cache, set+exported by build-iso.sh. Referenced
-  # DEFENSIVELY: the installer phase_cache leaves it UNSET, so this expands to
-  # empty and NO --cache-dir is passed (installer path byte-for-byte unchanged).
+  # DEFENSIVELY: when unset (any caller other than build-iso.sh) this expands to
+  # empty and NO --cache-dir is passed.
   # For the build-iso path it points at the cache the buildroot debootstrap
   # already filled, so the closure debootstrap reuses the base instead of
   # re-downloading it. (The dedicated --download-only bootstrap pass that used
@@ -188,34 +188,6 @@ cache_index_repo() {
   )
 }
 
-# GitHub's tag tarballs omit git submodules (Hyprland vendors udis86 that
-# way), so sources are cached from recursive clones, not codeload tarballs.
-cache_populate_sources() {
-  local name="" repo="" tag="" clone="" manifest="${CACHE_DIR}/sources/MANIFEST"
-  mkdir -p "${CACHE_DIR}/sources"
-  : >"${manifest}"
-  for name in "${HYPR_BUILD_ORDER[@]}"; do
-    repo="${HYPR_REPO_URL[${name}]}"
-    tag="$(resolve_latest_release_tag "${repo}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-    info "Caching ${name} ${tag}"
-    clone="${CACHE_DIR}/sources/${name}-${tag}"
-    rm -rf "${clone}"
-    git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
-      --recurse-submodules --shallow-submodules "${repo}" "${clone}"
-    tar -czf "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" \
-      --exclude-vcs -C "${CACHE_DIR}/sources" "${name}-${tag}"
-    rm -rf "${clone}"
-    echo "${name} ${tag}" >>"${manifest}"
-  done
-}
-
-cache_populate_zbm() {
-  info "Caching ZFSBootMenu EFI binary..."
-  # fetch_zbm_efi lives in scripts/50-boot.sh (sourced by the orchestrator
-  # before any phase runs).
-  fetch_zbm_efi "${CACHE_DIR}/zfsbootmenu.EFI"
-}
-
 # Validate the offline apt repo that debootstrap and in-chroot apt consume.
 # Checks CACHE_REPO_DIR — which defaults to ${CACHE_DIR}/repo but preflight
 # redirects to the on-ISO store (ISO_MEDIUM_REPO) when booted from our offline
@@ -277,17 +249,4 @@ cache_validate() {
     fatal "Cache validation failed (${#problems[@]} problem(s))."
   fi
   info "Cache repo valid: ${CACHE_REPO_DIR}"
-}
-
-phase_cache() {
-  if ((NETWORK_AVAILABLE)); then
-    cache_populate_debs
-    cache_populate_chezmoi
-    cache_index_repo
-    cache_populate_sources
-    cache_populate_zbm
-  else
-    info "No network: validating existing cache instead of populating."
-  fi
-  cache_validate
 }
