@@ -183,6 +183,11 @@ step_cache() {
 #    build_component_to_deb) so DESTDIR lands inside the buildroot.
 step_build_stack() {
   local name tag debver stagerel
+  # The build-dep set (HYPR_BUILD_PACKAGES) is identical for every component, so
+  # install it ONCE before the loop instead of re-running install_build_deps per
+  # rebuilt component (up to 21x). Pure build-time speedup; same packages land.
+  # Mirrors the already-hoisted installer path (scripts/60-hyprland.sh build_stack).
+  install_build_deps
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     tag="$(resolve_latest_release_tag \
       "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
@@ -194,7 +199,6 @@ step_build_stack() {
       # shellcheck disable=SC2034  # consumed by stage_source/build_one via 60-hyprland.sh
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       stage_source "${name}"
-      install_build_deps
       HYPR_DESTDIR="${stagerel}" build_one "${name}"
       package_to_deb "${TARGET}${stagerel}" "${name}" "${debver}" \
         "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${POOL}"
@@ -271,6 +275,11 @@ step_runtime_closure() {
   while IFS= read -r n; do
     [[ -n "${n}" ]] || continue
     [[ "${provided}" == *" ${n} "* ]] && continue
+    # Skip a dep whose .deb is ALREADY in the pool (named ${name}_${ver}_${arch}.deb)
+    # — cache_populate_debs pooled most of these at step 1, so re-fetching them is
+    # pure wasted apt-get download. Conservative: step_depsim remains the hard
+    # offline-completeness gate, so any genuinely-missing dep is still caught.
+    compgen -G "${POOL}/${n}_*.deb" >/dev/null && continue
     want+=("${n}")
   done <<<"${names}"
   ((${#want[@]})) || return 0
@@ -442,6 +451,17 @@ step_stage_fonts() {
   harvest_lythmono_fonts "${dest}"
 }
 
+# restore_build_ownership
+# The build runs as root (sudo), so everything it writes under the workspace and
+# the output ISO is left root-owned — stranding the operator and re-tripping the
+# dry-run test. Hand it back to the user who invoked sudo (SUDO_UID/SUDO_GID).
+# No-op when not run under sudo (real root login: nothing to hand back).
+restore_build_ownership() {
+  [[ -n "${SUDO_UID:-}" ]] || return 0
+  chown -R "${SUDO_UID}:${SUDO_GID:-${SUDO_UID}}" \
+    "${ISO_WORKSPACE}" "${OUT_ISO}" 2>/dev/null || true
+}
+
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
@@ -490,8 +510,11 @@ main() {
   assert_stage_under_target "${TARGET}" "${BUILD_STAGE_REL}" \
     || fatal "unsafe BUILD_STAGE_REL (escapes buildroot): ${BUILD_STAGE_REL}"
 
-  # Mounts must never leak, even on failure.
-  trap 'teardown_chroot_binds' EXIT
+  # Mounts must never leak, even on failure; and the root build must not leave
+  # root-owned droppings in the operator's workspace/output (which strand the
+  # user and re-trip the dry-run test on the next run). restore_build_ownership
+  # runs last on EXIT, after the binds are torn down.
+  trap 'teardown_chroot_binds; restore_build_ownership' EXIT
   trap 'teardown_chroot_binds' ERR
 
   mkdir -p "${ISO_WORKSPACE}" "${POOL}" "${DEBOOTSTRAP_CACHE}"

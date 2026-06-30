@@ -24,13 +24,17 @@ assert_build_sandbox "${ISO_WORKSPACE}" "${TARGET}" \
   || { echo "  FAIL: resolved sandbox rejected" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 
 echo "test: no-args dry-run needs no root, mutates nothing, exits 0"
-if out="$(bash "${HERE}/../tools/build-iso.sh" 2>&1)"; then rc=0; else rc=$?; fi
+# Point the dry-run at a unique, nonexistent workspace so this "created nothing"
+# check is immune to leftovers a real build may have left under the default
+# /var/tmp/hypr-iso-build path (which previously false-failed this assertion).
+dryws="$(mktemp -u)"
+if out="$(ISO_WORKSPACE="${dryws}" bash "${HERE}/../tools/build-iso.sh" 2>&1)"; then rc=0; else rc=$?; fi
 assert_eq "0" "${rc}" "dry-run exits 0 without --confirm (no root required)"
-assert_contains "${out}" "DRY-RUN"          "dry-run announces itself"
-assert_contains "${out}" "${ISO_WORKSPACE}" "dry-run prints the plan"
+assert_contains "${out}" "DRY-RUN"   "dry-run announces itself"
+assert_contains "${out}" "${dryws}"  "dry-run prints the plan (its workspace path)"
 # No workspace should be created by a dry-run.
-if [[ -e "${ISO_WORKSPACE}" ]]; then
-  echo "  FAIL: dry-run created ${ISO_WORKSPACE}" >&2
+if [[ -e "${dryws}" ]]; then
+  echo "  FAIL: dry-run created ${dryws}" >&2
   TEST_FAILURES=$((TEST_FAILURES+1))
 else
   echo "  ok: dry-run created no workspace"
@@ -58,5 +62,80 @@ else
 fi
 unset -f git
 rm -rf "${wroot}"
+
+echo "test: step_build_stack hoists install_build_deps (runs once for N components)"
+# Run in a subshell so the collaborator stubs/globals don't leak into later tests.
+# SC2317: the stubs are invoked indirectly by step_build_stack; SC2034: the maps
+# are consumed by the function under test, not this scope.
+# shellcheck disable=SC2317,SC2034
+(
+  HYPR_BUILD_ORDER=(aaa bbb ccc)
+  declare -A HYPR_REPO_URL=([aaa]=u [bbb]=u [ccc]=u)
+  declare -A HYPR_TAG_PATTERN=() HYPR_DEB_DEPENDS=() HYPR_RESOLVED_TAG=()
+  TARGET="$(mktemp -d)"; POOL="$(mktemp -d)"; ARCH=amd64; BUILD_STAGE_REL=/bs
+  resolve_latest_release_tag() { echo v1.0.0; }
+  tag_to_debver() { echo 1.0.0-1; }
+  deb_needs_rebuild() { return 0; }          # always rebuild -> loop body runs each iter
+  stage_source() { :; }
+  build_one() { :; }
+  package_to_deb() { :; }
+  in_target() { :; }
+  cp() { :; }                                # shadow the buildroot /usr copy
+  bdcount=0
+  install_build_deps() { bdcount=$((bdcount + 1)); }
+  step_build_stack
+  rm -rf "${TARGET}" "${POOL}"
+  if [[ "${bdcount}" == "1" ]]; then
+    echo "  ok: install_build_deps invoked once for 3 rebuilt components"
+    exit 0
+  fi
+  echo "  FAIL: install_build_deps ran ${bdcount}x (expected 1, must be hoisted)" >&2
+  exit 1
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
+echo "test: step_runtime_closure skips deps already in the pool"
+# shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_runtime_closure
+(
+  POOL="$(mktemp -d)"; TARGET="$(mktemp -d)"
+  : >"${POOL}/main_1.0-1_amd64.deb"          # the deb whose Depends we read
+  : >"${POOL}/libpooled1_1.0-1_amd64.deb"    # an already-pooled dep -> must be skipped
+  _self_provided_names() { printf ' '; }
+  # Every pooled deb reports the same Depends: one already pooled, one missing.
+  dpkg-deb() { [[ "$1" == "-f" ]] && echo "libpooled1 (>= 1.0), libmissing1"; }
+  info() { :; }
+  RC_CAP="$(mktemp)"
+  in_target() { printf '%s\n' "$*" >>"${RC_CAP}"; }
+  step_runtime_closure
+  rccap="$(cat "${RC_CAP}")"
+  rm -rf "${POOL}" "${TARGET}"; rm -f "${RC_CAP}"
+  rc=0
+  [[ "${rccap}" == *libmissing1* ]] || { echo "  FAIL: un-pooled dep libmissing1 not queued for download" >&2; rc=1; }
+  if [[ "${rccap}" == *libpooled1* ]]; then
+    echo "  FAIL: already-pooled dep libpooled1 was re-downloaded" >&2; rc=1
+  fi
+  ((rc == 0)) && echo "  ok: already-pooled dep skipped, only the missing dep is fetched"
+  exit "${rc}"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
+echo "test: restore_build_ownership hands the workspace back to the sudo user (not left root-owned)"
+# shellcheck disable=SC2317  # chown stub invoked indirectly by restore_build_ownership
+(
+  ISO_WORKSPACE="$(mktemp -d)"; OUT_ISO="${ISO_WORKSPACE}/out.iso"; : >"${OUT_ISO}"
+  chlog="${ISO_WORKSPACE}/chown.log"; : >"${chlog}"
+  chown() { printf '%s\n' "$*" >>"${chlog}"; }
+  SUDO_UID=1000 SUDO_GID=1000 restore_build_ownership
+  got="$(<"${chlog}")"
+  : >"${chlog}"
+  unset SUDO_UID SUDO_GID
+  restore_build_ownership                       # no sudo -> must be a no-op
+  noop="$(<"${chlog}")"
+  rm -rf "${ISO_WORKSPACE}"
+  rc=0
+  [[ "${got}" == *"-R 1000:1000"* && "${got}" == *out.iso* ]] \
+    || { echo "  FAIL: did not chown workspace+iso to the sudo user (got: ${got})" >&2; rc=1; }
+  [[ -z "${noop}" ]] || { echo "  FAIL: chowned even without SUDO_UID set" >&2; rc=1; }
+  ((rc == 0)) && echo "  ok: chowns to SUDO_UID:SUDO_GID under sudo, no-op otherwise"
+  exit "${rc}"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
 finish_test
