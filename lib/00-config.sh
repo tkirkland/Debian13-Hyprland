@@ -102,6 +102,19 @@ RTC_MODE="${RTC_MODE:-}"
 CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
 # Inside the installed target the embedded copy always lives here:
 TARGET_CACHE_DIR="/var/cache/hypr-deb"
+# Location of the apt repo (pool/ + dists/) the offline machinery installs
+# from. Defaults under CACHE_DIR, but preflight redirects it to the on-ISO
+# store (ISO_MEDIUM_REPO) when booted from our offline ISO — so the store can
+# be used without moving CACHE_DIR itself.
+CACHE_REPO_DIR="${CACHE_REPO_DIR:-${CACHE_DIR}/repo}"
+# Where the embedded apt-ftparchive store (dists/ + pool/) lives INSIDE the live
+# root filesystem (the squashfs) when the ISO was built by tools/iso-assemble.sh.
+# preflight probes this first: an in-root store cannot be shadowed by a /run bind
+# mount and does not depend on the medium staying visible mid-install.
+ISO_LIVE_REPO="${ISO_LIVE_REPO:-/opt/hypr-deb/repo}"
+# Fallback for older ISOs that shipped the store as a top-level data directory on
+# the medium (mounted at /run/live/medium) rather than embedded in the squashfs.
+ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
 
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
@@ -132,29 +145,95 @@ MOK_KEY="/var/lib/dkms/mok.key" # PEM private key, passphrase-less
 MOK_CRT="/var/lib/dkms/mok.pub" # DER certificate (dkms + mokutil format)
 MOK_PEM="/var/lib/dkms/mok.pem" # PEM certificate (sbsign/sbverify format)
 
-# --- NVIDIA driver (issue #4) --------------------------------------------------
+# --- NVIDIA driver (issue #4; Phase 5: fully offline, both flavors) ------------
 # Detection happens BEFORE preflight (sysfs only, no tools), so prompts can
-# fail fast. NVIDIA_DRIVER selects the source:
-#   ""       decide interactively (unattended runs default to "open")
-#   open     NVIDIA's Debian 13 CUDA repo: open kernel modules
-#            (nvidia-open + nvidia-driver + nvidia-kernel-open-dkms),
-#            pinned to NVIDIA_DRIVER_VERSION and apt-mark held. Open
-#            modules support Turing and newer GPUs only — older cards
-#            must use "debian".
-#   debian   Debian 13's non-free nvidia-driver (550-series proprietary)
-#   none     skip — keep the kernel's nouveau driver
-#   <pkg>    any other value: a literal package name from Debian non-free
+# fail fast. As of Phase 5 BOTH flavors come from NVIDIA's CUDA debian13 repo
+# and are baked into the offline on-ISO store /hypr-repo, so NVIDIA installs
+# work with no network. The old Debian non-free "debian" path is RETIRED:
+# proprietary now also means NVIDIA's repo (nvidia-driver + nvidia-kernel-dkms),
+# giving a single source and a single offline pool for everything.
+#
+# NVIDIA_DRIVER selects the flavor:
+#   ""           decide interactively (unattended runs default to "open")
+#   open         open kernel modules (nvidia-open + nvidia-kernel-open-dkms);
+#                Turing (RTX/GTX 16xx) and newer GPUs only — older cards must
+#                use "proprietary".
+#   proprietary  proprietary kernel modules (nvidia-driver + nvidia-kernel-dkms);
+#                supports every NVIDIA GPU (REPLACES the old "debian" option).
+#   none         skip — keep the kernel's nouveau driver
 HAS_NVIDIA_GPU=0
+# Set by detect_nvidia_gpu when the GPU's PCI device id predates Turing
+# (< 0x1E00): Pascal/Maxwell and older cards are unsupported by the open
+# kernel modules, so install_nvidia_driver forces the proprietary flavor.
+# shellcheck disable=SC2034  # Cross-module global consumed after sourcing.
+NVIDIA_GPU_PRETURING=0
 NVIDIA_DRIVER="${NVIDIA_DRIVER:-}"
-NVIDIA_REPO_KEYRING_URL="${NVIDIA_REPO_KEYRING_URL:-https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb}"
-# Exact version for "open" mode, e.g. 610.43.02-1 (--nvidia-version=...).
-# Empty = repo default: NVIDIA pins its production branch (R595 at the
-# time of writing) via a nvidia-driver-pinning-* package, and the install
-# tracks branch promotions automatically. A pinned version purges that
-# pinning package (it would outrank the request) and apt-mark holds the
-# driver packages so unattended upgrades cannot mix branches. 610.43.02-1
-# (the R610 feature branch: HDR, DRM color pipeline) is validated with
-# Hyprland on this machine.
+
+# NVIDIA CUDA debian13 repo. This is a FLAT (non-suite/component) repo: the
+# deb822 source uses "Suites: /" with no Components — matching the .list the
+# cuda-keyring deb installs. Trust is established by the cuda-keyring package
+# (fetched from the repo root), which drops the trusted key at
+# /usr/share/keyrings/cuda-archive-keyring.gpg. Offline, the .list cuda-keyring
+# installs points at the unreachable HTTPS URL, so the target rewrites the
+# repo to file:///hypr-repo while keeping that keyring for trust.
+NVIDIA_REPO_URL="${NVIDIA_REPO_URL:-https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/}"
+NVIDIA_REPO_KEYRING_URL="${NVIDIA_REPO_KEYRING_URL:-${NVIDIA_REPO_URL}cuda-keyring_1.1-1_all.deb}"
+
+# Driver branch. The branch is selected by an apt PIN package, NOT by versioned
+# package names (there is no nvidia-open-595; the metapackages are
+# branch-agnostic). Install exactly one nvidia-driver-pinning-<branch>:
+#   595  production/certified branch (DEFAULT) -> newest 595.x (595.71.05-1)
+#   610  newer feature branch (HDR, DRM color) -> newest 610.x (610.43.02-1)
+# The two pinning packages share /etc/apt/preferences.d/nvidia-driver-pin and
+# Conflict (Provides: nvidia-driver-pinning), so only one may be installed at a
+# time; switching branches purges the old one first. Per-target this is a
+# non-issue: one target picks one branch.
+NVIDIA_BRANCH="${NVIDIA_BRANCH:-595}"
+# Branch-pinning package per branch (selects the branch; see NVIDIA_BRANCH).
+declare -gA NVIDIA_PINNING_PACKAGE=(
+  [595]="nvidia-driver-pinning-595"
+  [610]="nvidia-driver-pinning-610"
+)
+
+# Flavor-specific kernel-module package sets. The branch is selected separately
+# (NVIDIA_PINNING_PACKAGE above, or an exact NVIDIA_DRIVER_VERSION). nvidia-open
+# already drags in the nvidia-driver userspace; nvidia-kernel-open-dkms is
+# listed explicitly (belt-and-suspenders) and additionally hard-Depends g++ and
+# firmware-nvidia-gsp.
+NVIDIA_OPEN_PACKAGES=(nvidia-open nvidia-kernel-open-dkms)
+NVIDIA_PROP_PACKAGES=(nvidia-driver nvidia-kernel-dkms)
+# Each flavor metapackage resolves its OWN correct shared userspace closure, so
+# we do NOT force-list the shared libs: doing so previously dragged in packages
+# that the driver Conflicts and broke the download resolution. Specifically
+#   nvidia-driver Conflicts nvidia-suspend-common
+#   nvidia-kernel-support (pulled by nvidia-driver) Conflicts nvidia-kernel-common
+# so listing nvidia-suspend-common + nvidia-kernel-common made apt refuse the
+# whole transaction. nvidia-driver already pulls nvidia-driver-libs,
+# nvidia-driver-cuda, nvidia-kernel-support, nvidia-powerd, nvidia-settings and
+# the libnvidia-*/libnv* userspace as deps; nvidia-open pulls its open-flavor
+# equivalents. The only shared dep we list explicitly (belt-and-suspenders, so
+# the offline pool unambiguously carries it) is firmware-nvidia-gsp — a hard dep
+# of both dkms packages and conflict-free with every flavor/branch.
+NVIDIA_FIRMWARE_PACKAGES=(firmware-nvidia-gsp)
+# Build-time deps the on-target dkms module build needs, staged in the offline
+# pool so both nvidia-kernel-dkms and nvidia-kernel-open-dkms compile with no
+# network (same machinery as openzfs-zfs-dkms, which already works offline).
+# Once the NVIDIA source is enabled, apt resolves `dkms` to NVIDIA's repo build
+# (3.4.1-1 > Debian's 3.2.2-1, unpinned), so that exact deb lands in the pool.
+# linux-headers-amd64 is already in the closure for openzfs; it is downloaded
+# again alongside these so the dkms header dependency is explicit. The hard dep
+# firmware-nvidia-gsp is branch-versioned and listed in NVIDIA_FIRMWARE_PACKAGES.
+NVIDIA_DKMS_BUILD_PACKAGES=(
+  dkms build-essential gcc g++ cpp make binutils libc6-dev kmod
+)
+
+# Exact version override (e.g. 610.43.02-1, via --nvidia-version=...), applied
+# to BOTH flavors. Empty = repo default: the NVIDIA_PINNING_PACKAGE for
+# NVIDIA_BRANCH selects the newest in that branch and tracks branch promotions.
+# A pinned version instead purges the pinning package (its priority-1000 pin
+# would outrank the request) and apt-mark holds the driver packages so
+# unattended upgrades cannot mix branches. 610.43.02-1 (the R610 feature
+# branch: HDR, DRM color pipeline) is validated with Hyprland on this machine.
 NVIDIA_DRIVER_VERSION="${NVIDIA_DRIVER_VERSION:-}"
 # Overridable for tests (fake sysfs trees).
 SYS_PCI_PATH="${SYS_PCI_PATH:-/sys/bus/pci/devices}"
@@ -169,6 +248,10 @@ nvidia_install_requested() {
 
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
+# hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
+# Not in the Debian archive nor the hyprwm namespace — built from source with
+# the Hyprland stack (cargo, like swww), pinned to its latest release tag.
+HYPRDIM_REPO_URL="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
 # Build order satisfies the dependency graph; hyprland after its deps.
 # wayland, wayland-protocols, and xkbcommon are built first because
 # Debian 13's packages are too old for current Hyprland (wayland-protocols
@@ -196,6 +279,7 @@ HYPR_BUILD_ORDER=(
   hypridle
   hyprlauncher
   swww
+  hypr-dim
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -227,8 +311,35 @@ declare -A HYPR_REPO_URL=(
   ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   # swww: animated wallpaper daemon (cargo build via build_custom_swww).
   ["swww"]="https://github.com/LGFae/swww"
+  # hypr-dim: per-display gamma brightness daemon for external outputs
+  # (cargo build via build_custom_hypr_dim). Drives external-display brightness
+  # via D-Bus dev.hyprdim for the brightness-sync wrapper (issue #66).
+  ["hypr-dim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
+# Runtime Depends per source-built package, used to generate .deb control
+# files at ISO-build time. Keep conservative: list runtime libs that live in
+# the closure pool so apt-get install --simulate resolves fully offline.
+declare -gA HYPR_DEB_DEPENDS=(
+  [swww]="libc6, libwayland-client0, libgcc-s1"
+  [hypr-dim]="libc6, libgcc-s1"
+)
+# Our compiled wayland/xkbcommon install to /usr with the same soname paths as
+# Debian's library packages; Provides lets reverse-deps resolve to ours, while
+# Conflicts+Replaces let ours cleanly supersede the Debian packages.
+declare -gA HYPR_DEB_PROVIDES=(
+  [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+)
+declare -gA HYPR_DEB_CONFLICTS=(
+  [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+)
+declare -gA HYPR_DEB_REPLACES=(
+  [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+)
+ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default
 # v-prefixed semver (xkbcommon tags 'xkbcommon-X.Y.Z'; wayland-protocols
 # tags plain 'X.YY').
@@ -271,8 +382,27 @@ HYPR_BACKPORTS_PACKAGES=(cargo)
 #   and their toolchain dependencies), and never upgrades anything else
 #   to unstable. Only used when the network is available; offline installs
 #   get the toolchain debs from the cache repo instead.
+#
+#   The blanket 100-pin alone is NOT enough to INSTALL gcc-15: its versioned
+#   runtime deps (libstdc++6/libgcc-s1 >= 15, libcc1-0, the libasan8/libgomp1
+#   sanitizer set, and the libc6 they need) live only in sid, and apt will not
+#   pull a priority-100 candidate to satisfy a versioned dep when a (too-old)
+#   trixie candidate sits at 500. The old code worked around this with
+#   `apt-get -t sid`, but `-t` sets the TARGET RELEASE for the whole
+#   transaction (priority 990), overriding the 100-pin and dragging unrelated
+#   sid upgrades (e.g. libmpfr6) that then conflict with trixie -dev packages.
+#   Instead we keep the blanket 100-pin as a safety net and add a SCOPED
+#   allow-pin (priority 500) for exactly the gcc-15 closure, so it installs by
+#   name with no `-t` and nothing else leaks from sid. cpp-15 needs only
+#   libmpfr6 (>= 3.1.3), which trixie's 4.2.2-1 satisfies, so libmpfr6 stays
+#   on trixie and libmpfr-dev resolves cleanly.
 write_sid_toolchain_sources() {
   local root="${1:-}"
+  if [[ -z "${root}" ]]; then
+    printf '[FATAL] %s: refusing to write apt sources with empty root (would hit host /etc)\n' \
+      "${FUNCNAME[0]}" >&2
+    return 1
+  fi
   mkdir -p "${root%/}/etc/apt/sources.list.d" \
     "${root%/}/etc/apt/preferences.d"
   cat >"${root%/}/etc/apt/sources.list.d/sid-toolchain.sources" <<EOF
@@ -290,14 +420,42 @@ Package: *
 Pin: release a=unstable
 Pin-Priority: 100
 EOF
+  cat >"${root%/}/etc/apt/preferences.d/sid-toolchain-allow" <<'EOF'
+# Managed by hypr-deb: raise ONLY the gcc-15 toolchain closure above the
+# blanket 100-pin so `apt-get install gcc-15 g++-15` (no -t) can pull these
+# from sid. This is the gcc-15 binaries plus the runtime libs whose sid
+# versions GCC 15 strictly requires (libstdc++6/libgcc-s1 >= 15, libcc1-0,
+# the sanitizer/quadmath/gomp set, and the libc6 they pull). Everything NOT
+# listed here stays governed by the 100-pin, so collateral upgrades such as
+# libmpfr6/libnghttp3-9/libngtcp2-16 cannot leak in from sid.
+#
+# The WHOLE glibc binary family must move to sid together with libc6: sid's
+# libc6 2.42 carries `Breaks: locales (< 2.42)` (and the other glibc binaries
+# share a tight `= ${binary:Version}` coupling), so if libc6 came from sid
+# while locales/libc-l10n/etc. stayed on trixie 2.41 the transaction would
+# break (e.g. the wider cache closure pulls `locales` via TARGET_BASE_PACKAGES).
+# Hence every glibc-source binary that can appear in the closure is allow-pinned
+# too; the libc6-i386/libc6-x32 multilib variants are listed for completeness
+# (harmless no-ops on a pure amd64 install).
+Package: gcc-15* g++-15* cpp-15* libgcc-15-dev libstdc++-15-dev libstdc++6 libgcc-s1 libcc1-0 libgomp1 libitm1 libatomic1 libasan8 liblsan0 libtsan2 libubsan1 libhwasan0 libquadmath0 libc6 libc6-dev libc-bin libc-dev-bin libc-l10n locales locales-all nscd libc6-dbg libc-devtools libc6-i386 libc6-x32
+Pin: release a=unstable
+Pin-Priority: 500
+EOF
 }
 
 # trixie-backports source for the Rust toolchain (cargo/rustc >= 1.90 for
 # swww). Same controlled, pinned, opt-in shape as the sid source, but backports
-# is rebuilt against trixie, so it adds no unstable surface. Priority 100 means
-# nothing pulls from it unless asked with `-t trixie-backports`.
+# is rebuilt against trixie, so it adds no unstable surface. The blanket pin
+# keeps backports at priority 100; a scoped allow-pin then raises only the Rust
+# toolchain so it installs by name (no `-t`, which would drag the backports
+# libcurl/libnghttp3-9/libngtcp2-16 chain and break the trixie -dev packages).
 write_backports_sources() {
   local root="${1:-}"
+  if [[ -z "${root}" ]]; then
+    printf '[FATAL] %s: refusing to write apt sources with empty root (would hit host /etc)\n' \
+      "${FUNCNAME[0]}" >&2
+    return 1
+  fi
   mkdir -p "${root%/}/etc/apt/sources.list.d" \
     "${root%/}/etc/apt/preferences.d"
   cat >"${root%/}/etc/apt/sources.list.d/backports.sources" <<EOF
@@ -309,11 +467,24 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
   cat >"${root%/}/etc/apt/preferences.d/backports" <<'EOF'
 # Managed by hypr-deb: trixie-backports exists ONLY to supply a Rust toolchain
-# (cargo/rustc) new enough for swww. Priority 100 = never auto-upgrade; used
-# only when requested with `-t trixie-backports`.
+# (cargo/rustc) new enough for swww. Backports is NotAutomatic, so it already
+# defaults to priority 100; this pin makes that explicit.
 Package: *
-Pin: release a=trixie-backports
+Pin: release n=trixie-backports
 Pin-Priority: 100
+EOF
+  cat >"${root%/}/etc/apt/preferences.d/backports-rust-allow" <<'EOF'
+# Managed by hypr-deb: raise ONLY the Rust toolchain above the blanket
+# backports pin so `apt-get install cargo` (no -t) pulls cargo/rustc >= 1.90
+# from backports. NOTE the codename selector n=trixie-backports: the backports
+# archive identifies as a=stable-backports, so a=trixie-backports would NOT
+# match and the pin would silently fail (leaving cargo on trixie's too-old
+# 1.85). cargo needs only libcurl4t64 (>= 7.28.0) which trixie satisfies, so
+# the backports libcurl/libnghttp3-9/libngtcp2-16 are never pulled and the
+# trixie *-dev packages resolve cleanly.
+Package: cargo rustc rust-llvm libstd-rust-dev libstd-rust-*
+Pin: release n=trixie-backports
+Pin-Priority: 500
 EOF
 }
 # Filled by the hyprland phase: name -> resolved tag.
@@ -325,7 +496,7 @@ declare -A HYPR_RESOLVED_TAG=()
 HYPR_BUILD_PACKAGES=(
   build-essential cmake meson ninja-build pkg-config git
   wayland-protocols libwayland-dev libxkbcommon-dev libinput-dev
-  libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev
+  libdrm-dev libgbm-dev libegl-dev libgles2-mesa-dev libvulkan-dev hwdata
   glslang-tools glslang-dev libudev-dev libseat-dev libdisplay-info-dev
   libliftoff-dev libcairo2-dev libpango1.0-dev librsvg2-dev
   libmagic-dev libzip-dev libtomlplusplus-dev scdoc
@@ -353,14 +524,27 @@ HYPR_BUILD_PACKAGES=(
 ZFS_REPO_URL="${ZFS_REPO_URL:-https://github.com/openzfs/zfs}"
 ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
 
-# chezmoi (dotfile manager) is not in Debian; installed from its official .deb
-# (latest GitHub release) so the tool is present system-wide as
-# /usr/bin/chezmoi. The .deb asset embeds the version without the leading 'v'.
+# chezmoi (dotfile manager) is not in Debian; its official .deb is HARVESTED into
+# the offline pool at BUILD time (cache_populate_chezmoi) and apt-installed by
+# name OFFLINE at install time (install_chezmoi) — never fetched at install time.
+# The .deb asset embeds the version without the leading 'v'. CHEZMOI_VERSION pins
+# the harvested release deterministically (e.g. 2.62.0); empty resolves the
+# latest release tag at BUILD time only (the build host is online).
 CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
-# LythMono font: installed from its GitHub release (one zip of TTFs per
-# variant) into the system font path. Every variant family below is fetched —
-# the full set installed on the reference machine.
+CHEZMOI_VERSION="${CHEZMOI_VERSION:-}"
+# LythMono font: GitHub-only (one zip of TTFs per variant). The TTFs are
+# HARVESTED at BUILD time (harvest_lythmono_fonts) and EXTRACTED into the offline
+# store under LYTHMONO_STORE_SUBDIR, which iso-assemble grafts onto the ISO at
+# ${CACHE_REPO_DIR}/lythmono; install_lythmono_fonts copies them from there into
+# the system font path OFFLINE — no GitHub fetch at install time. Every variant
+# family below is harvested — the full set installed on the reference machine.
+# LYTHMONO_VERSION pins the release deterministically (e.g. 1.0.0); empty resolves
+# the latest tag at BUILD time only.
 LYTHMONO_REPO_URL="${LYTHMONO_REPO_URL:-https://github.com/tkirkland/LythMono}"
+LYTHMONO_VERSION="${LYTHMONO_VERSION:-}"
+LYTHMONO_TAG_PATTERN="${LYTHMONO_TAG_PATTERN:-^v?[0-9]+\.[0-9]+\.[0-9]+$}"
+# Subdir under the offline store root (CACHE_REPO_DIR) holding the extracted TTFs.
+LYTHMONO_STORE_SUBDIR="${LYTHMONO_STORE_SUBDIR:-lythmono}"
 LYTHMONO_VARIANTS=(
   LythMono LythMonoNerdFont
   LythMonoRound LythMonoRoundNerdFont
@@ -369,9 +553,17 @@ LYTHMONO_VARIANTS=(
   LythMonoTermRound LythMonoTermRoundNerdFont
   LythMonoTermSquare LythMonoTermSquareNerdFont
 )
-# Debian packages the upstream build replaces (skipped on networked
-# installs so we never dkms-build modules we immediately remove).
+# Debian packages the upstream build replaces (filtered out of the base set on
+# BOTH paths so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
+# Upstream OpenZFS metapackages installed by NAME on the OFFLINE path
+# (install_zfs_offline): the on-ISO pool carries them (built by build-iso
+# step_zfs), so the offline default ships the SAME upstream OpenZFS the online
+# source build produces — not Debian's 2.3.x. The online path builds these from
+# source instead (install_zfs_from_source).
+ZFS_UPSTREAM_PACKAGES=(
+  openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed
+)
 # Upstream's documented Debian build dependencies (native-deb targets).
 ZFS_BUILD_PACKAGES=(
   build-essential autoconf automake libtool gawk alien fakeroot dkms
@@ -422,14 +614,24 @@ FNKEY_PACKAGES=(
 # zfs-zed is pinned explicitly (normally only a Recommends of
 # zfsutils-linux): it is the daemon that reports device faults and scrub
 # results on the raidz1 pool.
+# ddcci-dkms/ddcutil/i2c-tools back external-display brightness (issue #66):
+# ddcci-dkms is a contrib DKMS package (contrib is already enabled) that builds
+# the ddcci backlight driver against linux-headers-amd64 (already present), the
+# same way zfs-dkms does — it is NOT source-replaced, so it stays out of
+# ZFS_DEBIAN_PACKAGES. It exposes external monitors as /sys/class/backlight nodes
+# (driven via brightnessctl over DDC/CI on the i2c bus); ddcutil/i2c-tools provide
+# the userspace DDC/CI tooling. The ddcci + i2c-dev modules are loaded by
+# configure_ddcci (40-system.sh) and the owner joins the i2c group in create_user.
 TARGET_BASE_PACKAGES=(
   linux-image-amd64 linux-headers-amd64 zfs-initramfs zfs-dkms zfsutils-linux
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
+  systemd-timesyncd
   console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
   grim slurp wf-recorder swappy wl-clipboard
+  ddcci-dkms ddcutil i2c-tools
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
   "${AUDIO_PACKAGES[@]}"
@@ -457,7 +659,9 @@ unset _addon_line
 # linux-headers-amd64 metapackage tracks the archive's NEWEST kernel, which
 # is often newer than a live ISO's running kernel — DKMS would then build
 # modules only for a kernel that isn't running and modprobe would fail.
-LIVE_KERNEL_HEADERS="linux-headers-$(uname -r)"
+# Overridable: the ISO builder (tools/build-iso.sh) runs on the operator's own
+# host, whose `uname -r` is NOT an archive kernel, so it pins the metapackage.
+LIVE_KERNEL_HEADERS="${LIVE_KERNEL_HEADERS:-linux-headers-$(uname -r)}"
 
 # Live-environment tools the preflight must be able to install offline.
 LIVE_TOOL_PACKAGES=(
@@ -471,6 +675,11 @@ ASSUME_YES="${ASSUME_YES:-0}"
 # --skip-cache: no offline cache is populated or embedded (saves several
 # GB — important in live sessions where CACHE_DIR is RAM-backed).
 SKIP_CACHE="${SKIP_CACHE:-0}"
+# --ntp: space-separated NTP servers written into the target's
+# systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
+# Empty (the default) leaves timesyncd on Debian's stock pool/DHCP behaviour;
+# the service is installed and enabled either way.
+NTP_SERVERS="${NTP_SERVERS:-}"
 # --autologin: greetd starts the Hyprland session directly as
 # TARGET_USERNAME on VT1 (no greeter, no console password). Default is the
 # tuigreet login prompt; ssh/sudo remain the authenticated paths either way.
@@ -481,6 +690,9 @@ HYPR_BUILD_JOBS="${HYPR_BUILD_JOBS:-}"
 FRESH="${FRESH:-0}"
 VERBOSE="${VERBOSE:-0}"
 OFFLINE="${OFFLINE:-0}"
+# --online: force network mode even when the on-ISO store is present (the
+# mirror is used instead of the offline default). Mirror of --offline.
+ONLINE="${ONLINE:-0}"
 BUILD_ON_FIRSTBOOT="${BUILD_ON_FIRSTBOOT:-0}"
 KEEP_BUILD_DEPS="${KEEP_BUILD_DEPS:-0}"
 NETWORK_AVAILABLE="" # set by preflight: 1 or 0

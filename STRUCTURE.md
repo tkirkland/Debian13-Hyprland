@@ -16,15 +16,23 @@ lib/03-state.sh             resumable phase stamps (/run/hypr-deb/state).
 lib/04-chroot-mounts.sh     bind-mount tracking, in_target, holder kills.
 scripts/00-preflight.sh     virt detection, disk selection, tool
                             bootstrap, identity validation, network probe.
-scripts/10-cache.sh         offline apt repo + source/ZBM caching.
+scripts/10-cache.sh         offline apt repo: build-host populate/index
+                            (incl. the both-flavor NVIDIA driver closure,
+                            branches 595+610) + install-time validate
+                            (cache_validate gates the on-ISO repo at
+                            CACHE_REPO_DIR, incl. the NVIDIA debs).
 scripts/20-storage.sh       wipe, partitioning, mdadm arrays, ZFS pool +
                             datasets, failure diagnostics.
-scripts/30-bootstrap.sh     pool/ESP mounts, debootstrap, policy-rc.d
-                            guard, cache embed, target apt sources.
+scripts/30-bootstrap.sh     pool/ESP mounts, debootstrap (mirror, or file://
+                            the on-ISO repo when offline), policy-rc.d guard,
+                            permanent Debian apt sources, and the TEMPORARY
+                            file:// bind+source for the offline stack install.
 scripts/40-system.sh        base packages, locale/tz, fstab/mdadm.conf,
                             user creation, OpenZFS-from-source build,
                             ZFS boot support (hostid, cachefile,
                             initramfs); MOK keypair generation;
+                            conditional offline NVIDIA driver install
+                            (open|proprietary, branch-pinned, dkms-built);
                             ZFS firstboot upgrade staging (firstboot.d/).
 scripts/50-boot.sh          one bootloader (zbm|grub|systemd-boot) on the
                             RAID1 ESP, NVRAM entries, kernel-sync hook;
@@ -37,6 +45,17 @@ scripts/99-cleanup.sh       teardown: binds, ESP, pool export.
 addons/                     drop-in vendor .deb/.run artifacts and
                             package lists (see below).
 tests/                      fake-driven test suites + run-all.sh.
+tools/build-iso.sh          build-host entry point: compile the stack to
+                            .debs, build OpenZFS, index the offline repo, and
+                            repack a self-sufficient ISO (installer + store
+                            under /opt/hypr-deb). Dry-run by default; --confirm
+                            builds. Set LIVE_AUTOINSTALL_PASSWORD to emit the
+                            unattended ~/autoinstall.sh launcher in the ISO.
+tools/iso-assemble.sh       graft the offline store + installer into the live
+                            squashfs under /opt/hypr-deb, bake live extras
+                            (git + ssh, sshd enabled on boot), drop
+                            ~/installer.sh (interactive) and ~/autoinstall.sh
+                            (unattended) in the live home, then xorriso-repack.
 tools/check.sh              bash -n + shellcheck gate.
 docs/superpowers/           original design spec and implementation plan.
 ```

@@ -12,6 +12,21 @@ mount_chroot_binds() {
   local t="${TARGET}"
   mkdir -p "${t}/dev" "${t}/dev/pts" "${t}/proc" "${t}/sys" "${t}/run"
 
+  # Isolate mount propagation before binding shared host filesystems in.
+  # /run, /dev and /sys are `shared` mounts, and the target tree shares a
+  # propagation lineage with /, so a plain `mount --bind /run ${t}/run`
+  # propagates BACK and stacks a second /run tmpfs over the host's own /run.
+  # That shadow hides the iso9660 live medium — and the offline package store
+  # mounted under /run/live/medium — for the rest of the run, which makes the
+  # offline bootstrap abort with "package store missing". Making the target
+  # subtree a slave mount first (the arch-chroot approach) lets propagation flow
+  # host->target only, never back onto the host. Idempotent: mount_chroot_binds
+  # runs twice (ensure_target_ready + phase_bootstrap). The ISO builder path
+  # (HYPR_PRIVATE_RUN=1, fresh tmpfs /run) is unaffected but equally safe.
+  if mountpoint -q "${t}"; then
+    mount --make-rslave "${t}" || fatal "Failed to make ${t} a slave mount"
+  fi
+
   mount --bind /dev "${t}/dev" || fatal "Failed to bind-mount ${t}/dev"
   track_mount "${t}/dev"
   mount --bind /dev/pts "${t}/dev/pts" || fatal "Failed to bind-mount ${t}/dev/pts"
@@ -20,9 +35,24 @@ mount_chroot_binds() {
   track_mount "${t}/proc"
   mount -t sysfs sysfs "${t}/sys" || fatal "Failed to mount ${t}/sys"
   track_mount "${t}/sys"
-  mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
+  # HYPR_PRIVATE_RUN=1 (set by the ISO builder) mounts a fresh tmpfs at /run
+  # instead of bind-mounting the host's live /run. Host /run carries the real
+  # systemd (/run/systemd/private) and D-Bus sockets; a package maintainer
+  # script that calls systemctl/dbus-send DIRECTLY would otherwise reach the
+  # host's PID 1 even with policy-rc.d in place (policy-rc.d only covers
+  # invoke-rc.d/deb-systemd-invoke). A private tmpfs has no host sockets, so no
+  # in-chroot process can touch host services. The installer leaves this unset
+  # and keeps the bind (it runs inside the disposable live ISO, not the user OS).
+  if ((${HYPR_PRIVATE_RUN:-0})); then
+    mount -t tmpfs tmpfs "${t}/run" || fatal "Failed to mount tmpfs ${t}/run"
+  else
+    mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
+  fi
   track_mount "${t}/run"
-  if [[ -d /sys/firmware/efi/efivars ]]; then
+  # The ISO builder (HYPR_PRIVATE_RUN=1) never installs a bootloader into the
+  # buildroot, so it must NOT expose host EFI NVRAM (a writable host-mutation
+  # surface). Only the installer (flag unset) binds efivars, where it is needed.
+  if ((${HYPR_PRIVATE_RUN:-0} == 0)) && [[ -d /sys/firmware/efi/efivars ]]; then
     mount --bind /sys/firmware/efi/efivars "${t}/sys/firmware/efi/efivars" ||
       fatal "Failed to bind-mount ${t}/sys/firmware/efi/efivars"
     track_mount "${t}/sys/firmware/efi/efivars"
@@ -56,6 +86,11 @@ in_target() {
 kill_target_processes() {
   command -v fuser >/dev/null 2>&1 || return 0
   mountpoint -q "${TARGET}" 2>/dev/null || return 0
+  # Only ever fuser-kill a real ZFS ${TARGET} (the chroot). When ${TARGET} is
+  # merely the propagation self-bind (a bind of the host root; see
+  # isolate_target_propagation in scripts/30-bootstrap.sh), fuser -M -m would
+  # target the HOST filesystem and -k would kill live-system processes.
+  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] || return 0
   if fuser -k -M -m "${TARGET}" 2>/dev/null; then
     warn "Killed processes still using ${TARGET} before teardown."
     sleep 1

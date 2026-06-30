@@ -36,10 +36,32 @@ assert_contains "${out}" \
 assert_fails "no legacy deb lines in sources.list" \
   grep -q '^deb ' "${tmp}/target/etc/apt/sources.list"
 
+# The PERMANENT installed-system source is always the Debian mirror — even
+# offline — so future online apt updates work. The on-ISO store is ISO-only and
+# never becomes a permanent file:// source in the target.
 out="$(gen 0)"
-assert_contains "${out}" "URIs: file:///var/cache/hypr-deb/repo" \
-  "offline URI points at the embedded cache repo"
-assert_contains "${out}" "Trusted: yes" "offline cache repo trusted"
+assert_contains "${out}" "URIs: http://deb.debian.org/debian" \
+  "offline permanent target source is the Debian mirror"
+if [[ "${out}" == *"file://"* ]]; then
+  echo "  FAIL: permanent target source must not carry a file:// cache repo" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: permanent target source carries no file:// cache repo"
+fi
+
+# Offline install resolves packages through a TEMPORARY trusted file:// source
+# pointing at the in-target bind path (/run/hypr-repo).
+bash -c "
+  source lib/00-config.sh
+  source lib/01-log.sh
+  source scripts/30-bootstrap.sh
+  TARGET='${tmp}/target'
+  write_iso_temp_source
+"
+temp_out="$(cat "${tmp}/target/etc/apt/sources.list.d/hypr-iso-temp.sources")"
+assert_contains "${temp_out}" "URIs: file:///run/hypr-repo" \
+  "offline temp source points at the in-target bind path"
+assert_contains "${temp_out}" "Trusted: yes" "offline temp source trusted"
 
 # Pinned sid toolchain source: suite sid, priority 100 (only used where
 # trixie has no candidate, e.g. gcc-15).
@@ -86,11 +108,7 @@ assert_contains "${cleanup_body}" \
   "cleanup removes the sid toolchain pin"
 assert_contains "${cleanup_body}" "kill_target_processes" \
   "cleanup kills chroot-holding processes before teardown"
-if [[ "${out}" == *"deb.debian.org"* ]]; then
-  echo "  FAIL: offline regen must remove the online debian.sources" >&2
-  TEST_FAILURES=$((TEST_FAILURES + 1))
-else
-  echo "  ok: offline regen removes the online debian.sources"
-fi
+assert_contains "${cleanup_body}" "teardown_target_iso_repo" \
+  "cleanup removes the offline temp source and repo bind"
 
 finish_test

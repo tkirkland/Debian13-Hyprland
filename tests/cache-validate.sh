@@ -7,37 +7,93 @@ echo "test: cache validation"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
+# cache_validate gates on CACHE_REPO_DIR — the on-ISO store path when booted
+# from our offline ISO (preflight points it at ISO_MEDIUM_REPO). Pre-seed the
+# env so config's ${CACHE_REPO_DIR:-...} default picks it up, exactly as
+# preflight does at install time.
 run_validate() {
-  bash -c "
+  CACHE_REPO_DIR="${tmp}/repo" bash -c '
     source lib/00-config.sh
     source lib/01-log.sh
     source scripts/10-cache.sh
-    CACHE_DIR='${tmp}/cache'
     cache_validate
-  "
+  '
 }
 
-# Empty cache -> fails listing what's missing.
+# Empty repo -> fails, naming the missing index (no source/ZBM contract now).
 out="$(run_validate 2>&1 || true)"
-assert_contains "${out}" "repo index" "missing repo reported"
-assert_contains "${out}" "sources manifest" "missing manifest reported"
-assert_fails "empty cache fails validation" run_validate
+assert_contains "${out}" "repo index" "missing repo index reported"
+assert_fails "empty repo fails validation" run_validate
 
-# Minimal complete cache -> passes.
-mkdir -p "${tmp}/cache/repo/dists/trixie/main/binary-amd64" \
-  "${tmp}/cache/repo/pool" "${tmp}/cache/sources"
-touch "${tmp}/cache/repo/dists/trixie/Release"
-printf 'Filename: pool/fake_1.0_amd64.deb\n' \
-  >"${tmp}/cache/repo/dists/trixie/main/binary-amd64/Packages"
-touch "${tmp}/cache/repo/pool/fake_1.0_amd64.deb"
-printf 'hyprland v0.50.1\n' >"${tmp}/cache/sources/MANIFEST"
-touch "${tmp}/cache/sources/hyprland-v0.50.1.tar.gz"
-touch "${tmp}/cache/zfsbootmenu.EFI"
+# Minimal complete repo (dists + Release + every pooled deb present) -> passes.
+# The offline contract also requires the NVIDIA driver debs (both flavors and
+# branches) plus cuda-keyring, so seed a stanza + pooled file for each.
+pkgindex="${tmp}/repo/dists/trixie/main/binary-amd64/Packages"
+mkdir -p "${tmp}/repo/dists/trixie/main/binary-amd64" "${tmp}/repo/pool"
+touch "${tmp}/repo/dists/trixie/Release"
+seed_pkg() {
+  printf 'Package: %s\nFilename: pool/%s.deb\n\n' "$1" "$1" >>"${pkgindex}"
+  touch "${tmp}/repo/pool/$1.deb"
+}
+: >"${pkgindex}"
+seed_pkg fake
+# chezmoi is harvested into the pool on every populate path and installed offline
+# by name, so the offline contract requires it indexed.
+seed_pkg chezmoi
+for nv in cuda-keyring \
+  nvidia-open nvidia-kernel-open-dkms \
+  nvidia-driver nvidia-kernel-dkms \
+  nvidia-driver-pinning-595 nvidia-driver-pinning-610; do
+  seed_pkg "${nv}"
+done
+# The offline path also installs the upstream OpenZFS debs by name from the pool
+# (install_zfs_offline), so the offline contract requires them indexed too.
+# run_validate leaves NETWORK_AVAILABLE empty (= offline), so they are asserted.
+for z in openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed; do
+  seed_pkg "${z}"
+done
 out="$(run_validate)"
-assert_contains "${out}" "Cache valid" "complete cache passes"
+assert_contains "${out}" "Cache repo valid" "complete repo passes (offline contract)"
 
-# Manifest references a missing tarball -> fails.
-printf 'hyprutils v0.8.2\n' >>"${tmp}/cache/sources/MANIFEST"
-assert_fails "missing source tarball fails validation" run_validate
+# Gating: the upstream OpenZFS assertion fires ONLY offline. With the openzfs
+# debs removed from the index, the OFFLINE validate must fail naming them, but
+# the ONLINE validate (which builds zfs from source, never from the pool) passes.
+zfsless="${tmp}/zfsless"
+mkdir -p "${zfsless}/dists/trixie/main/binary-amd64" "${zfsless}/pool"
+touch "${zfsless}/dists/trixie/Release"
+zi="${zfsless}/dists/trixie/main/binary-amd64/Packages"
+: >"${zi}"
+for pk in fake chezmoi cuda-keyring \
+  nvidia-open nvidia-kernel-open-dkms nvidia-driver nvidia-kernel-dkms \
+  nvidia-driver-pinning-595 nvidia-driver-pinning-610; do
+  printf 'Package: %s\nFilename: pool/%s.deb\n\n' "${pk}" "${pk}" >>"${zi}"
+  touch "${zfsless}/pool/${pk}.deb"
+done
+out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
+  NETWORK_AVAILABLE=0; cache_validate' 2>&1 || true)"
+assert_contains "${out}" "upstream OpenZFS deb missing" "offline requires upstream OpenZFS debs"
+out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
+  NETWORK_AVAILABLE=1; cache_validate' 2>&1 || true)"
+assert_contains "${out}" "Cache repo valid" "online validate does not require pooled OpenZFS"
+
+# Missing NVIDIA debs -> fails the offline contract.
+nv_only="${tmp}/nvonly"
+mkdir -p "${nv_only}/dists/trixie/main/binary-amd64" "${nv_only}/pool"
+touch "${nv_only}/dists/trixie/Release"
+printf 'Package: fake\nFilename: pool/fake.deb\n\n' \
+  >"${nv_only}/dists/trixie/main/binary-amd64/Packages"
+touch "${nv_only}/pool/fake.deb"
+out="$(CACHE_REPO_DIR="${nv_only}" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
+  cache_validate' 2>&1 || true)"
+assert_contains "${out}" "NVIDIA driver deb missing" "missing NVIDIA debs reported"
+
+# Packages references a deb missing from the pool -> fails.
+printf 'Filename: pool/gone_2.0_amd64.deb\n' >>"${pkgindex}"
+out="$(run_validate 2>&1 || true)"
+assert_contains "${out}" "deb missing from pool" "missing pooled deb reported"
+assert_fails "missing pooled deb fails validation" run_validate
 
 finish_test

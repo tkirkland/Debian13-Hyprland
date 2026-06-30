@@ -11,6 +11,10 @@ phase_cleanup() {
       "${TARGET}/etc/apt/sources.list.d/sid-toolchain.sources" \
       "${TARGET}/etc/apt/preferences.d/sid-toolchain"
   fi
+  # Remove the temporary offline file:// source and unmount the on-ISO repo
+  # bind (no-op online / when already torn down). Must run before
+  # teardown_chroot_binds unmounts /run, under which the repo is bound.
+  teardown_target_iso_repo
   kill_target_processes
   teardown_chroot_binds
   if mountpoint -q "${TARGET}${ESP_MOUNT}" 2>/dev/null; then
@@ -23,5 +27,8 @@ phase_cleanup() {
       report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
     fi
   fi
+  # Remove the mount-propagation self-bind now that the datasets are unmounted
+  # and the pool exported (no-op when isolation was never set up).
+  release_target_propagation
   info "Cleanup done. Remove the live medium and reboot."
 }

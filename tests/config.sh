@@ -22,8 +22,25 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww hypr-dim uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
+
+# hypr-dim (external-display gamma brightness daemon, issue #66) builds from
+# source like swww, after it and before uwsm.
+out="$(bash -c 'source lib/00-config.sh; printf "%s\n" "${HYPR_BUILD_ORDER[@]}"')"
+assert_contains "${out}" "hypr-dim" "hypr-dim in the build order (issue #66)"
+
+# Its source URL defaults to the tkirkland repo and is overridable.
+out="$(bash -c 'source lib/00-config.sh; echo "${HYPRDIM_REPO_URL}"')"
+assert_eq "https://github.com/tkirkland/hypr-dim" "${out}" \
+  "HYPRDIM_REPO_URL default (tkirkland/hypr-dim)"
+out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_REPO_URL[hypr-dim]}"')"
+assert_eq "https://github.com/tkirkland/hypr-dim" "${out}" \
+  "hypr-dim build-order entry maps to its repo URL"
+out="$(HYPRDIM_REPO_URL=https://example.invalid/fork bash -c \
+  'source lib/00-config.sh; echo "${HYPR_REPO_URL[hypr-dim]}"')"
+assert_eq "https://example.invalid/fork" "${out}" \
+  "HYPRDIM_REPO_URL env override flows into the repo map"
 
 # Every build-order entry must map to a repo URL. Guards against assoc-array
 # key mangling (a formatter once rewrote [hyprland-protocols] with spaces).
@@ -59,6 +76,24 @@ assert_contains "${out}" "brightnessctl"  "brightness key binary in base set"
 # brightness keys are dead (issue #48).
 assert_contains "${out}" "brightness-udev" "brightness udev-rule package in base set (issue #48)"
 assert_contains "${out}" "playerctl"      "media key binary in base set"
+# External-display brightness over DDC/CI (issue #66): ddcci-dkms builds the
+# ddcci backlight driver (contrib DKMS, like zfs-dkms, against the headers
+# already in the base set); ddcutil/i2c-tools provide the DDC/CI userspace.
+assert_contains "${out}" "ddcci-dkms" "ddcci DKMS driver in base set (issue #66)"
+assert_contains "${out}" "ddcutil"    "ddcutil DDC/CI tool in base set (issue #66)"
+assert_contains "${out}" "i2c-tools"  "i2c-tools in base set (issue #66)"
+# ddcci-dkms is a DKMS build (like zfs-dkms), NOT a source-replaced package, so
+# it must never appear in ZFS_DEBIAN_PACKAGES (the set the upstream zfs build
+# purges) — otherwise it would be wrongly removed.
+out_zfs="$(bash -c 'source lib/00-config.sh; printf "%s\n" "${ZFS_DEBIAN_PACKAGES[@]}"')"
+if printf '%s\n' "${out_zfs}" | grep -qx 'ddcci-dkms'; then
+  echo "  FAIL: ddcci-dkms must not be in ZFS_DEBIAN_PACKAGES" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: ddcci-dkms stays out of the zfs source-replace purge set"
+fi
+assert_contains "${out}" "systemd-timesyncd" \
+  "NTP client in base set so the installed clock stays disciplined"
 
 # addons/*.list files are appended to the target package set (comments
 # and whitespace stripped); the .sample template must NOT load.
@@ -93,5 +128,70 @@ out="$(bash -c 'source lib/00-config.sh
   printf "%s\n" "${ZFS_BUILD_PACKAGES[@]}"')"
 assert_contains "${out}" "lsb-release" \
   "zfs build deps include lsb-release (openzfs Build-Depends)"
+
+source lib/00-config.sh
+assert_eq "amd64" "${ARCH}" "ARCH is amd64"
+[[ -n "${HYPR_DEB_DEPENDS[swww]+x}" ]] && echo "  ok: swww Depends declared" \
+  || { echo "  FAIL: HYPR_DEB_DEPENDS[swww] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+
+# Source-compiled wayland/xkbcommon own /usr with Debian's soname paths, so they
+# must Provides/Conflicts/Replaces the Debian library packages.
+[[ -n "${HYPR_DEB_PROVIDES[wayland]+x}" ]] && echo "  ok: wayland Provides declared" \
+  || { echo "  FAIL: HYPR_DEB_PROVIDES[wayland] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+[[ -n "${HYPR_DEB_CONFLICTS[xkbcommon]+x}" ]] && echo "  ok: xkbcommon Conflicts declared" \
+  || { echo "  FAIL: HYPR_DEB_CONFLICTS[xkbcommon] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+
+# --- NVIDIA driver: both flavors from the NVIDIA CUDA repo (Phase 5) ----------
+# Branch defaults to the production/certified 595; overridable via env.
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_BRANCH}"')"
+assert_eq "595" "${out}" "NVIDIA_BRANCH defaults to 595 (production/certified)"
+out="$(NVIDIA_BRANCH=610 bash -c 'source lib/00-config.sh; echo "${NVIDIA_BRANCH}"')"
+assert_eq "610" "${out}" "NVIDIA_BRANCH overridable to 610 (newer branch)"
+
+# Flat CUDA repo URL + keyring deb derived from it; both overridable.
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_REPO_URL}"')"
+assert_eq "https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/" \
+  "${out}" "NVIDIA_REPO_URL default (flat CUDA debian13 repo)"
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_REPO_KEYRING_URL}"')"
+assert_eq "https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb" \
+  "${out}" "NVIDIA_REPO_KEYRING_URL derives from the repo URL"
+out="$(NVIDIA_REPO_URL=file:///hypr-repo/ bash -c \
+  'source lib/00-config.sh; echo "${NVIDIA_REPO_KEYRING_URL}"')"
+assert_eq "file:///hypr-repo/cuda-keyring_1.1-1_all.deb" "${out}" \
+  "keyring URL follows an overridden NVIDIA_REPO_URL"
+
+# Branch-pinning package per branch (exact research names).
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_PINNING_PACKAGE[595]}"')"
+assert_eq "nvidia-driver-pinning-595" "${out}" "595 branch-pinning package"
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_PINNING_PACKAGE[610]}"')"
+assert_eq "nvidia-driver-pinning-610" "${out}" "610 branch-pinning package"
+
+# Flavor package sets.
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_OPEN_PACKAGES[*]}"')"
+assert_eq "nvidia-open nvidia-kernel-open-dkms" "${out}" \
+  "open flavor = nvidia-open + nvidia-kernel-open-dkms"
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_PROP_PACKAGES[*]}"')"
+assert_eq "nvidia-driver nvidia-kernel-dkms" "${out}" \
+  "proprietary flavor = nvidia-driver + nvidia-kernel-dkms (NVIDIA repo, not Debian non-free)"
+
+# Shared userspace is resolved by apt per-flavor, NOT force-listed (force-listing
+# nvidia-suspend-common / nvidia-kernel-common broke the download resolution
+# because nvidia-driver / nvidia-kernel-support Conflict them). Only the
+# conflict-free firmware hard dep is listed explicitly for the offline pool.
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_FIRMWARE_PACKAGES[*]}"')"
+assert_eq "firmware-nvidia-gsp" "${out}" \
+  "explicit pool firmware = firmware-nvidia-gsp (dkms hard dep, conflict-free)"
+# The retired over-broad shared array must be gone (it Conflicted the driver).
+out="$(bash -c 'source lib/00-config.sh; echo "${NVIDIA_SHARED_PACKAGES[*]:-UNSET}"')"
+assert_eq "UNSET" "${out}" \
+  "over-broad NVIDIA_SHARED_PACKAGES removed (conflicted nvidia-driver)"
+
+# The retired Debian non-free "debian" flavor must be gone from the docs/config.
+if grep -qE '^\s*#.*\bdebian\b.*non-free nvidia-driver' lib/00-config.sh; then
+  echo "  FAIL: retired 'debian' non-free NVIDIA option still documented" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: Debian non-free 'debian' NVIDIA flavor retired"
+fi
 
 finish_test
