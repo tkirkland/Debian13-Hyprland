@@ -101,6 +101,14 @@ ensure_mok_key() {
   info "Generated MOK signing keypair at ${MOK_KEY}."
 }
 
+# Echo this machine's CPU vendor_id from /proc/cpuinfo (GenuineIntel /
+# AuthenticAMD), or empty if unknown. The installer runs on the real target
+# hardware, so this reflects the CPU the microcode is being chosen for. Split
+# out so the microcode selection in install_base_packages is unit-testable.
+detect_cpu_vendor() {
+  grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $NF}'
+}
+
 install_base_packages() {
   local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
   # VMware guest integration (display resize, clipboard, time sync,
@@ -121,6 +129,24 @@ install_base_packages() {
     filtered+=("${p}")
   done
   pkgs=("${filtered[@]}")
+  # Microcode is CPU-vendor-specific: the other vendor's blob is dead weight on
+  # the installed system. Install ONLY the microcode matching this CPU. BOTH debs
+  # stay in the offline pool (TARGET_BASE_PACKAGES is unchanged, so the ISO still
+  # supports either CPU) — only the INSTALL set is filtered here. Unknown vendor
+  # keeps both (no regression: every CPU still gets its microcode offline).
+  local drop=""
+  case "$(detect_cpu_vendor)" in
+    GenuineIntel) drop="amd64-microcode" ;;
+    AuthenticAMD) drop="intel-microcode" ;;
+  esac
+  if [[ -n "${drop}" ]]; then
+    filtered=()
+    for p in "${pkgs[@]}"; do
+      [[ "${p}" == "${drop}" ]] && continue
+      filtered+=("${p}")
+    done
+    pkgs=("${filtered[@]}")
+  fi
   # man-db re-indexes every installed man page on each apt transaction's
   # trigger phase — there are ~10 transactions across the install, minutes
   # of CPU on bare metal. Disable its auto-update for the chroot's lifetime
@@ -207,6 +233,11 @@ install_zfs_from_source() {
   local zfs_script="
     set -e
     export DEBIAN_FRONTEND=noninteractive
+    # native-deb-utils drives dpkg-buildpackage/debhelper, which generates and
+    # then discards -dbgsym debs. noautodbgsym tells dh_strip not to produce them
+    # at all (build-time waste). It only suppresses auto -dbgsym packages, so the
+    # required openzfs-* debs asserted below are unaffected.
+    export DEB_BUILD_OPTIONS=noautodbgsym
     # Drop any live-kernel modules package from an earlier failed attempt.
     if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
       apt-get purge -y 'openzfs-zfs-modules-*'
