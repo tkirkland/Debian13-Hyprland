@@ -99,6 +99,14 @@ BUILD_STAGE_REL="${BUILD_STAGE_REL:-/var/tmp/hypr-stage}"
 # on it to clone sources and add the sid/backports toolchain over the network.
 export NETWORK_AVAILABLE=1
 
+# xdph (xdg-desktop-portal-hyprland) — OPTIONAL source-built screencast backend
+# (Option B). Its component name (XDPH_COMPONENT), repo-URL entry in HYPR_REPO_URL,
+# and Qt6/PipeWire build-deps (qt6-base-dev, libpipewire-0.3-dev, libspa-0.2-dev)
+# are all defined in lib/00-config.sh, sourced above — deliberately OUT of
+# HYPR_BUILD_ORDER so an xdph failure can never strand uwsm (the #64 regression).
+# This file only adds the guarded step_build_portal (below) that compiles it into
+# a pooled .deb, and the step_depsim gate; nothing to redefine here.
+
 # --- Testable seam: print the resolved plan, mutate nothing ------------------
 plan_summary() {
   cat <<EOF
@@ -225,6 +233,42 @@ step_build_stack() {
   done
 }
 
+# 3b) Build the OPTIONAL xdg-desktop-portal-hyprland (xdph) screencast backend
+#    into a pooled .deb. Mirrors ONE iteration of step_build_stack's body (resolve
+#    tag -> stage source -> build_one with a chroot-internal HYPR_DESTDIR ->
+#    package_to_deb into the pool), but the ENTIRE body runs in a guarded subshell
+#    so any failure is NON-FATAL and cannot abort the ISO build: on failure we warn
+#    and return 0, leaving the always-installed packaged wlr backend + static
+#    routing conf as the guarantee. Runs AFTER step_build_stack so xdph links the
+#    freshly source-built hypr* libs already copied into the buildroot /usr (no ABI
+#    mismatch), and BEFORE step_runtime_closure so that pass scans the xdph deb and
+#    pools its declared Qt6/PipeWire/sdbus-c++ runtime closure. xdph is NOT copied
+#    into the buildroot /usr afterward (nothing else builds against it) and is NOT
+#    verified — it is best-effort by design.
+step_build_portal() {
+  local name="${XDPH_COMPONENT}" tag debver stagerel
+  (
+    set -e
+    tag="$(resolve_latest_release_tag \
+      "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
+    debver="$(tag_to_debver "${tag}")"
+    if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
+      stagerel="${BUILD_STAGE_REL}/${name}"
+      rm -rf "${TARGET}${stagerel}"
+      mkdir -p "${TARGET}${stagerel}"
+      # shellcheck disable=SC2034  # consumed by stage_source/build_one via 60-hyprland.sh
+      HYPR_RESOLVED_TAG["${name}"]="${tag}"
+      stage_source "${name}"
+      HYPR_DESTDIR="${stagerel}" build_one "${name}"
+      package_to_deb "${TARGET}${stagerel}" "${name}" "${debver}" \
+        "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${POOL}"
+    else
+      info "reuse cached ${name}"
+    fi
+  ) || warn "xdph build failed; packaged wlr fallback stands"
+  return 0
+}
+
 # 4) Build upstream OpenZFS as native debs into the pool. install_zfs_from_source
 #    lives in scripts/40-system.sh (not in the critical top-level source order);
 #    source it lazily so the chroot-backed in_target order is undisturbed.
@@ -314,6 +358,15 @@ step_depsim() {
   info "[build] simulating full install against the offline pool only"
   local simroot
   simroot="$(mktemp -d "${ISO_WORKSPACE}/depsim.XXXXXX")"
+  # xdph is OPTIONAL and may not have built, so only add it to the simulated
+  # install set when its .deb is actually pooled — otherwise apt-get --simulate
+  # would fail on an unknown package and abort an otherwise-complete build. When
+  # present, including it proves its Qt6/PipeWire/sdbus-c++ runtime closure also
+  # resolves fully offline. NOT added to HYPR_BUILD_ORDER (the must-succeed set).
+  local xdph_sim=""
+  if compgen -G "${POOL}/${XDPH_COMPONENT}_*.deb" >/dev/null; then
+    xdph_sim="${XDPH_COMPONENT}"
+  fi
   # Bootstrap the throwaway base DIRECTLY from the offline pool — ZERO network.
   # step_reindex (step 5) already wrote ${CACHE_DIR}/repo/dists/${SUITE}/{Release,
   # main/binary-${ARCH}/Packages}, and the base debs were pooled at step 1, so the
@@ -339,7 +392,7 @@ step_depsim() {
     set -e
     apt-get update -o APT::Get::List-Cleanup=0 >/dev/null
     DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y \
-      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]}
+      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]} ${xdph_sim}
   ")" && rc=0 || rc=$?
   # Unmount + remove the throwaway simroot now. The bind is also trap-tracked;
   # teardown_chroot_binds re-checks mountpoint, so this is not a double-unmount.
@@ -471,6 +524,7 @@ run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
   step_build_stack          # 3
+  step_build_portal         # 3b: OPTIONAL xdph screencast backend (non-fatal)
   step_zfs                  # 4
   step_runtime_closure      # 4.5: pool the runtime deps the built debs declare
   step_reindex              # 5

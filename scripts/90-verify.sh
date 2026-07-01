@@ -85,6 +85,29 @@ phase_verify() {
   vcheck "swaync style staged" test -f \
     "${TARGET}/home/${TARGET_USERNAME}/.config/swaync/style.css"
 
+  # Portal stack + polkit agent + file manager (issues #57, #67 items 3/4, #70).
+  # Staged unconditionally, so verified on both install paths. xdph is deliberately
+  # NOT asserted here — it is a best-effort optional backend; the packaged wlr
+  # backend (always installed) plus the static routing conf are the guarantee.
+  vcheck "xdg-desktop-portal + gtk + wlr installed" in_target \
+    "dpkg -s xdg-desktop-portal && dpkg -s xdg-desktop-portal-gtk && dpkg -s xdg-desktop-portal-wlr"
+  vcheck "wlr portal impl file present" test -f \
+    "${TARGET}/usr/share/xdg-desktop-portal/portals/wlr.portal"
+  vcheck "portal routing conf staged" test -f \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal/hyprland-portals.conf"
+  vcheck "portal routing prefers hyprland;wlr ScreenCast" \
+    grep -q 'ScreenCast=hyprland;wlr' \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal/hyprland-portals.conf"
+  vcheck "portal routing default is gtk" \
+    grep -q '^default=gtk' \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal/hyprland-portals.conf"
+  vcheck "dark-mode gschema override staged" test -f \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "lxpolkit installed" in_target "command -v lxpolkit"
+  vcheck "lxpolkit autostart present" test -f \
+    "${TARGET}/etc/xdg/autostart/lxpolkit.desktop"
+  vcheck "dolphin file manager installed" in_target "command -v dolphin"
+
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "systemd-timesyncd enabled" in_target "systemctl is-enabled systemd-timesyncd"
   vcheck "uwsm present" in_target "command -v uwsm"
