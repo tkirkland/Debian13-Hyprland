@@ -77,6 +77,14 @@ phase_verify() {
   vcheck "recording deps present (wf-recorder/notify-send/pactl)" in_target \
     "command -v wf-recorder && command -v notify-send && command -v pactl"
 
+  # swaync notification daemon + user config (epic #67, item 2). Package
+  # auto-enables swaync.service; config staged by stage_swaync_config.
+  vcheck "swaync installed" in_target "command -v swaync && command -v swaync-client"
+  vcheck "swaync config staged" test -f \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/swaync/config.json"
+  vcheck "swaync style staged" test -f \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/swaync/style.css"
+
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "systemd-timesyncd enabled" in_target "systemctl is-enabled systemd-timesyncd"
   vcheck "uwsm present" in_target "command -v uwsm"
