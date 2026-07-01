@@ -272,7 +272,7 @@ Common flags (see `--help` for the full list):
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
 `TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
-`HYPRDIM_REPO_URL` (source for the hypr-dim brightness daemon), and
+`HYPRDIM_REPO_URL` (source for the hyprdim brightness daemon), and
 more — see `lib/00-config.sh`.
 
 The installed system has time synchronization enabled by default: `systemd-timesyncd`
@@ -474,7 +474,7 @@ exposed as `/sys/class/backlight` nodes by the `ddcci-dkms` driver over DDC/CI
 (`ddcutil`/`i2c-tools` provide the DDC/CI tooling; the `ddcci` and `i2c-dev`
 kernel modules are auto-loaded via `/etc/modules-load.d/ddcci.conf`, and the
 owner joins the `i2c` group). Displays with no controllable backlight fall back
-to **gamma** dimming via **hypr-dim**, a small Rust daemon (D-Bus `dev.hyprdim`)
+to **gamma** dimming via **hyprdim**, a small Rust daemon (D-Bus `dev.hyprdim`)
 built from source like swww and run as a `graphical-session.target` user unit
 (`HYPRDIM_REPO_URL` overrides its source). There is no separate brightness flag:
 the subsystem is always installed and is a no-op on hardware with nothing to
@@ -488,8 +488,8 @@ Source policy:
   latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
   hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
-  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hypr-dim, then
-  UWSM. (swww and hypr-dim are Rust/cargo builds via custom hooks; the rest are
+  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hyprdim, then
+  UWSM. (swww and hyprdim are Rust/cargo builds via custom hooks; the rest are
   CMake/meson.)
 - **Compatibility gate:** Hyprland's CMake version requirements at the
   resolved tag are parsed, and every dependency's resolved tag must satisfy
