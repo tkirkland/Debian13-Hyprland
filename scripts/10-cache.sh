@@ -18,6 +18,30 @@ cache_repo_exists() {
   [[ -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
 }
 
+# Stable hash of the package sets that determine the pool's contents (the exact
+# arrays cache_populate_debs feeds to the closure apt-get). Sorted so reordering
+# does not invalidate the pool. Used to detect when the pool is stale because a
+# package was added/removed since it was last populated.
+cache_pkgset_hash() {
+  printf '%s\n' \
+    "${TARGET_BASE_PACKAGES[@]}" \
+    "${HYPR_BUILD_PACKAGES[@]}" \
+    "${LIVE_TOOL_PACKAGES[@]}" \
+    "${HYPR_TOOLCHAIN_PACKAGES[@]}" \
+    "${HYPR_BACKPORTS_PACKAGES[@]}" |
+    sort | sha256sum | awk '{print $1}'
+}
+
+# True only when the pool was stamped with the CURRENT package-set hash. A
+# missing stamp (a pre-stamp cache, or one populated before this guard existed)
+# reads as stale, so it is repopulated rather than silently reused — that reuse
+# was the "Unable to locate package" depsim failure this guard prevents.
+cache_pkgset_fresh() {
+  local stamp="${CACHE_DIR}/.pkgset.sha256"
+  [[ -f "${stamp}" ]] || return 1
+  [[ "$(cat "${stamp}")" == "$(cache_pkgset_hash)" ]]
+}
+
 # Configure apt (live env) to install from the cache repo only.
 install_from_cache_repo() {
   local list="/etc/apt/sources.list.d/hypr-deb-cache.list"
@@ -144,6 +168,10 @@ SRC
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"
+  # Stamp the pool with the package-set hash so a later build reuses it only
+  # while the sets are unchanged (cache_pkgset_fresh); adding/removing a package
+  # now invalidates it and forces a repopulate instead of a stale reuse.
+  cache_pkgset_hash >"${CACHE_DIR}/.pkgset.sha256"
   info "Pool populated: $(find "${pool}" -name '*.deb' | wc -l) packages"
 }
 

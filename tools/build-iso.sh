@@ -174,9 +174,13 @@ step_bootstrap_chroot() {
 
 # 2) Populate the offline .deb closure and index the file:// repo.
 step_cache() {
-  # Resume support: skip the ~minutes-long closure download if the cache repo's
-  # Packages index already exists (cache_repo_exists, from 10-cache.sh).
-  if cache_repo_exists; then
+  # Resume support: skip the ~minutes-long closure download only when the cache
+  # repo's Packages index exists AND was stamped with the current package sets
+  # (cache_pkgset_fresh, from 10-cache.sh). A stale pool — one populated before a
+  # package was added to TARGET_BASE_PACKAGES et al., or a pre-stamp cache with no
+  # stamp — is repopulated instead of silently reused, which is what caused
+  # step_depsim to fail with "Unable to locate package" for the newly-added names.
+  if cache_repo_exists && cache_pkgset_fresh; then
     info "[build] reusing existing .deb closure in ${CACHE_DIR} (skip download)"
   else
     info "[build] populating offline .deb cache in ${CACHE_DIR}"
