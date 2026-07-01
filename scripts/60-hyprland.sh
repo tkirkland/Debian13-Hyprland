@@ -962,8 +962,9 @@ EOF
   cat >"${sw_dir}/style.css" <<'EOF'
 /* swaync style — installer baseline (epic #67, item 2).
  * Matches the installer's window accent: 45deg #33ccff->#00ff99 gradient border
- * (as in hyprlock), dark card #1e1e2e / text #f5f5f5. GTK4 CSS cannot gradient a
- * rounded border-color, so the frame is a gradient background clipped to
+ * (as in hyprlock), dark card #1e1e2e / text #f5f5f5. GTK3 CSS (swaync links
+ * libgtk-3) cannot gradient a rounded border-color, so the frame is a gradient
+ * background clipped to
  * border-box behind a transparent 2px border, with the dark fill clipped to
  * padding-box. Card rounding 8px = window rounding + 2px border. */
 
