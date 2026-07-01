@@ -513,13 +513,17 @@ hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
 -- screen and while held. Issue #66.
 hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightness-sync up"),   { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightness-sync down"), { locked = true, repeating = true })
--- Screenshots (grim/slurp) and screen recording (wf-recorder), traditional
--- Print-key cluster. grimblast is not packaged in Debian, so bind the standard
--- tools directly. Region capture covers arbitrary windows.
-hl.bind("Print", hl.dsp.exec_cmd([[sh -c 'grim - | wl-copy']]))                              -- full screen -> clipboard
-hl.bind("SHIFT + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | wl-copy']]))        -- region -> clipboard
-hl.bind("SUPER + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | swappy -f -']]))    -- region -> annotate (swappy)
-hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd([[sh -c 'pkill -INT wf-recorder || wf-recorder -f "$HOME/recording-$(date +%s).mp4"']])) -- toggle recording
+-- Screenshots + screen recording (epic #67, item 1): the staged helper scripts
+-- linux-screenshot / linux-screen-record (in /usr/local/bin). They save
+-- timestamped files (~/Pictures/Screenshots, ~/Videos/Screen Recordings), copy
+-- to the clipboard, and hold an atomic lock so repeated presses don't stack
+-- selectors. Conventional Print cluster; the user's dotfiles override these.
+hl.bind("Print", hl.dsp.exec_cmd("linux-screenshot region"))               -- region -> file + clipboard
+hl.bind("SHIFT + Print", hl.dsp.exec_cmd("linux-screenshot monitor"))      -- monitor under pointer
+hl.bind("CTRL + Print", hl.dsp.exec_cmd("linux-screenshot full"))          -- all outputs
+hl.bind("SUPER + Print", hl.dsp.exec_cmd("linux-screenshot annotate"))     -- region -> swappy annotate
+hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd("linux-screen-record desktop")) -- toggle record (desktop audio)
+hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))     -- toggle record (microphone)
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
