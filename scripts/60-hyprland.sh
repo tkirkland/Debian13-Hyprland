@@ -1371,6 +1371,7 @@ HYPR_DIM_SERVICE
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypr-dim.service"
   write_hypr_lua_config
   stage_wallpapers
+  stage_capture_helpers
   in_target "
     set -e
     # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
