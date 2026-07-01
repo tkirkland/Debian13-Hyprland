@@ -961,12 +961,9 @@ stage_swaync_config() {
 EOF
   cat >"${sw_dir}/style.css" <<'EOF'
 /* swaync style — installer baseline (epic #67, item 2).
- * Matches the installer's window accent: 45deg #33ccff->#00ff99 gradient border
- * (as in hyprlock), dark card #1e1e2e / text #f5f5f5. GTK3 CSS (swaync links
- * libgtk-3) cannot gradient a rounded border-color, so the frame is a gradient
- * background clipped to
- * border-box behind a transparent 2px border, with the dark fill clipped to
- * padding-box. Card rounding 8px = window rounding + 2px border. */
+ * Solid #4a6f9a border (rgba 4a6f9aee), 1px, card radius 7 (window rounding 6 +
+ * 1px border); dark card #1e1e2e / text #f5f5f5. Kept identical to the live
+ * desktop's swaync config (chezmoi). swaync links libgtk-3. */
 
 @keyframes swaync-fadein {
   from { opacity: 0; }
@@ -979,13 +976,9 @@ EOF
 
 .notification {
   margin: 6px;
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-image:
-    linear-gradient(#1e1e2e, #1e1e2e),
-    linear-gradient(45deg, #33ccff, #00ff99);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
+  border-radius: 7px;
+  border: 1px solid #4a6f9a;
+  background-color: #1e1e2e;
   animation: swaync-fadein 200ms ease-in;
 }
 
@@ -1009,13 +1002,9 @@ EOF
 }
 
 .control-center {
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-image:
-    linear-gradient(#1e1e2e, #1e1e2e),
-    linear-gradient(45deg, #33ccff, #00ff99);
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
+  border-radius: 7px;
+  border: 1px solid #4a6f9a;
+  background-color: #1e1e2e;
 }
 
 .control-center .notification {
