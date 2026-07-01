@@ -902,6 +902,123 @@ EOF
   chmod +x "${TARGET}/usr/local/bin/linux-screen-record"
 }
 
+# Stage the swaync (sway-notification-center) config (epic #67, item 2). The
+# Debian package ships + auto-enables swaync.service via graphical-session.target
+# .wants, so this only writes the user config. Authored from linux-fixes/fixes.md
+# (no tracked original existed). style.css matches the installer's window accent
+# (#33ccff->#00ff99 45deg gradient, as in hyprlock); the chown -R in the Hyprland
+# phase gives the user ownership. Mako is intentionally never installed.
+stage_swaync_config() {
+  local sw_dir="${TARGET}/home/${TARGET_USERNAME}/.config/swaync"
+  install -d "${sw_dir}"
+  cat >"${sw_dir}/config.json" <<'EOF'
+{
+  "$schema": "/etc/xdg/swaync/configSchema.json",
+  "positionX": "right",
+  "positionY": "bottom",
+  "layer": "overlay",
+  "control-center-layer": "top",
+  "layer-shell": true,
+  "cssPriority": "application",
+  "timeout": 5,
+  "timeout-low": 5,
+  "timeout-critical": 0,
+  "fit-to-screen": true,
+  "control-center-width": 400,
+  "control-center-height": 600,
+  "notification-window-width": 400,
+  "keyboard-shortcuts": true,
+  "image-visibility": "when-available",
+  "transition-time": 200,
+  "hide-on-clear": false,
+  "hide-on-action": true,
+  "text-empty": "No Notifications",
+  "widgets": [
+    "title",
+    "dnd",
+    "mpris",
+    "notifications"
+  ],
+  "widget-config": {
+    "title": {
+      "text": "Notifications",
+      "clear-all-button": true,
+      "button-text": "Clear All"
+    },
+    "dnd": {
+      "text": "Do Not Disturb"
+    },
+    "mpris": {
+      "image-size": 96,
+      "image-radius": 8
+    }
+  }
+}
+EOF
+  cat >"${sw_dir}/style.css" <<'EOF'
+/* swaync style — installer baseline (epic #67, item 2).
+ * Matches the installer's window accent: 45deg #33ccff->#00ff99 gradient border
+ * (as in hyprlock), dark card #1e1e2e / text #f5f5f5. GTK4 CSS cannot gradient a
+ * rounded border-color, so the frame is a gradient background clipped to
+ * border-box behind a transparent 2px border, with the dark fill clipped to
+ * padding-box. Card rounding 8px = window rounding + 2px border. */
+
+@keyframes swaync-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.notification-row {
+  background: transparent;
+}
+
+.notification {
+  margin: 6px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-image:
+    linear-gradient(#1e1e2e, #1e1e2e),
+    linear-gradient(45deg, #33ccff, #00ff99);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  animation: swaync-fadein 200ms ease-in;
+}
+
+.notification.critical {
+  box-shadow: inset 0 0 0 1px #ff3355;
+}
+
+.notification-content {
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.notification .summary {
+  color: #f5f5f5;
+  font-weight: bold;
+}
+
+.notification .body,
+.notification .time {
+  color: #f5f5f5;
+}
+
+.control-center {
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-image:
+    linear-gradient(#1e1e2e, #1e1e2e),
+    linear-gradient(45deg, #33ccff, #00ff99);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+.control-center .notification {
+  margin: 6px;
+}
+EOF
+}
+
 configure_session() {
   info "Configuring greetd + uwsm session..."
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
