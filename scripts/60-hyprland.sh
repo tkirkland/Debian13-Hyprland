@@ -708,6 +708,196 @@ EOF
   chmod +x "${TARGET}/usr/local/bin/swww-cycle"
 }
 
+# Stage the screenshot/recording capture helpers (epic #67, item 1; verified on
+# the live box, recorded in linux-fixes/fixes.md). Bound to the Print cluster in
+# hypr-deb.lua. Both helpers self-create their output dirs and hold an atomic
+# selector lock so repeated key presses can't stack concurrent slurp overlays.
+# Deviations from the live copy: the record codec defaults to libx264 (software,
+# universal) instead of the live box's NVIDIA-only h264_nvenc — overridable via
+# SCREEN_RECORD_CODEC. Notifications need a daemon (swaync, #67 item 2); the
+# capture still saves the file without one.
+stage_capture_helpers() {
+  install -d "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/linux-screenshot" <<'EOF'
+#!/bin/sh
+set -eu
+
+mode=${1:-region}
+directory=${XDG_PICTURES_DIR:-"$HOME/Pictures"}/Screenshots
+timestamp=$(date +%Y-%m-%d_%H-%M-%S)
+output="$directory/screenshot_$timestamp.png"
+lock_directory=${XDG_RUNTIME_DIR:-/tmp}/linux-screenshot.lock
+raw=
+
+mkdir -p "$directory"
+
+if ! mkdir "$lock_directory" 2>/dev/null; then
+    exit 0
+fi
+
+cleanup() {
+    [ -z "$raw" ] || rm -f "$raw"
+    rmdir "$lock_directory" 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+cursor_monitor_box() {
+    # Logical box "X,Y WxH" (slurp coords) of the monitor under the pointer.
+    set -- $(hyprctl cursorpos 2>/dev/null | tr -d ',')
+    hyprctl monitors -j 2>/dev/null | jq -r --argjson x "${1:-0}" --argjson y "${2:-0}" '
+        .[] | select(.x <= $x and $x < (.x + .width / .scale)
+                 and .y <= $y and $y < (.y + .height / .scale))
+        | "\(.x),\(.y) \((.width / .scale)|floor)x\((.height / .scale)|floor)"' | head -n1
+}
+
+select_geometry() {
+    if [ -n "${SCREEN_CAPTURE_GEOMETRY:-}" ]; then
+        printf '%s\n' "$SCREEN_CAPTURE_GEOMETRY"
+        return
+    fi
+
+    box=$(cursor_monitor_box)
+    case $mode in
+        region|annotate)
+            # Free click-drag selection. slurp's overlay spans all outputs;
+            # it cannot confine a drawn region to one monitor.
+            slurp
+            ;;
+        monitor)
+            # Whole monitor under the pointer; no click needed.
+            printf '%s\n' "$box"
+            ;;
+        full)
+            printf '%s\n' ""
+            ;;
+        *)
+            printf 'Usage: %s {region|monitor|full|annotate}\n' "$0" >&2
+            exit 2
+            ;;
+    esac
+}
+
+geometry=$(select_geometry) || exit 0
+
+if [ "$mode" = annotate ]; then
+    raw=$(mktemp --suffix=.png)
+    grim -g "$geometry" "$raw"
+    swappy -f "$raw" -o "$output"
+    [ -s "$output" ] || exit 0
+else
+    if [ -n "$geometry" ]; then
+        grim -g "$geometry" "$output"
+    else
+        grim "$output"
+    fi
+fi
+
+wl-copy --type image/png < "$output"
+notify-send "Screenshot saved" "$output"
+EOF
+  chmod +x "${TARGET}/usr/local/bin/linux-screenshot"
+
+  cat >"${TARGET}/usr/local/bin/linux-screen-record" <<'EOF'
+#!/bin/sh
+set -eu
+
+mode=${1:-desktop}
+runtime=${XDG_RUNTIME_DIR:-/tmp}/linux-screen-record
+pid_file=$runtime/pid
+output_file=$runtime/output
+selection_lock=$runtime/selection.lock
+directory="${XDG_VIDEOS_DIR:-"$HOME/Videos"}/Screen Recordings"
+
+mkdir -p "$runtime" "$directory"
+
+stop_recording() {
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    output=$(cat "$output_file" 2>/dev/null || true)
+    command_line=
+
+    if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ]; then
+        command_line=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+    fi
+
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
+        printf '%s\n' "$command_line" | grep -q 'wf-recorder'; then
+        kill -INT "$pid"
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 0.1
+        done
+        notify-send "Screen recording saved" "$output"
+    else
+        notify-send "Screen recording" "Removed stale recorder state."
+    fi
+
+    rm -f "$pid_file" "$output_file"
+}
+
+if [ -f "$pid_file" ]; then
+    stop_recording
+    exit 0
+fi
+
+if ! mkdir "$selection_lock" 2>/dev/null; then
+    exit 0
+fi
+
+cleanup_selection() {
+    rmdir "$selection_lock" 2>/dev/null || true
+}
+trap cleanup_selection EXIT HUP INT TERM
+
+case $mode in
+    desktop)
+        sink=$(pactl get-default-sink)
+        audio_source=$sink.monitor
+        label="desktop audio"
+        ;;
+    mic)
+        audio_source=$(pactl get-default-source)
+        label="microphone"
+        ;;
+    *)
+        printf 'Usage: %s {desktop|mic}\n' "$0" >&2
+        exit 2
+        ;;
+esac
+
+if [ -n "${SCREEN_CAPTURE_GEOMETRY:-}" ]; then
+    geometry=$SCREEN_CAPTURE_GEOMETRY
+else
+    geometry=$(slurp) || exit 0
+fi
+timestamp=$(date +%Y-%m-%d_%H-%M-%S)
+output="$directory/screen_recording_$timestamp.mkv"
+codec=${SCREEN_RECORD_CODEC:-libx264}
+
+wf-recorder \
+    -g "$geometry" \
+    --audio="$audio_source" \
+    -c "$codec" \
+    -f "$output" \
+    -y \
+    >/dev/null 2>&1 &
+pid=$!
+
+printf '%s\n' "$pid" > "$pid_file"
+printf '%s\n' "$output" > "$output_file"
+
+sleep 0.5
+if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file" "$output_file"
+    notify-send "Screen recording failed" "wf-recorder exited during startup."
+    exit 1
+fi
+
+cleanup_selection
+trap - EXIT HUP INT TERM
+notify-send "Screen recording started" "Region capture with $label. Press the same shortcut to stop."
+EOF
+  chmod +x "${TARGET}/usr/local/bin/linux-screen-record"
+}
+
 configure_session() {
   info "Configuring greetd + uwsm session..."
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and

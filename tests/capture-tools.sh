@@ -14,4 +14,42 @@ for pkg in grim slurp wf-recorder swappy wl-clipboard jq libnotify-bin ffmpeg; d
     "TARGET_BASE_PACKAGES includes ${pkg}"
 done
 
+# --- staged helper scripts --------------------------------------------------
+info() { :; }
+warn() { :; }
+in_target() { :; }
+source scripts/60-hyprland.sh
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+TARGET="${tmp}/target"
+
+stage_capture_helpers
+
+shot="${TARGET}/usr/local/bin/linux-screenshot"
+rec="${TARGET}/usr/local/bin/linux-screen-record"
+
+[[ -x "${shot}" ]] || { echo "  FAIL: linux-screenshot not staged executable" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
+[[ -x "${rec}"  ]] || { echo "  FAIL: linux-screen-record not staged executable" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
+
+shot_txt="$(<"${shot}")"
+rec_txt="$(<"${rec}")"
+
+# Screenshot: saves a timestamped PNG under Pictures/Screenshots, holds an
+# atomic lock so key-mashing can't stack selectors, copies to clipboard.
+assert_contains "${shot_txt}" 'Pictures"}/Screenshots' \
+  "linux-screenshot saves under Pictures/Screenshots"
+assert_contains "${shot_txt}" 'linux-screenshot.lock' \
+  "linux-screenshot uses the atomic selector lock"
+assert_contains "${shot_txt}" 'wl-copy --type image/png' \
+  "linux-screenshot copies the capture to the clipboard"
+
+# Recording: timestamped .mkv, software codec default (portable), NVENC opt-in.
+assert_contains "${rec_txt}" 'Screen Recordings' \
+  "linux-screen-record saves under Videos/Screen Recordings"
+assert_contains "${rec_txt}" 'screen_recording_$timestamp.mkv' \
+  "linux-screen-record writes a crash-safe .mkv"
+assert_contains "${rec_txt}" 'SCREEN_RECORD_CODEC:-libx264' \
+  "linux-screen-record defaults to the portable libx264 codec (NVENC opt-in)"
+
 finish_test
