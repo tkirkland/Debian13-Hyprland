@@ -524,6 +524,10 @@ hl.bind("CTRL + Print", hl.dsp.exec_cmd("linux-screenshot full"))          -- al
 hl.bind("SUPER + Print", hl.dsp.exec_cmd("linux-screenshot annotate"))     -- region -> swappy annotate
 hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd("linux-screen-record desktop")) -- toggle record (desktop audio)
 hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))     -- toggle record (microphone)
+-- Notifications (swaync, epic #67 item 2): toggle the notification-center panel
+-- and Do-Not-Disturb. -sw skips waiting for the daemon.
+hl.bind("SUPER + N", hl.dsp.exec_cmd("swaync-client -t -sw"))         -- toggle panel
+hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw")) -- toggle DND
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
