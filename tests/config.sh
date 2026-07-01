@@ -63,6 +63,32 @@ assert_contains "${out}" "gcc-15 g++-15" "toolchain packages split out"
 assert_contains "${out}" "0" \
   "toolchain absent from general build packages (no sid leakage)"
 
+# xdph (xdg-desktop-portal-hyprland) is source-built as its own optional
+# component, so its build-deps ride in HYPR_BUILD_PACKAGES (NOT the source-built
+# hypr stack, which xdph builds against afterward). qt6-base-dev powers the Qt6
+# share-picker; the pipewire/spa/sdbus-c++ headers are the screencast backend.
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${HYPR_BUILD_PACKAGES[@]}"')"
+assert_contains "${out}" "qt6-base-dev" \
+  "Qt6 build-dep for the xdph share-picker (issue #57/#67)"
+assert_contains "${out}" "libpipewire-0.3-dev" \
+  "PipeWire headers for the xdph screencast backend (issue #57/#67)"
+assert_contains "${out}" "libspa-0.2-dev" \
+  "SPA headers for the xdph screencast backend (issue #57/#67)"
+assert_contains "${out}" "libsdbus-c++-dev" \
+  "sdbus-c++ headers for xdph (issue #57/#67)"
+# xdph is its OWN optional component and MUST NEVER be a HYPR_BUILD_ORDER member
+# (the #64 dead-greeter revert): the order is a must-succeed set whose failure
+# would strand uwsm / abort the offline apt transaction.
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${HYPR_BUILD_ORDER[@]}"')"
+if printf '%s\n' "${out}" | grep -qx 'xdph\|xdg-desktop-portal-hyprland'; then
+  echo "  FAIL: xdph must not be a HYPR_BUILD_ORDER member (issue #64)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: xdph stays out of the must-succeed HYPR_BUILD_ORDER (issue #64)"
+fi
+
 out="$(bash -c 'source lib/00-config.sh
   printf "%s\n" "${TARGET_BASE_PACKAGES[@]}"')"
 assert_contains "${out}" "linux-headers-amd64" \
@@ -94,6 +120,24 @@ else
 fi
 assert_contains "${out}" "systemd-timesyncd" \
   "NTP client in base set so the installed clock stays disciplined"
+# Portal stack (issue #57/#67 item 3): the xdg-desktop-portal broker plus the
+# gtk backend (routing default=gtk) and the packaged wlr backend, which is the
+# ALWAYS-installed screencast fallback when the source-built hyprland impl is
+# absent — so the portal chain works on every path regardless of xdph.
+assert_contains "${out}" "xdg-desktop-portal" \
+  "xdg-desktop-portal broker in base set (issue #57/#67)"
+assert_contains "${out}" "xdg-desktop-portal-gtk" \
+  "gtk portal backend in base set (routing default=gtk) (issue #57/#67)"
+assert_contains "${out}" "xdg-desktop-portal-wlr" \
+  "wlr portal backend in base set (guaranteed screencast fallback) (issue #57/#67)"
+# lxpolkit polkit agent (issue #67 item 4): ships /etc/xdg/autostart and starts
+# via 'uwsm finalize' — no extra autostart wiring needed.
+assert_contains "${out}" "lxpolkit" \
+  "lxpolkit polkit agent in base set (issue #67 item 4)"
+# Dolphin file manager (issue #70); also anchors the KDE/Qt6 runtime closure the
+# source-built xdph share-picker relies on at package time.
+assert_contains "${out}" "dolphin" \
+  "Dolphin file manager in base set (issue #70)"
 
 # addons/*.list files are appended to the target package set (comments
 # and whitespace stripped); the .sample template must NOT load.
