@@ -148,6 +148,10 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
     "SUPER+SHIFT+R records desktop audio via linux-screen-record"
   assert_contains "${deb}" 'hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))' \
     "SUPER+CTRL+R records the microphone via linux-screen-record"
+  assert_contains "${deb}" 'hl.bind("SUPER + N", hl.dsp.exec_cmd("swaync-client -t -sw"))' \
+    "SUPER+N toggles the swaync panel"
+  assert_contains "${deb}" 'hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw"))' \
+    "SUPER+SHIFT+N toggles swaync Do-Not-Disturb"
 else
   echo "  FAIL: hypr-deb.lua module missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
