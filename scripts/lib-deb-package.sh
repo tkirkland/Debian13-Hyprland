@@ -169,7 +169,7 @@ _strip_self_provided() {
 }
 
 # Merge a manual Depends string ($1) with an auto-derived one ($2), de-duped by
-# package NAME with the MANUAL token winning (keeps the curated swww/hypr-dim
+# package NAME with the MANUAL token winning (keeps the curated swww/hyprdim
 # entries, which our wayland Provides satisfies, over an auto duplicate).
 _merge_depends() {
   local auto="$2" tok name seen=" " out="" combined="$1"

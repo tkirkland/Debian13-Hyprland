@@ -22,23 +22,23 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww hypr-dim uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww hyprdim uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
 
-# hypr-dim (external-display gamma brightness daemon, issue #66) builds from
+# hyprdim (external-display gamma brightness daemon, issue #66) builds from
 # source like swww, after it and before uwsm.
 out="$(bash -c 'source lib/00-config.sh; printf "%s\n" "${HYPR_BUILD_ORDER[@]}"')"
-assert_contains "${out}" "hypr-dim" "hypr-dim in the build order (issue #66)"
+assert_contains "${out}" "hyprdim" "hyprdim in the build order (issue #66)"
 
 # Its source URL defaults to the tkirkland repo and is overridable.
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPRDIM_REPO_URL}"')"
-assert_eq "https://github.com/tkirkland/hypr-dim" "${out}" \
-  "HYPRDIM_REPO_URL default (tkirkland/hypr-dim)"
-out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_REPO_URL[hypr-dim]}"')"
-assert_eq "https://github.com/tkirkland/hypr-dim" "${out}" \
-  "hypr-dim build-order entry maps to its repo URL"
+assert_eq "https://github.com/tkirkland/hyprdim" "${out}" \
+  "HYPRDIM_REPO_URL default (tkirkland/hyprdim)"
+out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_REPO_URL[hyprdim]}"')"
+assert_eq "https://github.com/tkirkland/hyprdim" "${out}" \
+  "hyprdim build-order entry maps to its repo URL"
 out="$(HYPRDIM_REPO_URL=https://example.invalid/fork bash -c \
-  'source lib/00-config.sh; echo "${HYPR_REPO_URL[hypr-dim]}"')"
+  'source lib/00-config.sh; echo "${HYPR_REPO_URL[hyprdim]}"')"
 assert_eq "https://example.invalid/fork" "${out}" \
   "HYPRDIM_REPO_URL env override flows into the repo map"
 
