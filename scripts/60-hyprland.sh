@@ -1493,6 +1493,7 @@ HYPR_DIM_SERVICE
   write_hypr_lua_config
   stage_wallpapers
   stage_capture_helpers
+  stage_swaync_config
   in_target "
     set -e
     # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
