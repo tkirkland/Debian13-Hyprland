@@ -66,6 +66,17 @@ phase_verify() {
       test -x "${TARGET}/usr/bin/hyprland-welcome"
   fi
 
+  # Screenshot/recording capture helpers + deps (epic #67, item 1). Staged
+  # unconditionally by configure_session, so verified on both install paths.
+  vcheck "screenshot helper staged" test -x \
+    "${TARGET}/usr/local/bin/linux-screenshot"
+  vcheck "screen-record helper staged" test -x \
+    "${TARGET}/usr/local/bin/linux-screen-record"
+  vcheck "screenshot deps present (grim/slurp/jq)" in_target \
+    "command -v grim && command -v slurp && command -v jq"
+  vcheck "recording deps present (wf-recorder/notify-send)" in_target \
+    "command -v wf-recorder && command -v notify-send"
+
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "systemd-timesyncd enabled" in_target "systemctl is-enabled systemd-timesyncd"
   vcheck "uwsm present" in_target "command -v uwsm"
