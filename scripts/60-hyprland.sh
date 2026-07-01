@@ -250,20 +250,20 @@ build_custom_swww() {
   "
 }
 
-# hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
+# hyprdim: per-display gamma brightness daemon for external outputs (issue #66).
 # Cargo build, mirroring build_custom_swww (its own CARGO_HOME, --release
 # --locked, install to /usr/bin, then drop the cargo home). The
-# hypr-dim.service user unit (staged in configure_session) starts the installed
+# hyprdim.service user unit (staged in configure_session) starts the installed
 # binary; the brightness-sync wrapper drives it over D-Bus dev.hyprdim.
-build_custom_hypr_dim() {
-  info "Building hypr-dim ${HYPR_RESOLVED_TAG[hypr-dim]} (cargo)..."
+build_custom_hyprdim() {
+  info "Building hyprdim ${HYPR_RESOLVED_TAG[hyprdim]} (cargo)..."
   in_target "
     set -e
-    cd '${HYPR_SRC_DIR}/hypr-dim'
-    export CARGO_HOME=/tmp/hypr-dim-cargo
+    cd '${HYPR_SRC_DIR}/hyprdim'
+    export CARGO_HOME=/tmp/hyprdim-cargo
     cargo build --release --locked
-    install -Dm755 target/release/hypr-dim -t \"${HYPR_DESTDIR:-}/usr/bin/\"
-    rm -rf /tmp/hypr-dim-cargo
+    install -Dm755 target/release/hyprdim -t \"${HYPR_DESTDIR:-}/usr/bin/\"
+    rm -rf /tmp/hyprdim-cargo
   "
 }
 
@@ -509,7 +509,7 @@ hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
 hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
 -- Brightness keys drive brightness-sync: every connected display as one level —
 -- real backlight where present (brightnessctl, internal panel and ddcci-exposed
--- externals) else gamma via hypr-dim. locked+repeating so they work on the lock
+-- externals) else gamma via hyprdim. locked+repeating so they work on the lock
 -- screen and while held. Issue #66.
 hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightness-sync up"),   { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightness-sync down"), { locked = true, repeating = true })
@@ -610,7 +610,7 @@ general {
 }
 
 # 5 min — dim ALL connected displays as one level: real backlight where present
-# (brightnessctl) else gamma via hypr-dim, saving/restoring levels. Issue #66.
+# (brightnessctl) else gamma via hyprdim, saving/restoring levels. Issue #66.
 # on-resume actively re-asserts (DPMS/lock can drop the gamma LUT).
 listener {
     timeout = 300
@@ -1216,9 +1216,9 @@ EOF
   # ONE logical level across every connected display: a real hardware backlight
   # where present (brightnessctl — internal panel, and external monitors exposed
   # as /sys/class/backlight by ddcci-dkms over DDC/CI) else GAMMA via the resident
-  # hypr-dim daemon (D-Bus dev.hyprdim). The brightness keys, hypridle's idle
+  # hyprdim daemon (D-Bus dev.hyprdim). The brightness keys, hypridle's idle
   # dim/restore, and the lock_cmd all route through it. Staged like drm-reprobe
-  # (literal heredoc + chmod). The hypr-dim binary is built by build_custom_hypr_dim.
+  # (literal heredoc + chmod). The hyprdim binary is built by build_custom_hyprdim.
   install -d "${TARGET}/usr/local/bin"
   cat >"${TARGET}/usr/local/bin/brightness-sync" <<'BRIGHTNESS_SYNC'
 #!/bin/sh
@@ -1231,7 +1231,7 @@ EOF
 #   - a real hardware backlight (/sys/class/backlight) mapped to the connector
 #     (ddcci reverse-symlink, embedded-panel heuristic, or ddcci<bus> on the
 #     connector's i2c bus) -> brightnessctl -d <node>
-#   - else GAMMA via the resident hypr-dim daemon (D-Bus dev.hyprdim).
+#   - else GAMMA via the resident hyprdim daemon (D-Bus dev.hyprdim).
 # Internal backlight keeps the perceptual -e4 curve; gamma 0..1 ~ that curve, so
 # level N reads about the same on both (e.g. 85 ~ perceptual 0.85 ~ gamma 0.85).
 #
@@ -1454,17 +1454,17 @@ case "$cmd" in
 esac
 BRIGHTNESS_SYNC
   chmod 755 "${TARGET}/usr/local/bin/brightness-sync"
-  # hypr-dim user unit. The ExecStart points at the compiled binary in /usr/bin
-  # (upstream's unit uses %h/.local/bin/hypr-dim). Resident, supervised,
+  # hyprdim user unit. The ExecStart points at the compiled binary in /usr/bin
+  # (upstream's unit uses %h/.local/bin/hyprdim). Resident, supervised,
   # respawning; brightness-sync re-asserts external gamma after a restart. Enabled
   # for the user the same way hypridle is: a plain symlink into
   # graphical-session.target.wants (works even when the stack builds at first boot —
   # the link dangles until the unit lands and resolves at session start).
   mkdir -p "${TARGET}/usr/local/lib/systemd/user"
-  cat >"${TARGET}/usr/local/lib/systemd/user/hypr-dim.service" <<'HYPR_DIM_SERVICE'
+  cat >"${TARGET}/usr/local/lib/systemd/user/hyprdim.service" <<'HYPRDIM_SERVICE'
 [Unit]
-Description=hypr-dim — per-display gamma brightness daemon (external outputs)
-# Locally-built daemon (binary hypr-dim, D-Bus dev.hyprdim). Source, upstream
+Description=hyprdim — per-display gamma brightness daemon (external outputs)
+# Locally-built daemon (binary hyprdim, D-Bus dev.hyprdim). Source, upstream
 # provenance and rebuild script (build-install.sh) live in ~/src/gamma-fix.
 # Driven by the `brightness-sync` wrapper to dim external displays. Issue #66.
 PartOf=graphical-session.target
@@ -1473,7 +1473,7 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/hypr-dim
+ExecStart=/usr/bin/hyprdim
 # Resident, supervised: always respawn. State (per-output gamma) is in memory
 # only, and a gamma_control Failed permanently drops an output — restart is the
 # recovery path; `brightness-sync restore` re-asserts levels afterward.
@@ -1482,16 +1482,16 @@ RestartSec=1
 
 [Install]
 WantedBy=graphical-session.target
-HYPR_DIM_SERVICE
+HYPRDIM_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
   # hypridle is part of the source-compiled stack, now shipped as a .deb with
   # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
-  # hand-written hypr-dim.service below stays in /usr/local (installer glue,
+  # hand-written hyprdim.service below stays in /usr/local (installer glue,
   # not owned by any .deb).
   ln -sf /usr/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
-  ln -sf /usr/local/lib/systemd/user/hypr-dim.service \
-    "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypr-dim.service"
+  ln -sf /usr/local/lib/systemd/user/hyprdim.service \
+    "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
   write_hypr_lua_config
   stage_wallpapers
   stage_capture_helpers

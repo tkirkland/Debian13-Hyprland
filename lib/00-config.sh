@@ -257,10 +257,10 @@ nvidia_install_requested() {
 
 # --- Hyprland source builds ----------------------------------------------------
 HYPR_GIT_BASE="${HYPR_GIT_BASE:-https://github.com/hyprwm}"
-# hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
+# hyprdim: per-display gamma brightness daemon for external outputs (issue #66).
 # Not in the Debian archive nor the hyprwm namespace — built from source with
 # the Hyprland stack (cargo, like swww), pinned to its latest release tag.
-HYPRDIM_REPO_URL="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
+HYPRDIM_REPO_URL="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hyprdim}"
 # Build order satisfies the dependency graph; hyprland after its deps.
 # wayland, wayland-protocols, and xkbcommon are built first because
 # Debian 13's packages are too old for current Hyprland (wayland-protocols
@@ -288,7 +288,7 @@ HYPR_BUILD_ORDER=(
   hypridle
   hyprlauncher
   swww
-  hypr-dim
+  hyprdim
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -320,10 +320,10 @@ declare -A HYPR_REPO_URL=(
   ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   # swww: animated wallpaper daemon (cargo build via build_custom_swww).
   ["swww"]="https://github.com/LGFae/swww"
-  # hypr-dim: per-display gamma brightness daemon for external outputs
-  # (cargo build via build_custom_hypr_dim). Drives external-display brightness
+  # hyprdim: per-display gamma brightness daemon for external outputs
+  # (cargo build via build_custom_hyprdim). Drives external-display brightness
   # via D-Bus dev.hyprdim for the brightness-sync wrapper (issue #66).
-  ["hypr-dim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hypr-dim}"
+  ["hyprdim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hyprdim}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # Runtime Depends per source-built package, used to generate .deb control
@@ -331,7 +331,7 @@ declare -A HYPR_REPO_URL=(
 # the closure pool so apt-get install --simulate resolves fully offline.
 declare -gA HYPR_DEB_DEPENDS=(
   [swww]="libc6, libwayland-client0, libgcc-s1"
-  [hypr-dim]="libc6, libgcc-s1"
+  [hyprdim]="libc6, libgcc-s1"
 )
 # Our compiled wayland/xkbcommon install to /usr with the same soname paths as
 # Debian's library packages; Provides lets reverse-deps resolve to ours, while
