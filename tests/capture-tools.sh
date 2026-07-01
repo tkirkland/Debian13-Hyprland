@@ -17,6 +17,10 @@ done
 # --- staged helper scripts --------------------------------------------------
 info() { :; }
 warn() { :; }
+fatal() {
+  printf 'fatal: %s\n' "$*" >&2
+  return 1
+}
 in_target() { :; }
 source scripts/60-hyprland.sh
 
