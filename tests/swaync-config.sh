@@ -49,9 +49,8 @@ assert_contains "${cfg_txt}" '"mpris"' "mpris widget present"
 # style.css matches the installer window accent (gradient) + palette.
 assert_contains "${css_txt}" '#1e1e2e' "dark card background"
 assert_contains "${css_txt}" '#f5f5f5' "light text"
-assert_contains "${css_txt}" '#33ccff' "installer accent gradient start"
-assert_contains "${css_txt}" '#00ff99' "installer accent gradient end"
-assert_contains "${css_txt}" 'background-clip: padding-box, border-box' \
-  "gradient-border via background-clip double background"
+assert_contains "${css_txt}" '#4a6f9a' "solid window-matching border colour"
+assert_contains "${css_txt}" 'border: 1px solid #4a6f9a' \
+  "1px solid border matching the desktop window decoration"
 
 finish_test
