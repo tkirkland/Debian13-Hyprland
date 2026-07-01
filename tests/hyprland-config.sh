@@ -140,10 +140,14 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
     "SUPER+L locks the session (hyprlock via hypridle)"
   assert_contains "${deb}" "/usr/local/bin/swww-cycle" \
     "SUPER+SHIFT+W cycles wallpapers"
-  assert_contains "${deb}" "grim -g" \
-    "screenshot region bind present (grim/slurp)"
-  assert_contains "${deb}" "wf-recorder" \
-    "screen-record toggle bind present (wf-recorder)"
+  assert_contains "${deb}" 'hl.bind("Print", hl.dsp.exec_cmd("linux-screenshot region"))' \
+    "Print captures a region via linux-screenshot"
+  assert_contains "${deb}" 'hl.bind("SUPER + Print", hl.dsp.exec_cmd("linux-screenshot annotate"))' \
+    "SUPER+Print annotates via linux-screenshot/swappy"
+  assert_contains "${deb}" 'hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd("linux-screen-record desktop"))' \
+    "SUPER+SHIFT+R records desktop audio via linux-screen-record"
+  assert_contains "${deb}" 'hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))' \
+    "SUPER+CTRL+R records the microphone via linux-screen-record"
 else
   echo "  FAIL: hypr-deb.lua module missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))

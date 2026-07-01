@@ -639,7 +639,7 @@ TARGET_BASE_PACKAGES=(
   console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
-  grim slurp wf-recorder swappy wl-clipboard
+  grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin
   ddcci-dkms ddcutil i2c-tools
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"
