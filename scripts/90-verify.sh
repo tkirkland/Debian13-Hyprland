@@ -74,8 +74,8 @@ phase_verify() {
     "${TARGET}/usr/local/bin/linux-screen-record"
   vcheck "screenshot deps present (grim/slurp/jq)" in_target \
     "command -v grim && command -v slurp && command -v jq"
-  vcheck "recording deps present (wf-recorder/notify-send)" in_target \
-    "command -v wf-recorder && command -v notify-send"
+  vcheck "recording deps present (wf-recorder/notify-send/pactl)" in_target \
+    "command -v wf-recorder && command -v notify-send && command -v pactl"
 
   vcheck "greetd enabled" in_target "systemctl is-enabled greetd"
   vcheck "systemd-timesyncd enabled" in_target "systemctl is-enabled systemd-timesyncd"
