@@ -904,6 +904,14 @@ trap - EXIT HUP INT TERM
 notify-send "Screen recording started" "Region capture with $label. Press the same shortcut to stop."
 EOF
   chmod +x "${TARGET}/usr/local/bin/linux-screen-record"
+  # Default the record codec to NVENC when an NVIDIA driver was selected at
+  # install time (h264_nvenc needs the driver, not just a card present), else
+  # keep the portable software libx264. SCREEN_RECORD_CODEC still overrides
+  # either default at runtime.
+  if nvidia_install_requested; then
+    sed -i 's/SCREEN_RECORD_CODEC:-libx264/SCREEN_RECORD_CODEC:-h264_nvenc/' \
+      "${TARGET}/usr/local/bin/linux-screen-record"
+  fi
 }
 
 # Stage the swaync (sway-notification-center) config (epic #67, item 2). The
