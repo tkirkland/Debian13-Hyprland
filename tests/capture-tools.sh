@@ -54,6 +54,25 @@ assert_contains "${rec_txt}" 'Screen Recordings' \
 assert_contains "${rec_txt}" 'screen_recording_$timestamp.mkv' \
   "linux-screen-record writes a crash-safe .mkv"
 assert_contains "${rec_txt}" 'SCREEN_RECORD_CODEC:-libx264' \
-  "linux-screen-record defaults to the portable libx264 codec (NVENC opt-in)"
+  "linux-screen-record defaults to the portable libx264 codec (no NVIDIA)"
+
+# NVIDIA path: when a driver is selected at install time, the staged helper's
+# default codec flips to h264_nvenc (nvidia_install_requested true). Same
+# SCREEN_RECORD_CODEC override still applies.
+nv_tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}" "${nv_tmp}"' EXIT
+(
+  TARGET="${nv_tmp}/target"
+  HAS_NVIDIA_GPU=1
+  NVIDIA_DRIVER="nvidia-open"
+  stage_capture_helpers
+)
+nv_rec_txt="$(<"${nv_tmp}/target/usr/local/bin/linux-screen-record")"
+assert_contains "${nv_rec_txt}" 'SCREEN_RECORD_CODEC:-h264_nvenc' \
+  "linux-screen-record defaults to h264_nvenc when NVIDIA driver selected"
+if printf '%s' "${nv_rec_txt}" | grep -q 'SCREEN_RECORD_CODEC:-libx264'; then
+  echo "  FAIL: NVIDIA helper still carries the libx264 default" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
 
 finish_test
