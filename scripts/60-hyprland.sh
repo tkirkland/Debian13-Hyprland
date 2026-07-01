@@ -262,7 +262,13 @@ build_custom_hyprdim() {
     cd '${HYPR_SRC_DIR}/hyprdim'
     export CARGO_HOME=/tmp/hyprdim-cargo
     cargo build --release --locked
-    install -Dm755 target/release/hyprdim -t \"${HYPR_DESTDIR:-}/usr/bin/\"
+    # Install to the fixed name /usr/bin/hyprdim (the systemd unit's ExecStart)
+    # regardless of the crate's basename: releases <= v0.90.0 built the binary as
+    # 'hypr-dim', v0.90.1+ builds it 'hyprdim'. Tolerate either so a cached older
+    # tag still installs correctly.
+    bin=target/release/hyprdim
+    [ -f \"\$bin\" ] || bin=target/release/hypr-dim
+    install -Dm755 \"\$bin\" \"${HYPR_DESTDIR:-}/usr/bin/hyprdim\"
     rm -rf /tmp/hyprdim-cargo
   "
 }
