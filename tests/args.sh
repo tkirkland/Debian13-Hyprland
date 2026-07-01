@@ -40,10 +40,10 @@ assert_eq "systemd-boot|0|0|0|full|0" "${out}" "systemd-boot accepted"
 
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
-  parse_args --skip-cache --jobs=4 --autologin
-  echo "${SKIP_CACHE}|${HYPR_BUILD_JOBS}|${HYPR_AUTOLOGIN}"')"
-assert_eq "1|4|1" "${out}" \
-  "--skip-cache, --jobs, --autologin parsed"
+  parse_args --jobs=4 --autologin
+  echo "${HYPR_BUILD_JOBS}|${HYPR_AUTOLOGIN}"')"
+assert_eq "4|1" "${out}" \
+  "--jobs, --autologin parsed"
 
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh

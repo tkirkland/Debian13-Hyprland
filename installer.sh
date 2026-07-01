@@ -164,11 +164,7 @@ main() {
 
   ensure_target_ready
   local name=""
-  for name in cache storage bootstrap system boot hyprland verify; do
-    if [[ "${name}" == "cache" ]] && ((SKIP_CACHE)); then
-      info "Skipping cache phase (--skip-cache); no offline cache."
-      continue
-    fi
+  for name in storage bootstrap system boot hyprland verify; do
     current_phase="${name}"
     run_phase "${name}" "phase_${name}"
   done

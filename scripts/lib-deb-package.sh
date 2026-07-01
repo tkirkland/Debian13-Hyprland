@@ -169,7 +169,7 @@ _strip_self_provided() {
 }
 
 # Merge a manual Depends string ($1) with an auto-derived one ($2), de-duped by
-# package NAME with the MANUAL token winning (keeps the curated swww/hypr-dim
+# package NAME with the MANUAL token winning (keeps the curated swww/hyprdim
 # entries, which our wayland Provides satisfies, over an auto duplicate).
 _merge_depends() {
   local auto="$2" tok name seen=" " out="" combined="$1"
@@ -205,6 +205,15 @@ package_to_deb() {
     "${provides}"
   mkdir -p "${pool}"
   local out="${pool}/${name}_${version}_${arch}.deb"
+  # Strip debug symbols from the staged ELF tree before packaging: shrinks all
+  # ~21 hyprwm C/C++ components (and the Rust release binaries, harmlessly) in
+  # one pass. --strip-unneeded (NOT --strip-all) preserves .dynsym so the copy
+  # of this tree into the buildroot /usr (tools/build-iso.sh) still links for
+  # later stack components. Confined to executables and shared objects so static
+  # archives (liblua.a) and non-ELF files are never touched; strip no-ops on any
+  # non-ELF match via the redirect/|| true.
+  find "${destdir}/usr" -type f \( -perm -u+x -o -name '*.so*' \) \
+    -exec strip --strip-unneeded {} + 2>/dev/null || true
   dpkg-deb --root-owner-group --build "${destdir}" "${out}" >/dev/null
   printf '%s\n' "${out}"
 }

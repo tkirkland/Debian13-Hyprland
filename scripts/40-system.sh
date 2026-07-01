@@ -81,6 +81,23 @@ EOF
   info "timesyncd pinned to NTP servers: ${NTP_SERVERS}"
 }
 
+# Neuter systemd-ssh-generator (systemd >=256) in the installed target. The
+# generator sets up ssh-over-vsock socket activation by querying the local
+# AF_VSOCK CID; on hardware/VMs with no vhost-vsock device that query fails and
+# the generator exits 1 on every boot/daemon-reload, spamming the journal with
+# "Failed to query local AF_VSOCK CID: Cannot assign requested address". It is
+# shipped by systemd itself and is entirely independent of the real sshd
+# (openssh-server's ssh.service), so masking it has ZERO impact on ssh. Mask =
+# symlink to /dev/null under /etc/systemd/system-generators, which outranks
+# /usr/lib/systemd/system-generators, so a systemd dpkg upgrade never undoes it.
+neuter_ssh_vsock_generator() {
+  in_target "
+    set -e
+    mkdir -p /etc/systemd/system-generators
+    ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+  "
+}
+
 # dkms signs every module it builds with this keypair and the boot phase
 # signs loader EFI binaries with it. Debian's dkms would generate it on
 # demand, but the zfs-dkms postinst (during install_base_packages) is the
@@ -99,6 +116,14 @@ ensure_mok_key() {
     fatal "MOK keypair generation failed (openssl)."
   chmod 600 "${TARGET}${MOK_KEY}"
   info "Generated MOK signing keypair at ${MOK_KEY}."
+}
+
+# Echo this machine's CPU vendor_id from /proc/cpuinfo (GenuineIntel /
+# AuthenticAMD), or empty if unknown. The installer runs on the real target
+# hardware, so this reflects the CPU the microcode is being chosen for. Split
+# out so the microcode selection in install_base_packages is unit-testable.
+detect_cpu_vendor() {
+  grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $NF}'
 }
 
 install_base_packages() {
@@ -121,6 +146,24 @@ install_base_packages() {
     filtered+=("${p}")
   done
   pkgs=("${filtered[@]}")
+  # Microcode is CPU-vendor-specific: the other vendor's blob is dead weight on
+  # the installed system. Install ONLY the microcode matching this CPU. BOTH debs
+  # stay in the offline pool (TARGET_BASE_PACKAGES is unchanged, so the ISO still
+  # supports either CPU) — only the INSTALL set is filtered here. Unknown vendor
+  # keeps both (no regression: every CPU still gets its microcode offline).
+  local drop=""
+  case "$(detect_cpu_vendor)" in
+    GenuineIntel) drop="amd64-microcode" ;;
+    AuthenticAMD) drop="intel-microcode" ;;
+  esac
+  if [[ -n "${drop}" ]]; then
+    filtered=()
+    for p in "${pkgs[@]}"; do
+      [[ "${p}" == "${drop}" ]] && continue
+      filtered+=("${p}")
+    done
+    pkgs=("${filtered[@]}")
+  fi
   # man-db re-indexes every installed man page on each apt transaction's
   # trigger phase — there are ~10 transactions across the install, minutes
   # of CPU on bare metal. Disable its auto-update for the chroot's lifetime
@@ -207,6 +250,11 @@ install_zfs_from_source() {
   local zfs_script="
     set -e
     export DEBIAN_FRONTEND=noninteractive
+    # native-deb-utils drives dpkg-buildpackage/debhelper, which generates and
+    # then discards -dbgsym debs. noautodbgsym tells dh_strip not to produce them
+    # at all (build-time waste). It only suppresses auto -dbgsym packages, so the
+    # required openzfs-* debs asserted below are unaffected.
+    export DEB_BUILD_OPTIONS=noautodbgsym
     # Drop any live-kernel modules package from an earlier failed attempt.
     if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
       apt-get purge -y 'openzfs-zfs-modules-*'
@@ -570,6 +618,7 @@ phase_system() {
   install_lythmono_fonts
   configure_locale_tz
   configure_time_sync
+  neuter_ssh_vsock_generator
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
   # captures the modprobe.d/modules-load.d drop-ins without a second rebuild.

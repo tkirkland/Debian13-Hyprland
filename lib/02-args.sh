@@ -3,7 +3,7 @@
 # by lib/00-config.sh and consumed by the orchestrator and phase modules.
 # Usage text, argument parsing, and interactive prompts.
 
-VALID_PHASES="full preflight cache storage bootstrap system boot hyprland verify cleanup"
+VALID_PHASES="full preflight storage bootstrap system boot hyprland verify cleanup"
 RUN_PHASE="full"
 
 usage() {
@@ -23,12 +23,9 @@ Options:
                         the on-ISO package store is present; the default is
                         offline-from-store when that store is found)
   --phase=<name>        Run a single phase:
-                        preflight cache storage bootstrap system boot
+                        preflight storage bootstrap system boot
                         hyprland verify cleanup
   --keep-build-deps     Do not purge build dependencies after success
-  --skip-cache          Do not populate or embed the offline cache (saves
-                        several GB; the installed system loses offline
-                        rebuild capability)
   --autologin           Boot straight into the Hyprland session as the
                         target user (no tuigreet console login)
   --rtc=<utc|local>     Hardware clock interpretation. Required: neither is
@@ -62,7 +59,6 @@ Options:
                         time.cloudflare.com"). Optional: empty (default) keeps
                         timesyncd on Debian's stock pool/DHCP servers. Time sync
                         is installed and enabled regardless.
-  --cache-dir=<path>    Cache location (default /var/cache/hypr-deb)
   --fresh               Discard phase state and start over
   --yes                 Unattended mode: skips the destructive confirmation
                         and refuses to reach any later prompt — requires
@@ -93,7 +89,6 @@ parse_args() {
           fatal "Unknown phase '${RUN_PHASE}'. Valid: ${VALID_PHASES}"
         ;;
       --keep-build-deps) KEEP_BUILD_DEPS=1 ;;
-      --skip-cache) SKIP_CACHE=1 ;;
       --autologin) HYPR_AUTOLOGIN=1 ;;
       --rtc=*)
         RTC_MODE="${arg#*=}"
@@ -129,7 +124,6 @@ parse_args() {
         ;;
       --mirror=*) MIRROR="${arg#*=}" ;;
       --ntp=*) NTP_SERVERS="${arg#*=}" ;;
-      --cache-dir=*) CACHE_DIR="${arg#*=}" ;;
       --fresh) FRESH=1 ;;
       --yes) ASSUME_YES=1 ;;
       --verbose) VERBOSE=1 ;;

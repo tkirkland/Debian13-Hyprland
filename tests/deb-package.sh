@@ -174,4 +174,41 @@ fi
 
 HYPR_DEB_PROVIDES=()
 
+# --- FIX 1: package_to_deb strips ELF debug symbols before building the deb ----
+# A fake `strip` on PATH records its argv; assert it ran with --strip-unneeded
+# over the staged ELF executable and *.so* but NOT over the static archive (.a),
+# which strip would corrupt.
+if command -v dpkg-deb >/dev/null; then
+  stmp="$(mktemp -d)"; spool="${stmp}/pool"; sdest="${stmp}/stage"
+  mkdir -p "${spool}" "${sdest}/usr/bin" "${sdest}/usr/lib"
+  printf '\177ELF\002\001\001\000' >"${sdest}/usr/bin/hyprctl"
+  chmod +x "${sdest}/usr/bin/hyprctl"
+  printf '\177ELF\002\001\001\000' >"${sdest}/usr/lib/libhyprutils.so.5"
+  printf '!<arch>\n'              >"${sdest}/usr/lib/liblua.a"   # static: MUST NOT strip
+  fstrip="$(mktemp -d)"
+  export STRIP_LOG="${stmp}/strip.log"; : >"${STRIP_LOG}"
+  # shellcheck disable=SC2016  # fake body must keep $@/${STRIP_LOG} literal until run
+  make_fake "${fstrip}" strip 'for a in "$@"; do printf "%s\n" "$a" >>"${STRIP_LOG}"; done'
+  PATH="${fstrip}:${PATH}" package_to_deb "${sdest}" hyprutils 1.0.0-1 amd64 "" "${spool}" >/dev/null
+  slog="$(cat "${STRIP_LOG}")"
+  assert_contains "${slog}" "--strip-unneeded" "strip uses --strip-unneeded (keeps .dynsym for buildroot relink)"
+  assert_contains "${slog}" "/usr/bin/hyprctl" "strip covers the staged ELF executable"
+  assert_contains "${slog}" "/usr/lib/libhyprutils.so.5" "strip covers the staged shared object"
+  if [[ "${slog}" == *"liblua.a"* ]]; then
+    echo "  FAIL: static archive liblua.a was stripped (would corrupt it)" >&2
+    TEST_FAILURES=$((TEST_FAILURES+1))
+  else
+    echo "  ok: static archive liblua.a left untouched"
+  fi
+  if [[ -f "${spool}/hyprutils_1.0.0-1_amd64.deb" ]]; then
+    echo "  ok: deb still built after the strip pass"
+  else
+    echo "  FAIL: deb not built after strip pass" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+  fi
+  unset STRIP_LOG
+  rm -rf "${stmp}" "${fstrip}"
+else
+  echo "  skip: dpkg-deb not installed (strip test)"
+fi
+
 finish_test

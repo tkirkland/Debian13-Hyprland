@@ -85,7 +85,7 @@ this mode). Configure the VM as follows:
   disk that is mounted (e.g., a fourth disk you formatted for caching) is
   excluded from candidacy and therefore safe.
 - **Memory/CPU:** 8 GB+ RAM and 4+ vCPUs recommended. The live overlay is
-  RAM-backed — use `--skip-cache` and `--jobs=2` on small VMs.
+  RAM-backed — use `--jobs=2` on small VMs.
 - **Display:** enable "Accelerate 3D graphics" with 1 GB+ graphics memory
   BEFORE the first boot of the installed system. Without it, vmwgfx
   reports shader model "Legacy" and Hyprland's renderer cannot start.
@@ -237,8 +237,6 @@ Common flags (see `--help` for the full list):
                                        default; mirror of --offline)
 --phase=<name>                         run a single phase
 --keep-build-deps                      do not purge build deps after success
---skip-cache                           skip the cache phase (no offline repo
-                                       populate/validate)
 --autologin                            start Hyprland without the login prompt
 --rtc=<utc|local>                      hardware clock interpretation, required
                                        (utc, or local for Windows dual boot;
@@ -264,7 +262,6 @@ Common flags (see `--help` for the full list):
                                        (optional; empty keeps Debian's stock
                                        pool/DHCP servers). Time sync is
                                        installed and enabled either way
---cache-dir=<path>                     cache location (default /var/cache/hypr-deb)
 --fresh                                discard phase state and start over
 --yes                                  unattended mode; requires USER_PASSWORD
 --verbose                              stream full command output to the console
@@ -275,7 +272,7 @@ Common flags (see `--help` for the full list):
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
 `TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
-`HYPRDIM_REPO_URL` (source for the hypr-dim brightness daemon), and
+`HYPRDIM_REPO_URL` (source for the hyprdim brightness daemon), and
 more — see `lib/00-config.sh`.
 
 The installed system has time synchronization enabled by default: `systemd-timesyncd`
@@ -324,7 +321,6 @@ chroot binds automatically.
 
 ```
 preflight   root/virt/live detection, tool bootstrap, disk selection, clock sync
-cache       validate the on-ISO repo (offline) or populate a cache (--online)
 storage     destroy/wipe/partition/mdadm/ZFS (the destructive gate lives here)
 bootstrap   mount target, debootstrap, bind mounts, Debian apt sources
 system      identity, packages, add-ons, user, ZFS boot support, initramfs
@@ -342,10 +338,10 @@ model above: the network-bearing work happens once on the build host
 booted target installs entirely from the on-ISO package store at
 `/run/live/medium/hypr-repo`, with **no network**:
 
-- The `cache` phase runs `cache_validate` against the on-ISO repo
+- The `bootstrap` phase runs `cache_validate` against the on-ISO repo
   (`CACHE_REPO_DIR`, pointed at the store by preflight) and fails with a precise
-  list if any indexed `.deb` is missing from the pool. It does **not** populate
-  anything offline — the repo is the contract, already complete on the medium.
+  list if any indexed `.deb` is missing from the pool. The repo is the contract,
+  already complete on the medium — nothing is populated at install time.
 - `bootstrap` debootstraps from `file://` the on-ISO repo, then bind-mounts the
   store into the target chroot behind a **temporary** trusted `file://` apt
   source so in-chroot `apt-get install` resolves the base packages, the whole
@@ -478,7 +474,7 @@ exposed as `/sys/class/backlight` nodes by the `ddcci-dkms` driver over DDC/CI
 (`ddcutil`/`i2c-tools` provide the DDC/CI tooling; the `ddcci` and `i2c-dev`
 kernel modules are auto-loaded via `/etc/modules-load.d/ddcci.conf`, and the
 owner joins the `i2c` group). Displays with no controllable backlight fall back
-to **gamma** dimming via **hypr-dim**, a small Rust daemon (D-Bus `dev.hyprdim`)
+to **gamma** dimming via **hyprdim**, a small Rust daemon (D-Bus `dev.hyprdim`)
 built from source like swww and run as a `graphical-session.target` user unit
 (`HYPRDIM_REPO_URL` overrides its source). There is no separate brightness flag:
 the subsystem is always installed and is a no-op on hardware with nothing to
@@ -492,8 +488,8 @@ Source policy:
   latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
   hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
-  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hypr-dim, then
-  UWSM. (swww and hypr-dim are Rust/cargo builds via custom hooks; the rest are
+  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hyprdim, then
+  UWSM. (swww and hyprdim are Rust/cargo builds via custom hooks; the rest are
   CMake/meson.)
 - **Compatibility gate:** Hyprland's CMake version requirements at the
   resolved tag are parsed, and every dependency's resolved tag must satisfy

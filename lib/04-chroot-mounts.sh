@@ -20,21 +20,37 @@ mount_chroot_binds() {
   # mounted under /run/live/medium — for the rest of the run, which makes the
   # offline bootstrap abort with "package store missing". Making the target
   # subtree a slave mount first (the arch-chroot approach) lets propagation flow
-  # host->target only, never back onto the host. Idempotent: mount_chroot_binds
-  # runs twice (ensure_target_ready + phase_bootstrap). The ISO builder path
+  # host->target only, never back onto the host. The ISO builder path
   # (HYPR_PRIVATE_RUN=1, fresh tmpfs /run) is unaffected but equally safe.
   if mountpoint -q "${t}"; then
     mount --make-rslave "${t}" || fatal "Failed to make ${t} a slave mount"
   fi
 
-  mount --bind /dev "${t}/dev" || fatal "Failed to bind-mount ${t}/dev"
-  track_mount "${t}/dev"
-  mount --bind /dev/pts "${t}/dev/pts" || fatal "Failed to bind-mount ${t}/dev/pts"
-  track_mount "${t}/dev/pts"
-  mount -t proc proc "${t}/proc" || fatal "Failed to mount ${t}/proc"
-  track_mount "${t}/proc"
-  mount -t sysfs sysfs "${t}/sys" || fatal "Failed to mount ${t}/sys"
-  track_mount "${t}/sys"
+  # Each mount is guarded by `mountpoint -q ... ||` so this function is truly
+  # idempotent: it is now called UNCONDITIONALLY from both ensure_target_ready
+  # and phase_bootstrap (the old `mountpoint -q ${TARGET}/proc ||` gate in
+  # ensure_target_ready is gone). Without the guards a second call would STACK a
+  # fresh `mount -t sysfs` over the existing /sys, shadowing the efivars bind
+  # underneath and breaking mokutil --import — the same shadowing failure mode
+  # the /run comment above warns about. Removing the gate is what guarantees the
+  # efivars bind is present before stage_mok_enrollment on standalone
+  # `--phase=boot` and resumed runs (where the bootstrap phase is stamped done).
+  mountpoint -q "${t}/dev" || {
+    mount --bind /dev "${t}/dev" || fatal "Failed to bind-mount ${t}/dev"
+    track_mount "${t}/dev"
+  }
+  mountpoint -q "${t}/dev/pts" || {
+    mount --bind /dev/pts "${t}/dev/pts" || fatal "Failed to bind-mount ${t}/dev/pts"
+    track_mount "${t}/dev/pts"
+  }
+  mountpoint -q "${t}/proc" || {
+    mount -t proc proc "${t}/proc" || fatal "Failed to mount ${t}/proc"
+    track_mount "${t}/proc"
+  }
+  mountpoint -q "${t}/sys" || {
+    mount -t sysfs sysfs "${t}/sys" || fatal "Failed to mount ${t}/sys"
+    track_mount "${t}/sys"
+  }
   # HYPR_PRIVATE_RUN=1 (set by the ISO builder) mounts a fresh tmpfs at /run
   # instead of bind-mounting the host's live /run. Host /run carries the real
   # systemd (/run/systemd/private) and D-Bus sockets; a package maintainer
@@ -43,19 +59,25 @@ mount_chroot_binds() {
   # invoke-rc.d/deb-systemd-invoke). A private tmpfs has no host sockets, so no
   # in-chroot process can touch host services. The installer leaves this unset
   # and keeps the bind (it runs inside the disposable live ISO, not the user OS).
-  if ((${HYPR_PRIVATE_RUN:-0})); then
-    mount -t tmpfs tmpfs "${t}/run" || fatal "Failed to mount tmpfs ${t}/run"
-  else
-    mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
-  fi
-  track_mount "${t}/run"
+  mountpoint -q "${t}/run" || {
+    if ((${HYPR_PRIVATE_RUN:-0})); then
+      mount -t tmpfs tmpfs "${t}/run" || fatal "Failed to mount tmpfs ${t}/run"
+    else
+      mount --bind /run "${t}/run" || fatal "Failed to bind-mount ${t}/run"
+    fi
+    track_mount "${t}/run"
+  }
   # The ISO builder (HYPR_PRIVATE_RUN=1) never installs a bootloader into the
   # buildroot, so it must NOT expose host EFI NVRAM (a writable host-mutation
-  # surface). Only the installer (flag unset) binds efivars, where it is needed.
-  if ((${HYPR_PRIVATE_RUN:-0} == 0)) && [[ -d /sys/firmware/efi/efivars ]]; then
-    mount --bind /sys/firmware/efi/efivars "${t}/sys/firmware/efi/efivars" ||
-      fatal "Failed to bind-mount ${t}/sys/firmware/efi/efivars"
-    track_mount "${t}/sys/firmware/efi/efivars"
+  # surface). Only the installer (flag unset) binds efivars, where it is needed
+  # by mokutil --import in stage_mok_enrollment. EFIVARS_DIR is the host
+  # efivarfs mount point (config-overridable for tests).
+  if ((${HYPR_PRIVATE_RUN:-0} == 0)) && [[ -d "${EFIVARS_DIR}" ]]; then
+    mountpoint -q "${t}${EFIVARS_DIR}" || {
+      mount --bind "${EFIVARS_DIR}" "${t}${EFIVARS_DIR}" ||
+        fatal "Failed to bind-mount ${t}${EFIVARS_DIR}"
+      track_mount "${t}${EFIVARS_DIR}"
+    }
   fi
 }
 
