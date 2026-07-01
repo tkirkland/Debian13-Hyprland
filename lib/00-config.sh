@@ -326,12 +326,31 @@ declare -A HYPR_REPO_URL=(
   ["hyprdim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hyprdim}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
+# xdg-desktop-portal-hyprland (xdph): the Hyprland screencast/screenshot portal
+# backend, source-built against our OWN source-built hypr* libs (no ABI mismatch)
+# with the Qt6 share-picker (#57, #67 item 3). It is an OPTIONAL component with
+# its own guarded build step and best-effort install — DELIBERATELY NOT a member
+# of HYPR_BUILD_ORDER (that array is a MUST-SUCCEED set consumed by build_stack,
+# install_prebuilt_stack, online_install_prebuilt, step_depsim and the firstboot
+# loop; an xdph failure there would strand uwsm / abort the offline transaction,
+# the #64 dead-greeter regression). Keeping it out makes an xdph failure
+# structurally unable to break the install: the packaged wlr backend (always in
+# PORTAL_PACKAGES) plus the static routing stand. The repo URL is stored as an
+# EXTRA key in HYPR_REPO_URL so the build step can resolve it without listing the
+# component in the build order.
+XDPH_COMPONENT="xdg-desktop-portal-hyprland"
+XDPH_REPO_URL="${XDPH_REPO_URL:-${HYPR_GIT_BASE}/xdg-desktop-portal-hyprland}"
+HYPR_REPO_URL[${XDPH_COMPONENT}]="${XDPH_REPO_URL}"
 # Runtime Depends per source-built package, used to generate .deb control
 # files at ISO-build time. Keep conservative: list runtime libs that live in
 # the closure pool so apt-get install --simulate resolves fully offline.
 declare -gA HYPR_DEB_DEPENDS=(
   [swww]="libc6, libwayland-client0, libgcc-s1"
   [hyprdim]="libc6, libgcc-s1"
+  # xdph: ONLY the data dep is hardcoded; dpkg-shlibdeps derives the Qt6 /
+  # pipewire / sdbus-c++ runtime libs in package_to_deb (their trixie t64 names
+  # would be phantom if hardcoded here).
+  [${XDPH_COMPONENT}]="xdg-desktop-portal"
 )
 # Our compiled wayland/xkbcommon install to /usr with the same soname paths as
 # Debian's library packages; Provides lets reverse-deps resolve to ours, while
@@ -361,6 +380,11 @@ declare -A HYPR_MESON_ARGS=(
   ["wayland"]="-Ddocumentation=false -Dtests=false"
   ["xkbcommon"]="-Denable-docs=false"
 )
+# Extra CMake options per cmake-built component (consumed by build_one). Empty
+# by default: xdph's Qt6 share-picker builds automatically when Qt6 is present
+# (no enable flag), so no xdph entry is needed unless a mandatory-off default is
+# ever found in the staged CMakeLists — then add ["xdg-desktop-portal-hyprland"]=...
+declare -gA HYPR_CMAKE_ARGS=()
 
 # Compiler for the source-built stack. Trixie's default GCC 14 libstdc++
 # lacks C++23 container-ranges members (std::vector::append_range) that
@@ -518,6 +542,12 @@ HYPR_BUILD_PACKAGES=(
   libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev
   libxcb-icccm4-dev libxcb-render-util0-dev libxcb-res0-dev
   libxcb-xinput-dev
+  # xdph source build deps (#57, #67 item 3): Qt6 for the share-picker, pipewire
+  # + spa for screencast (sdbus-c++ for the portal D-Bus service is already listed
+  # above). The hypr*-dev equivalents are NOT listed — xdph builds AFTER the
+  # source hypr stack, which satisfies them. qt6-wayland is intentionally omitted
+  # (not proven needed).
+  qt6-base-dev libpipewire-0.3-dev libspa-0.2-dev
 )
 
 # Upstream OpenZFS, FORCED on networked installs: trixie's 2.3.x is
@@ -615,6 +645,25 @@ FNKEY_PACKAGES=(
   brightnessctl brightness-udev playerctl
 )
 
+# xdg-desktop-portal stack (#57, #67 item 3). The generic portal service plus
+# the gtk backend (default impl for the non-screencast portals) and the wlr
+# screencast/screenshot backend, which is ALWAYS installed as the guaranteed
+# fallback regardless of whether the source-built xdph backend lands. libglib2.0-bin
+# provides glib-compile-schemas for the dark-mode gschema override. All in main.
+PORTAL_PACKAGES=(
+  xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-wlr
+  libglib2.0-bin
+)
+
+# lxpolkit (#67 item 4): the LXDE polkit authentication agent. Ships
+# /etc/xdg/autostart/lxpolkit.desktop and autostarts via `uwsm finalize`
+# (already wired in the hyprland.start hook) — no extra autostart line needed.
+POLKIT_PACKAGES=(lxpolkit)
+
+# Dolphin file manager (#70): trixie main package, pools its full KDE/Qt6
+# runtime closure (which also backstops the xdph Qt6 share-picker runtime libs).
+FILEMANAGER_PACKAGES=(dolphin)
+
 # Target base packages beyond debootstrap's minimal set.
 # linux-headers-amd64 is REQUIRED alongside zfs-dkms: without headers for
 # the target kernel, dkms silently skips the zfs module build and the
@@ -645,6 +694,9 @@ TARGET_BASE_PACKAGES=(
   "${UWSM_RUNTIME_PACKAGES[@]}"
   "${AUDIO_PACKAGES[@]}"
   "${FNKEY_PACKAGES[@]}"
+  "${PORTAL_PACKAGES[@]}"
+  "${POLKIT_PACKAGES[@]}"
+  "${FILEMANAGER_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 

@@ -277,6 +277,7 @@ build_one() {
     return 0
   fi
   local meson_args="${HYPR_MESON_ARGS[${name}]:-}"
+  local cmake_args="${HYPR_CMAKE_ARGS[${name}]:-}"
   # Empty --jobs means one job per CPU (expanded inside the target).
   local jobs="${HYPR_BUILD_JOBS:-}"
   [[ -n "${jobs}" ]] || jobs="\$(nproc)"
@@ -287,7 +288,7 @@ build_one() {
     cd '${HYPR_SRC_DIR}/${name}'
     if [[ -f CMakeLists.txt ]]; then
       cmake -B build -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr
+        -DCMAKE_INSTALL_PREFIX=/usr ${cmake_args}
       cmake --build build -j\"${jobs}\"
       DESTDIR=\"${HYPR_DESTDIR:-}\" cmake --install build
     elif [[ -f meson.build ]]; then
@@ -1021,6 +1022,33 @@ EOF
 EOF
 }
 
+# Static, unconditional portal routing + dark-mode default (epic #67 items 3/4,
+# #57). The broker uses the hyprland impl when xdph is installed and otherwise
+# falls through to wlr (always installed as the packaged xdg-desktop-portal-wlr),
+# so this IDENTICAL config ships on every path with no install-time backend
+# detection. The prefer-dark gschema override drives the GTK/portal color scheme;
+# glib-compile-schemas compiles it into the target's schema cache (needs
+# libglib2.0-bin). Called from configure_session BEFORE its chown -R so the user
+# config file is owned by the target user.
+write_portal_config() {
+  local portal_dir="${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal"
+  install -d "${portal_dir}"
+  cat >"${portal_dir}/hyprland-portals.conf" <<'EOF'
+[preferred]
+default=gtk
+org.freedesktop.impl.portal.ScreenCast=hyprland;wlr
+org.freedesktop.impl.portal.Screenshot=hyprland;wlr
+EOF
+  install -d "${TARGET}/usr/share/glib-2.0/schemas"
+  cat >"${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override" <<'EOF'
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'
+EOF
+  # Guarded: a missing/failed compile must not abort the install (the override is
+  # cosmetic). libglib2.0-bin provides glib-compile-schemas.
+  in_target "glib-compile-schemas /usr/share/glib-2.0/schemas || true"
+}
+
 configure_session() {
   info "Configuring greetd + uwsm session..."
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
@@ -1496,6 +1524,9 @@ HYPRDIM_SERVICE
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
+  # Portal routing + dark-mode default; before the chown -R so the user config
+  # (hyprland-portals.conf) is owned by the target user.
+  write_portal_config
   in_target "
     set -e
     # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
@@ -1632,6 +1663,27 @@ EOF
 # shipped debs are already the newest (freshness is a build-time concern). The
 # deb data trees (binaries in /usr/bin, the example config in /usr/share/hypr)
 # land here, so configure_session reads the installed example afterwards.
+# xdg-desktop-portal-hyprland (xdph): the Qt6 share-picker ScreenCast backend,
+# built against our OWN source-built hypr* libs. OPTIONAL and best-effort — it is
+# deliberately NOT a member of HYPR_BUILD_ORDER (that set is MUST-SUCCEED and its
+# failure would strand uwsm / abort the offline apt transaction; see the #64
+# dead-greeter revert). If the deb is not in the file:// pool, or the install
+# fails, the packaged xdg-desktop-portal-wlr backend (always installed) plus the
+# static hyprland;wlr routing stand and the install/ISO continues. ALWAYS returns 0.
+install_xdph_best_effort() {
+  if ! in_target "apt-cache show '${XDPH_COMPONENT}' >/dev/null 2>&1"; then
+    info "xdph deb (${XDPH_COMPONENT}) not in the pool; keeping the wlr" \
+      "ScreenCast backend only."
+    return 0
+  fi
+  info "Installing xdph (${XDPH_COMPONENT}) best-effort (Hyprland ScreenCast backend)..."
+  in_target "
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${XDPH_COMPONENT}
+  " || warn "xdph install failed; the packaged wlr ScreenCast backend + routing stand."
+  return 0
+}
+
 install_prebuilt_stack() {
   info "Installing prebuilt Hyprland stack from the on-ISO repo" \
     "(${#HYPR_BUILD_ORDER[@]} packages)..."
@@ -1646,6 +1698,8 @@ install_prebuilt_stack() {
   # greetd boots to a dead greeter. Verify it landed, same as build_stack does.
   in_target "test -x /usr/bin/uwsm" ||
     fatal "uwsm binary missing after prebuilt-stack install (the session would not launch)."
+  # Optional ScreenCast backend, best-effort AFTER the must-succeed stack landed.
+  install_xdph_best_effort
 }
 
 # --online: when the on-ISO/cache repo is present, install whatever custom-stack
@@ -1678,6 +1732,8 @@ online_install_prebuilt() {
     "
     info "Installed prebuilt debs: ${avail[*]}"
   fi
+  # Optional ScreenCast backend from the same file:// pool, best-effort.
+  install_xdph_best_effort
 }
 
 phase_hyprland() {
