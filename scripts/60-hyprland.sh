@@ -467,6 +467,19 @@ write_hypr_lua_config() {
       -e 's/(disable_hyprland_logo[[:space:]]*=[[:space:]]*)(false|true)/\1true/' \
       "${menu_mod}"
   done
+  # Window border/rounding theme: replace the upstream example's cyan/green
+  # gradient with the solid #4a6f9a accent the swaync CSS is built around
+  # (1px border + rounding 6 -> the CSS's card radius 7). Values patched in
+  # whichever upstream-split module carries the general/decoration tables.
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i -E \
+      -e 's/(border_size[[:space:]]*=[[:space:]]*)2,/\11,/' \
+      -e 's/(active_border[[:space:]]*=[[:space:]]*\{[[:space:]]*colors[[:space:]]*=[[:space:]]*)\{[^}]*\}/\1{"rgba(4a6f9aee)"}/' \
+      -e 's/(inactive_border[[:space:]]*=[[:space:]]*)"rgba\([0-9a-fA-F]+\)"/\1"rgba(333333aa)"/' \
+      -e 's/(rounding[[:space:]]+=[[:space:]]*)10,/\16,/' \
+      -e 's/(rounding_power[[:space:]]*=[[:space:]]*)2,/\13,/' \
+      "${menu_mod}"
+  done
   for slug in "${modules[@]}"; do
     printf 'require("%s")\n' "${slug}" >>"${entry}"
   done
@@ -924,9 +937,10 @@ EOF
 # Stage the swaync (sway-notification-center) config (epic #67, item 2). The
 # Debian package ships + auto-enables swaync.service via graphical-session.target
 # .wants, so this only writes the user config. Authored from linux-fixes/fixes.md
-# (no tracked original existed). style.css matches the installer's window accent
-# (#33ccff->#00ff99 45deg gradient, as in hyprlock); the chown -R in the Hyprland
-# phase gives the user ownership. Mako is intentionally never installed.
+# (no tracked original existed). style.css carries the #4a6f9a/#1e1e2e theme the
+# window borders are patched to in write_hypr_lua_config (card radius 7 = window
+# rounding 6 + 1px border); the chown -R in the Hyprland phase gives the user
+# ownership. Mako is intentionally never installed.
 stage_swaync_config() {
   local sw_dir="${TARGET}/home/${TARGET_USERNAME}/.config/swaync"
   install -d "${sw_dir}"
