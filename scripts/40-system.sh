@@ -488,6 +488,44 @@ harvest_lythmono_fonts() {
   rm -rf "${tmp}"
 }
 
+# Build-time harvester for the walker launcher stack (the build host is
+# online): download the walker prebuilt release binary plus the elephant
+# backend and its provider plugins into DEST, so the ISO ships them in the
+# offline store (DEST = ${CACHE_DIR}/repo/${WALKER_STORE_SUBDIR}, grafted to
+# ${CACHE_REPO_DIR}/${WALKER_STORE_SUBDIR} on the ISO). stage_walker_launcher
+# (60-hyprland.sh) installs them from there at install time — NO network.
+# WALKER_VERSION/ELEPHANT_VERSION pin the releases; empty resolves the latest
+# tag (build-time only). Pairs with build-iso's step_stage_walker.
+harvest_walker_launcher() {
+  local dest="${1:?dest dir}" wtag="${WALKER_VERSION:-}" etag="${ELEPHANT_VERSION:-}"
+  local tmp="" p=""
+  [[ -n "${wtag}" ]] || wtag="$(resolve_latest_release_tag "${WALKER_REPO_URL}")"
+  [[ -n "${etag}" ]] || etag="$(resolve_latest_release_tag "${ELEPHANT_REPO_URL}")"
+  info "Harvesting walker ${wtag} + elephant ${etag} into ${dest}..."
+  install -d "${dest}"
+  tmp="$(mktemp -d)"
+  curl -fsSL --retry 3 -o "${tmp}/walker.tgz" \
+    "${WALKER_REPO_URL}/releases/download/${wtag}/walker-${wtag}-x86_64-unknown-linux-gnu.tar.gz" ||
+    { rm -rf "${tmp}"; fatal "Failed to harvest walker ${wtag}."; }
+  tar -xzf "${tmp}/walker.tgz" -C "${dest}" walker ||
+    { rm -rf "${tmp}"; fatal "walker ${wtag} tarball lacks the walker binary."; }
+  curl -fsSL --retry 3 -o "${tmp}/elephant.tgz" \
+    "${ELEPHANT_REPO_URL}/releases/download/${etag}/elephant-linux-amd64.tar.gz" ||
+    { rm -rf "${tmp}"; fatal "Failed to harvest elephant ${etag}."; }
+  tar -xzf "${tmp}/elephant.tgz" -C "${tmp}" &&
+    install -m755 "${tmp}/elephant-linux-amd64" "${dest}/elephant" ||
+    { rm -rf "${tmp}"; fatal "elephant ${etag} tarball lacks the daemon binary."; }
+  for p in "${ELEPHANT_PROVIDERS[@]}"; do
+    curl -fsSL --retry 3 -o "${tmp}/${p}.tgz" \
+      "${ELEPHANT_REPO_URL}/releases/download/${etag}/${p}-linux-amd64.tar.gz" ||
+      { rm -rf "${tmp}"; fatal "Failed to harvest elephant provider ${p} (${etag})."; }
+    tar -xzf "${tmp}/${p}.tgz" -C "${tmp}" &&
+      install -m644 "${tmp}/${p}-linux-amd64.so" "${dest}/${p}.so" ||
+      { rm -rf "${tmp}"; fatal "elephant provider ${p} tarball lacks its plugin."; }
+  done
+  rm -rf "${tmp}"
+}
+
 # LythMono is not packaged. Its TTFs are harvested into the offline store at
 # build time (harvest_lythmono_fonts); install them from that LOCAL store path
 # into the system font path so all users get them, fully OFFLINE — NO GitHub

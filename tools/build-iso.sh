@@ -513,6 +513,25 @@ step_stage_fonts() {
   harvest_lythmono_fonts "${dest}"
 }
 
+# 6d) Stage the walker launcher stack (walker + elephant + providers) INSIDE
+#     the offline store so iso-assemble grafts it onto the ISO at
+#     ${CACHE_REPO_DIR}/${WALKER_STORE_SUBDIR}. stage_walker_launcher
+#     (scripts/60-hyprland.sh) installs from there on an OFFLINE install — NO
+#     GitHub fetch. Same lazy-source pattern as step_stage_fonts.
+step_stage_walker() {
+  local dest="${CACHE_DIR}/repo/${WALKER_STORE_SUBDIR}"
+  if [[ -x "${dest}/walker" && -x "${dest}/elephant" ]]; then
+    info "[build] reusing staged walker launcher stack (${dest})"
+    return 0
+  fi
+  if ! declare -f harvest_walker_launcher >/dev/null 2>&1; then
+    # shellcheck disable=SC1091  # validated repo-relative path
+    source "${REPO_ROOT}/scripts/40-system.sh"
+  fi
+  info "[build] staging walker launcher stack into the offline store (${dest})"
+  harvest_walker_launcher "${dest}"
+}
+
 # restore_build_ownership
 # The build runs as root (sudo), so everything it writes under the workspace and
 # the output ISO is left root-owned — stranding the operator and re-tripping the
@@ -535,6 +554,7 @@ run_heavy_build() {
   step_depsim               # 6
   step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
   step_stage_fonts          # 6c: ship LythMono TTFs inside the offline store
+  step_stage_walker         # 6d: ship walker+elephant inside the offline store
   step_assemble             # 7
   kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
   teardown_chroot_binds     # 9 (also via trap)
