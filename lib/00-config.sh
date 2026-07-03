@@ -286,7 +286,6 @@ HYPR_BUILD_ORDER=(
   hyprland-guiutils
   hyprlock
   hypridle
-  hyprlauncher
   swww
   hyprdim
   uwsm
@@ -316,8 +315,6 @@ declare -A HYPR_REPO_URL=(
   # hyprlock (screen lock, PAM) + hypridle (idle manager) — issues #71/#72.
   ["hyprlock"]="${HYPR_GIT_BASE}/hyprlock"
   ["hypridle"]="${HYPR_GIT_BASE}/hypridle"
-  # hyprlauncher: the hyprtoolkit-based application launcher (default SUPER+R).
-  ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   # swww: animated wallpaper daemon (cargo build via build_custom_swww).
   ["swww"]="https://github.com/LGFae/swww"
   # hyprdim: per-display gamma brightness daemon for external outputs
@@ -592,6 +589,27 @@ LYTHMONO_VARIANTS=(
   LythMonoTermRound LythMonoTermRoundNerdFont
   LythMonoTermSquare LythMonoTermSquareNerdFont
 )
+# walker launcher (replaces the hyprtoolkit hyprlauncher: no pointer input and
+# an exclusive keyboard grab, plus hyprtoolkit's GL-only renderer segfaults on
+# GBM-less virtual GPUs — hyprwm/aquamarine#110 class). walker + its elephant
+# backend and providers are GitHub-only PREBUILT release binaries, HARVESTED
+# into the offline store at BUILD time (harvest_walker_launcher) under
+# WALKER_STORE_SUBDIR and installed from there OFFLINE (stage_walker_launcher,
+# 60-hyprland.sh) — never fetched at install time. Versions pin the releases
+# deterministically; empty resolves the latest tag at BUILD time only.
+WALKER_REPO_URL="${WALKER_REPO_URL:-https://github.com/abenz1267/walker}"
+WALKER_VERSION="${WALKER_VERSION:-}"
+ELEPHANT_REPO_URL="${ELEPHANT_REPO_URL:-https://github.com/abenz1267/elephant}"
+ELEPHANT_VERSION="${ELEPHANT_VERSION:-}"
+WALKER_STORE_SUBDIR="${WALKER_STORE_SUBDIR:-walker}"
+# Elephant data providers shipped (the .so set proven on the reference machine).
+ELEPHANT_PROVIDERS=(
+  desktopapplications calc clipboard files symbols providerlist menus
+)
+# walker runtime deps (prebuilt binary links against these; everything else in
+# its closure is already pooled via the base set's GTK/Poppler dependents).
+WALKER_RUNTIME_PACKAGES=(libgtk4-layer-shell0 libpoppler-glib8)
+
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
@@ -697,6 +715,7 @@ TARGET_BASE_PACKAGES=(
   "${PORTAL_PACKAGES[@]}"
   "${POLKIT_PACKAGES[@]}"
   "${FILEMANAGER_PACKAGES[@]}"
+  "${WALKER_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
