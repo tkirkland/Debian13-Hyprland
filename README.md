@@ -456,9 +456,11 @@ Default desktop apps and keybinds make a fresh install usable without any
 dotfiles (personal config via chezmoi remains a separate user choice that
 overrides these). The installer builds **hyprlock** (lock screen, PAM via
 `/etc/pam.d/hyprlock`), **hypridle** (idle dim → DPMS-off → lock, enabled as
-a `graphical-session.target` user unit), **hyprlauncher** (application
-launcher), and **swww** (wallpaper daemon, autostarted), and adds default
-binds in `hypr-deb.lua`: `SUPER+R` launcher, `SUPER+L` lock, `SUPER+SHIFT+W`
+a `graphical-session.target` user unit), **walker** (application launcher —
+prebuilt release binaries with its **elephant** backend, harvested into the
+offline store at build time), and **swww** (wallpaper daemon, autostarted),
+and adds default binds in `hypr-deb.lua`: a bare `SUPER` tap opens the
+launcher, `SUPER+L` lock, `SUPER+SHIFT+W`
 wallpaper cycle, and the traditional `Print` screenshot cluster
 (`Print`/`Shift+Print`/`Super+Print` via grim/slurp/swappy) plus
 `Super+Shift+R` screen recording (wf-recorder). A distro wallpaper set ships
@@ -488,7 +490,7 @@ Source policy:
   latest stable tag: Wayland, wayland-protocols, xkbcommon, Lua,
   hyprwayland-scanner, hyprutils, hyprlang, hyprcursor, hyprgraphics,
   hyprland-protocols, hyprwire, aquamarine, Hyprland, hyprtoolkit,
-  hyprland-guiutils, hyprlock, hypridle, hyprlauncher, swww, hyprdim, then
+  hyprland-guiutils, hyprlock, hypridle, swww, hyprdim, then
   UWSM. (swww and hyprdim are Rust/cargo builds via custom hooks; the rest are
   CMake/meson.)
 - **Compatibility gate:** Hyprland's CMake version requirements at the
