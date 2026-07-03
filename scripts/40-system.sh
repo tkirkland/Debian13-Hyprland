@@ -586,6 +586,49 @@ configure_audio_quirks() {
 # SoundWire internal audio interface and dual digital-array microphones.
 options snd_intel_dspcfg dsp_driver=3
 EOF
+  configure_ucm_phantom_jacks
+}
+
+# Precision 7780 (SOF HDA): the driver exposes always-present "phantom jack"
+# controls for the built-in speaker and internal mic, but stock alsa-ucm-conf
+# never binds them, so both ports report availability "unknown" and pavucontrol
+# labels working hardware "(unplugged)"/"disconnected". Bind the phantom jacks.
+# The two files are NOT dpkg conffiles (/usr/share payload — upgrades overwrite
+# silently), so each patched file is protected by a dpkg diversion: dpkg writes
+# future package versions to *.distrib and leaves the patch alone. The stock
+# copy is moved host-side and the diversion registered without --rename so the
+# logic stays testable outside a chroot. Pattern-guarded strict no-op if
+# upstream reshapes the files. Proven live on the 7780 (2026-07-03). Called
+# from configure_audio_quirks, so already DMI-guarded; reruns regenerate the
+# patched files from *.distrib, so the fix is idempotent.
+configure_ucm_phantom_jacks() {
+  local ucm="usr/share/alsa/ucm2/HDA"
+  local analog="${TARGET}/${ucm}/HiFi-analog.conf"
+  local mic="${TARGET}/${ucm}/HiFi-mic.conf"
+  if [[ ! -f "${analog}" || ! -f "${mic}" ]]; then
+    info "UCM files not in target; skipping phantom-jack availability fix."
+    return 0
+  fi
+  if ! grep -q 'PlaybackMixerElem "Speaker"' "${analog}" ||
+    ! grep -q 'DeviceMicComment "Internal Stereo Microphone"' "${mic}"; then
+    info "UCM layout changed upstream; skipping phantom-jack availability fix."
+    return 0
+  fi
+  info "Binding UCM phantom jacks so speaker/internal mic report available."
+  local f
+  for f in "${analog}" "${mic}"; do
+    [[ -f "${f}.distrib" ]] || mv "${f}" "${f}.distrib"
+  done
+  in_target "
+    dpkg-divert --add \
+      --divert /${ucm}/HiFi-analog.conf.distrib /${ucm}/HiFi-analog.conf
+    dpkg-divert --add \
+      --divert /${ucm}/HiFi-mic.conf.distrib /${ucm}/HiFi-mic.conf
+  "
+  sed 's/^\t\t\tPlaybackMixerElem "Speaker"/\t\t\tJackControl "Speaker Phantom Jack"\n&/' \
+    "${analog}.distrib" >"${analog}"
+  sed 's/^\t\t\t\tDeviceMicComment "Internal Stereo Microphone"/&\n\t\t\t\tDeviceMicJack "Internal Mic Phantom Jack"/' \
+    "${mic}.distrib" >"${mic}"
 }
 
 # External-display brightness over DDC/CI (issue #66). ddcci-dkms builds the
