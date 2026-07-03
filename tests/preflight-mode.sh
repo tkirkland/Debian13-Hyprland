@@ -6,12 +6,21 @@ source tests/test-helpers.sh
 echo "test: repo discovery + offline-default mode selection"
 
 # --- CACHE_REPO_DIR default -------------------------------------------------
+# Issue 3: the install repo is now decoupled from CACHE_DIR. It defaults to the
+# on-ISO store (ISO_LIVE_REPO), so an offline install never depends on a second
+# install-time cache. (preflight still redirects it to the present store root.)
 out="$(bash -c 'source lib/00-config.sh; echo "${CACHE_REPO_DIR}"')"
-assert_eq "/var/cache/hypr-deb/repo" "${out}" \
-  "CACHE_REPO_DIR defaults to CACHE_DIR/repo"
+assert_eq "/opt/hypr-deb/repo" "${out}" \
+  "CACHE_REPO_DIR defaults to the on-ISO store (ISO_LIVE_REPO), not CACHE_DIR/repo"
 
+# A CACHE_DIR override must NO LONGER move the install repo (decoupled).
 out="$(CACHE_DIR=/srv/x bash -c 'source lib/00-config.sh; echo "${CACHE_REPO_DIR}"')"
-assert_eq "/srv/x/repo" "${out}" "CACHE_REPO_DIR tracks a CACHE_DIR override"
+assert_eq "/opt/hypr-deb/repo" "${out}" \
+  "CACHE_REPO_DIR is independent of CACHE_DIR (no second cache)"
+
+# The install-time embedded-cache var is gone (no TARGET_CACHE_DIR under set -u).
+out="$(bash -c 'source lib/00-config.sh; echo "${TARGET_CACHE_DIR:-UNSET}"')"
+assert_eq "UNSET" "${out}" "TARGET_CACHE_DIR removed (no embedded install cache)"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${ISO_MEDIUM_REPO}"')"
 assert_eq "/run/live/medium/hypr-repo" "${out}" "ISO_MEDIUM_REPO default"
@@ -88,8 +97,10 @@ out="$(PATH="${fakedir}:${PATH}" ISO_LIVE_REPO="${empty}" ISO_MEDIUM_REPO="${emp
   check_network
   echo "${ISO_STORE_PRESENT}|${CACHE_REPO_DIR}|${NETWORK_AVAILABLE}"' 2>/dev/null \
   | tail -n1)"
-assert_eq "0|/var/cache/hypr-deb/repo|1" "${out}" \
-  "no store: CACHE_REPO_DIR unchanged, online by probe"
+# CACHE_REPO_DIR defaults to ISO_LIVE_REPO (here overridden to ${empty}); with no
+# valid store discovered it stays at that default, and the online probe decides.
+assert_eq "0|${empty}|1" "${out}" \
+  "no store: CACHE_REPO_DIR unchanged (its on-ISO-store default), online by probe"
 
 # Embedded in-root store takes precedence over a medium store when BOTH exist.
 medrepo="$(mktemp -d)"

@@ -81,6 +81,23 @@ EOF
   info "timesyncd pinned to NTP servers: ${NTP_SERVERS}"
 }
 
+# Neuter systemd-ssh-generator (systemd >=256) in the installed target. The
+# generator sets up ssh-over-vsock socket activation by querying the local
+# AF_VSOCK CID; on hardware/VMs with no vhost-vsock device that query fails and
+# the generator exits 1 on every boot/daemon-reload, spamming the journal with
+# "Failed to query local AF_VSOCK CID: Cannot assign requested address". It is
+# shipped by systemd itself and is entirely independent of the real sshd
+# (openssh-server's ssh.service), so masking it has ZERO impact on ssh. Mask =
+# symlink to /dev/null under /etc/systemd/system-generators, which outranks
+# /usr/lib/systemd/system-generators, so a systemd dpkg upgrade never undoes it.
+neuter_ssh_vsock_generator() {
+  in_target "
+    set -e
+    mkdir -p /etc/systemd/system-generators
+    ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+  "
+}
+
 # dkms signs every module it builds with this keypair and the boot phase
 # signs loader EFI binaries with it. Debian's dkms would generate it on
 # demand, but the zfs-dkms postinst (during install_base_packages) is the
@@ -99,6 +116,14 @@ ensure_mok_key() {
     fatal "MOK keypair generation failed (openssl)."
   chmod 600 "${TARGET}${MOK_KEY}"
   info "Generated MOK signing keypair at ${MOK_KEY}."
+}
+
+# Echo this machine's CPU vendor_id from /proc/cpuinfo (GenuineIntel /
+# AuthenticAMD), or empty if unknown. The installer runs on the real target
+# hardware, so this reflects the CPU the microcode is being chosen for. Split
+# out so the microcode selection in install_base_packages is unit-testable.
+detect_cpu_vendor() {
+  grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $NF}'
 }
 
 install_base_packages() {
@@ -121,6 +146,24 @@ install_base_packages() {
     filtered+=("${p}")
   done
   pkgs=("${filtered[@]}")
+  # Microcode is CPU-vendor-specific: the other vendor's blob is dead weight on
+  # the installed system. Install ONLY the microcode matching this CPU. BOTH debs
+  # stay in the offline pool (TARGET_BASE_PACKAGES is unchanged, so the ISO still
+  # supports either CPU) — only the INSTALL set is filtered here. Unknown vendor
+  # keeps both (no regression: every CPU still gets its microcode offline).
+  local drop=""
+  case "$(detect_cpu_vendor)" in
+    GenuineIntel) drop="amd64-microcode" ;;
+    AuthenticAMD) drop="intel-microcode" ;;
+  esac
+  if [[ -n "${drop}" ]]; then
+    filtered=()
+    for p in "${pkgs[@]}"; do
+      [[ "${p}" == "${drop}" ]] && continue
+      filtered+=("${p}")
+    done
+    pkgs=("${filtered[@]}")
+  fi
   # man-db re-indexes every installed man page on each apt transaction's
   # trigger phase — there are ~10 transactions across the install, minutes
   # of CPU on bare metal. Disable its auto-update for the chroot's lifetime
@@ -207,6 +250,11 @@ install_zfs_from_source() {
   local zfs_script="
     set -e
     export DEBIAN_FRONTEND=noninteractive
+    # native-deb-utils drives dpkg-buildpackage/debhelper, which generates and
+    # then discards -dbgsym debs. noautodbgsym tells dh_strip not to produce them
+    # at all (build-time waste). It only suppresses auto -dbgsym packages, so the
+    # required openzfs-* debs asserted below are unaffected.
+    export DEB_BUILD_OPTIONS=noautodbgsym
     # Drop any live-kernel modules package from an earlier failed attempt.
     if dpkg-query -W 'openzfs-zfs-modules-*' >/dev/null 2>&1; then
       apt-get purge -y 'openzfs-zfs-modules-*'
@@ -538,6 +586,49 @@ configure_audio_quirks() {
 # SoundWire internal audio interface and dual digital-array microphones.
 options snd_intel_dspcfg dsp_driver=3
 EOF
+  configure_ucm_phantom_jacks
+}
+
+# Precision 7780 (SOF HDA): the driver exposes always-present "phantom jack"
+# controls for the built-in speaker and internal mic, but stock alsa-ucm-conf
+# never binds them, so both ports report availability "unknown" and pavucontrol
+# labels working hardware "(unplugged)"/"disconnected". Bind the phantom jacks.
+# The two files are NOT dpkg conffiles (/usr/share payload — upgrades overwrite
+# silently), so each patched file is protected by a dpkg diversion: dpkg writes
+# future package versions to *.distrib and leaves the patch alone. The stock
+# copy is moved host-side and the diversion registered without --rename so the
+# logic stays testable outside a chroot. Pattern-guarded strict no-op if
+# upstream reshapes the files. Proven live on the 7780 (2026-07-03). Called
+# from configure_audio_quirks, so already DMI-guarded; reruns regenerate the
+# patched files from *.distrib, so the fix is idempotent.
+configure_ucm_phantom_jacks() {
+  local ucm="usr/share/alsa/ucm2/HDA"
+  local analog="${TARGET}/${ucm}/HiFi-analog.conf"
+  local mic="${TARGET}/${ucm}/HiFi-mic.conf"
+  if [[ ! -f "${analog}" || ! -f "${mic}" ]]; then
+    info "UCM files not in target; skipping phantom-jack availability fix."
+    return 0
+  fi
+  if ! grep -q 'PlaybackMixerElem "Speaker"' "${analog}" ||
+    ! grep -q 'DeviceMicComment "Internal Stereo Microphone"' "${mic}"; then
+    info "UCM layout changed upstream; skipping phantom-jack availability fix."
+    return 0
+  fi
+  info "Binding UCM phantom jacks so speaker/internal mic report available."
+  local f
+  for f in "${analog}" "${mic}"; do
+    [[ -f "${f}.distrib" ]] || mv "${f}" "${f}.distrib"
+  done
+  in_target "
+    dpkg-divert --add \
+      --divert /${ucm}/HiFi-analog.conf.distrib /${ucm}/HiFi-analog.conf
+    dpkg-divert --add \
+      --divert /${ucm}/HiFi-mic.conf.distrib /${ucm}/HiFi-mic.conf
+  "
+  sed 's/^\t\t\tPlaybackMixerElem "Speaker"/\t\t\tJackControl "Speaker Phantom Jack"\n&/' \
+    "${analog}.distrib" >"${analog}"
+  sed 's/^\t\t\t\tDeviceMicComment "Internal Stereo Microphone"/&\n\t\t\t\tDeviceMicJack "Internal Mic Phantom Jack"/' \
+    "${mic}.distrib" >"${mic}"
 }
 
 # External-display brightness over DDC/CI (issue #66). ddcci-dkms builds the
@@ -570,6 +661,7 @@ phase_system() {
   install_lythmono_fonts
   configure_locale_tz
   configure_time_sync
+  neuter_ssh_vsock_generator
   create_user
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
   # captures the modprobe.d/modules-load.d drop-ins without a second rebuild.

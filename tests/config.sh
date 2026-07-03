@@ -22,23 +22,23 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww hypr-dim uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww hyprdim uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
 
-# hypr-dim (external-display gamma brightness daemon, issue #66) builds from
+# hyprdim (external-display gamma brightness daemon, issue #66) builds from
 # source like swww, after it and before uwsm.
 out="$(bash -c 'source lib/00-config.sh; printf "%s\n" "${HYPR_BUILD_ORDER[@]}"')"
-assert_contains "${out}" "hypr-dim" "hypr-dim in the build order (issue #66)"
+assert_contains "${out}" "hyprdim" "hyprdim in the build order (issue #66)"
 
 # Its source URL defaults to the tkirkland repo and is overridable.
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPRDIM_REPO_URL}"')"
-assert_eq "https://github.com/tkirkland/hypr-dim" "${out}" \
-  "HYPRDIM_REPO_URL default (tkirkland/hypr-dim)"
-out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_REPO_URL[hypr-dim]}"')"
-assert_eq "https://github.com/tkirkland/hypr-dim" "${out}" \
-  "hypr-dim build-order entry maps to its repo URL"
+assert_eq "https://github.com/tkirkland/hyprdim" "${out}" \
+  "HYPRDIM_REPO_URL default (tkirkland/hyprdim)"
+out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_REPO_URL[hyprdim]}"')"
+assert_eq "https://github.com/tkirkland/hyprdim" "${out}" \
+  "hyprdim build-order entry maps to its repo URL"
 out="$(HYPRDIM_REPO_URL=https://example.invalid/fork bash -c \
-  'source lib/00-config.sh; echo "${HYPR_REPO_URL[hypr-dim]}"')"
+  'source lib/00-config.sh; echo "${HYPR_REPO_URL[hyprdim]}"')"
 assert_eq "https://example.invalid/fork" "${out}" \
   "HYPRDIM_REPO_URL env override flows into the repo map"
 
@@ -62,6 +62,32 @@ out="$(bash -c 'source lib/00-config.sh
 assert_contains "${out}" "gcc-15 g++-15" "toolchain packages split out"
 assert_contains "${out}" "0" \
   "toolchain absent from general build packages (no sid leakage)"
+
+# xdph (xdg-desktop-portal-hyprland) is source-built as its own optional
+# component, so its build-deps ride in HYPR_BUILD_PACKAGES (NOT the source-built
+# hypr stack, which xdph builds against afterward). qt6-base-dev powers the Qt6
+# share-picker; the pipewire/spa/sdbus-c++ headers are the screencast backend.
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${HYPR_BUILD_PACKAGES[@]}"')"
+assert_contains "${out}" "qt6-base-dev" \
+  "Qt6 build-dep for the xdph share-picker (issue #57/#67)"
+assert_contains "${out}" "libpipewire-0.3-dev" \
+  "PipeWire headers for the xdph screencast backend (issue #57/#67)"
+assert_contains "${out}" "libspa-0.2-dev" \
+  "SPA headers for the xdph screencast backend (issue #57/#67)"
+assert_contains "${out}" "libsdbus-c++-dev" \
+  "sdbus-c++ headers for xdph (issue #57/#67)"
+# xdph is its OWN optional component and MUST NEVER be a HYPR_BUILD_ORDER member
+# (the #64 dead-greeter revert): the order is a must-succeed set whose failure
+# would strand uwsm / abort the offline apt transaction.
+out="$(bash -c 'source lib/00-config.sh
+  printf "%s\n" "${HYPR_BUILD_ORDER[@]}"')"
+if printf '%s\n' "${out}" | grep -qx 'xdph\|xdg-desktop-portal-hyprland'; then
+  echo "  FAIL: xdph must not be a HYPR_BUILD_ORDER member (issue #64)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: xdph stays out of the must-succeed HYPR_BUILD_ORDER (issue #64)"
+fi
 
 out="$(bash -c 'source lib/00-config.sh
   printf "%s\n" "${TARGET_BASE_PACKAGES[@]}"')"
@@ -94,6 +120,24 @@ else
 fi
 assert_contains "${out}" "systemd-timesyncd" \
   "NTP client in base set so the installed clock stays disciplined"
+# Portal stack (issue #57/#67 item 3): the xdg-desktop-portal broker plus the
+# gtk backend (routing default=gtk) and the packaged wlr backend, which is the
+# ALWAYS-installed screencast fallback when the source-built hyprland impl is
+# absent — so the portal chain works on every path regardless of xdph.
+assert_contains "${out}" "xdg-desktop-portal" \
+  "xdg-desktop-portal broker in base set (issue #57/#67)"
+assert_contains "${out}" "xdg-desktop-portal-gtk" \
+  "gtk portal backend in base set (routing default=gtk) (issue #57/#67)"
+assert_contains "${out}" "xdg-desktop-portal-wlr" \
+  "wlr portal backend in base set (guaranteed screencast fallback) (issue #57/#67)"
+# lxpolkit polkit agent (issue #67 item 4): ships /etc/xdg/autostart and starts
+# via 'uwsm finalize' — no extra autostart wiring needed.
+assert_contains "${out}" "lxpolkit" \
+  "lxpolkit polkit agent in base set (issue #67 item 4)"
+# Dolphin file manager (issue #70); also anchors the KDE/Qt6 runtime closure the
+# source-built xdph share-picker relies on at package time.
+assert_contains "${out}" "dolphin" \
+  "Dolphin file manager in base set (issue #70)"
 
 # addons/*.list files are appended to the target package set (comments
 # and whitespace stripped); the .sample template must NOT load.

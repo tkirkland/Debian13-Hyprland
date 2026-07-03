@@ -75,13 +75,18 @@ TARGET="${ISO_WORKSPACE}/buildroot"
 export TARGET
 # Cache/pool live inside the workspace (override lib/00-config.sh's defaults).
 CACHE_DIR="${ISO_WORKSPACE}/cache"
+# CACHE_REPO_DIR no longer derives from CACHE_DIR (it defaults to the on-ISO
+# store ISO_LIVE_REPO now), so the build MUST repoint it at the workspace pool
+# explicitly — otherwise cache_repo_exists/cache_validate would check the wrong
+# path and the build's populate/index/resume-skip logic would misfire.
+CACHE_REPO_DIR="${CACHE_DIR}/repo"
 POOL="${CACHE_DIR}/repo/pool"
 # Shared debootstrap .deb cache. The buildroot debootstrap (step_bootstrap_chroot)
 # fills it on the SINGLE base download; the closure debootstrap (10-cache.sh,
 # sourced in-process) reuses it via --cache-dir, so the trixie base is fetched
 # once and reused instead of being re-downloaded. EXPORTED so the in-process
-# 10-cache.sh sees it; the installer phase_cache leaves it UNSET (10-cache.sh
-# references it defensively, so that path is unchanged — no --cache-dir).
+# 10-cache.sh sees it; when unset (any other caller) 10-cache.sh references it
+# defensively, so that path passes no --cache-dir.
 DEBOOTSTRAP_CACHE="${CACHE_DIR}/debs-cache"
 export DEBOOTSTRAP_CACHE
 # Chroot-internal staging root for DESTDIR installs (host-visible at
@@ -93,6 +98,14 @@ BUILD_STAGE_REL="${BUILD_STAGE_REL:-/var/tmp/hypr-stage}"
 # has no preflight, so declare it here. stage_source/install_build_deps branch
 # on it to clone sources and add the sid/backports toolchain over the network.
 export NETWORK_AVAILABLE=1
+
+# xdph (xdg-desktop-portal-hyprland) — OPTIONAL source-built screencast backend
+# (Option B). Its component name (XDPH_COMPONENT), repo-URL entry in HYPR_REPO_URL,
+# and Qt6/PipeWire build-deps (qt6-base-dev, libpipewire-0.3-dev, libspa-0.2-dev)
+# are all defined in lib/00-config.sh, sourced above — deliberately OUT of
+# HYPR_BUILD_ORDER so an xdph failure can never strand uwsm (the #64 regression).
+# This file only adds the guarded step_build_portal (below) that compiles it into
+# a pooled .deb, and the step_depsim gate; nothing to redefine here.
 
 # --- Testable seam: print the resolved plan, mutate nothing ------------------
 plan_summary() {
@@ -161,9 +174,13 @@ step_bootstrap_chroot() {
 
 # 2) Populate the offline .deb closure and index the file:// repo.
 step_cache() {
-  # Resume support: skip the ~minutes-long closure download if the cache repo's
-  # Packages index already exists (cache_repo_exists, from 10-cache.sh).
-  if cache_repo_exists; then
+  # Resume support: skip the ~minutes-long closure download only when the cache
+  # repo's Packages index exists AND was stamped with the current package sets
+  # (cache_pkgset_fresh, from 10-cache.sh). A stale pool — one populated before a
+  # package was added to TARGET_BASE_PACKAGES et al., or a pre-stamp cache with no
+  # stamp — is repopulated instead of silently reused, which is what caused
+  # step_depsim to fail with "Unable to locate package" for the newly-added names.
+  if cache_repo_exists && cache_pkgset_fresh; then
     info "[build] reusing existing .deb closure in ${CACHE_DIR} (skip download)"
   else
     info "[build] populating offline .deb cache in ${CACHE_DIR}"
@@ -183,6 +200,11 @@ step_cache() {
 #    build_component_to_deb) so DESTDIR lands inside the buildroot.
 step_build_stack() {
   local name tag debver stagerel
+  # The build-dep set (HYPR_BUILD_PACKAGES) is identical for every component, so
+  # install it ONCE before the loop instead of re-running install_build_deps per
+  # rebuilt component (up to 21x). Pure build-time speedup; same packages land.
+  # Mirrors the already-hoisted installer path (scripts/60-hyprland.sh build_stack).
+  install_build_deps
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     tag="$(resolve_latest_release_tag \
       "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
@@ -194,7 +216,6 @@ step_build_stack() {
       # shellcheck disable=SC2034  # consumed by stage_source/build_one via 60-hyprland.sh
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       stage_source "${name}"
-      install_build_deps
       HYPR_DESTDIR="${stagerel}" build_one "${name}"
       package_to_deb "${TARGET}${stagerel}" "${name}" "${debver}" \
         "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${POOL}"
@@ -214,6 +235,42 @@ step_build_stack() {
       in_target "ldconfig"
     fi
   done
+}
+
+# 3b) Build the OPTIONAL xdg-desktop-portal-hyprland (xdph) screencast backend
+#    into a pooled .deb. Mirrors ONE iteration of step_build_stack's body (resolve
+#    tag -> stage source -> build_one with a chroot-internal HYPR_DESTDIR ->
+#    package_to_deb into the pool), but the ENTIRE body runs in a guarded subshell
+#    so any failure is NON-FATAL and cannot abort the ISO build: on failure we warn
+#    and return 0, leaving the always-installed packaged wlr backend + static
+#    routing conf as the guarantee. Runs AFTER step_build_stack so xdph links the
+#    freshly source-built hypr* libs already copied into the buildroot /usr (no ABI
+#    mismatch), and BEFORE step_runtime_closure so that pass scans the xdph deb and
+#    pools its declared Qt6/PipeWire/sdbus-c++ runtime closure. xdph is NOT copied
+#    into the buildroot /usr afterward (nothing else builds against it) and is NOT
+#    verified — it is best-effort by design.
+step_build_portal() {
+  local name="${XDPH_COMPONENT}" tag debver stagerel
+  (
+    set -e
+    tag="$(resolve_latest_release_tag \
+      "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
+    debver="$(tag_to_debver "${tag}")"
+    if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
+      stagerel="${BUILD_STAGE_REL}/${name}"
+      rm -rf "${TARGET}${stagerel}"
+      mkdir -p "${TARGET}${stagerel}"
+      # shellcheck disable=SC2034  # consumed by stage_source/build_one via 60-hyprland.sh
+      HYPR_RESOLVED_TAG["${name}"]="${tag}"
+      stage_source "${name}"
+      HYPR_DESTDIR="${stagerel}" build_one "${name}"
+      package_to_deb "${TARGET}${stagerel}" "${name}" "${debver}" \
+        "${ARCH}" "${HYPR_DEB_DEPENDS[${name}]:-}" "${POOL}"
+    else
+      info "reuse cached ${name}"
+    fi
+  ) || warn "xdph build failed; packaged wlr fallback stands"
+  return 0
 }
 
 # 4) Build upstream OpenZFS as native debs into the pool. install_zfs_from_source
@@ -271,6 +328,11 @@ step_runtime_closure() {
   while IFS= read -r n; do
     [[ -n "${n}" ]] || continue
     [[ "${provided}" == *" ${n} "* ]] && continue
+    # Skip a dep whose .deb is ALREADY in the pool (named ${name}_${ver}_${arch}.deb)
+    # — cache_populate_debs pooled most of these at step 1, so re-fetching them is
+    # pure wasted apt-get download. Conservative: step_depsim remains the hard
+    # offline-completeness gate, so any genuinely-missing dep is still caught.
+    compgen -G "${POOL}/${n}_*.deb" >/dev/null && continue
     want+=("${n}")
   done <<<"${names}"
   ((${#want[@]})) || return 0
@@ -300,6 +362,15 @@ step_depsim() {
   info "[build] simulating full install against the offline pool only"
   local simroot
   simroot="$(mktemp -d "${ISO_WORKSPACE}/depsim.XXXXXX")"
+  # xdph is OPTIONAL and may not have built, so only add it to the simulated
+  # install set when its .deb is actually pooled — otherwise apt-get --simulate
+  # would fail on an unknown package and abort an otherwise-complete build. When
+  # present, including it proves its Qt6/PipeWire/sdbus-c++ runtime closure also
+  # resolves fully offline. NOT added to HYPR_BUILD_ORDER (the must-succeed set).
+  local xdph_sim=""
+  if compgen -G "${POOL}/${XDPH_COMPONENT}_*.deb" >/dev/null; then
+    xdph_sim="${XDPH_COMPONENT}"
+  fi
   # Bootstrap the throwaway base DIRECTLY from the offline pool — ZERO network.
   # step_reindex (step 5) already wrote ${CACHE_DIR}/repo/dists/${SUITE}/{Release,
   # main/binary-${ARCH}/Packages}, and the base debs were pooled at step 1, so the
@@ -325,7 +396,7 @@ step_depsim() {
     set -e
     apt-get update -o APT::Get::List-Cleanup=0 >/dev/null
     DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y \
-      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]}
+      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]} ${xdph_sim}
   ")" && rc=0 || rc=$?
   # Unmount + remove the throwaway simroot now. The bind is also trap-tracked;
   # teardown_chroot_binds re-checks mountpoint, so this is not a double-unmount.
@@ -442,10 +513,22 @@ step_stage_fonts() {
   harvest_lythmono_fonts "${dest}"
 }
 
+# restore_build_ownership
+# The build runs as root (sudo), so everything it writes under the workspace and
+# the output ISO is left root-owned — stranding the operator and re-tripping the
+# dry-run test. Hand it back to the user who invoked sudo (SUDO_UID/SUDO_GID).
+# No-op when not run under sudo (real root login: nothing to hand back).
+restore_build_ownership() {
+  [[ -n "${SUDO_UID:-}" ]] || return 0
+  chown -R "${SUDO_UID}:${SUDO_GID:-${SUDO_UID}}" \
+    "${ISO_WORKSPACE}" "${OUT_ISO}" 2>/dev/null || true
+}
+
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
   step_build_stack          # 3
+  step_build_portal         # 3b: OPTIONAL xdph screencast backend (non-fatal)
   step_zfs                  # 4
   step_runtime_closure      # 4.5: pool the runtime deps the built debs declare
   step_reindex              # 5
@@ -490,8 +573,11 @@ main() {
   assert_stage_under_target "${TARGET}" "${BUILD_STAGE_REL}" \
     || fatal "unsafe BUILD_STAGE_REL (escapes buildroot): ${BUILD_STAGE_REL}"
 
-  # Mounts must never leak, even on failure.
-  trap 'teardown_chroot_binds' EXIT
+  # Mounts must never leak, even on failure; and the root build must not leave
+  # root-owned droppings in the operator's workspace/output (which strand the
+  # user and re-trip the dry-run test on the next run). restore_build_ownership
+  # runs last on EXIT, after the binds are torn down.
+  trap 'teardown_chroot_binds; restore_build_ownership' EXIT
   trap 'teardown_chroot_binds' ERR
 
   mkdir -p "${ISO_WORKSPACE}" "${POOL}" "${DEBOOTSTRAP_CACHE}"

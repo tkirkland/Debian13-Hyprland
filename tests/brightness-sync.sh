@@ -46,13 +46,13 @@ rm -f "${BS_DIMSAVE}"
 "${BS}" dim
 assert_contains "$(cat "${LOG}")" \
   "busctl --user call dev.hyprdim / dev.hyprdim Snapshot" \
-  "dim snapshots external levels via the hypr-dim daemon"
+  "dim snapshots external levels via the hyprdim daemon"
 
 # restore must re-apply via the daemon's Restore.
 : >"${LOG}"; "${BS}" restore
 assert_contains "$(cat "${LOG}")" \
   "busctl --user call dev.hyprdim / dev.hyprdim Restore" \
-  "restore re-applies external levels via the hypr-dim daemon"
+  "restore re-applies external levels via the hyprdim daemon"
 
 # up nudges the external over D-Bus (gamma path -> busctl set-property Brightness).
 : >"${LOG}"; "${BS}" up

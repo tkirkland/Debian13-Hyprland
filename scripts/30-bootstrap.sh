@@ -103,7 +103,12 @@ ensure_target_ready() {
   else
     warn "/dev/md/efi absent; ESP not mounted (assemble the array first if a phase needs it)."
   fi
-  mountpoint -q "${TARGET}/proc" || mount_chroot_binds
+  # Always (re)ensure the chroot binds — mount_chroot_binds is idempotent
+  # (each mount is mountpoint-guarded). The old `mountpoint -q ${TARGET}/proc ||`
+  # gate skipped ALL binds whenever /proc happened to be mounted, which on a
+  # standalone `--phase=boot` or a resumed run left the efivars bind absent and
+  # made `chroot mokutil --import` fail even though the live host had efivars.
+  mount_chroot_binds
 }
 
 run_debootstrap() {

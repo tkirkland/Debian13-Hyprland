@@ -302,12 +302,6 @@ detect_live_environment() {
   if grep -qE '(^| )boot=live( |$)' /proc/cmdline 2>/dev/null ||
     mountpoint -q /run/live/medium 2>/dev/null; then
     info "Host: live environment"
-    # Live overlays are RAM-backed; warn if the cache would land on tmpfs.
-    local fstype=""
-    fstype="$(stat -f -c %T "$(dirname "${CACHE_DIR}")" 2>/dev/null || true)"
-    if [[ "${fstype}" == "tmpfs" || "${fstype}" == "overlayfs" ]]; then
-      warn "CACHE_DIR=${CACHE_DIR} is RAM-backed; use --cache-dir on real storage."
-    fi
   else
     info "Host: installed system"
   fi
