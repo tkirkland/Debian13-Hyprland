@@ -465,6 +465,13 @@ write_hypr_lua_config() {
     sed -i 's/hl\.bind(mainMod \.\. " + R", hl\.dsp\.exec_cmd(menu))/hl.bind(mainMod .. " + SUPER_L", hl.dsp.exec_cmd(menu), { release = true })/' \
       "${menu_mod}"
   done
+  # Drop the upstream example's raw-brightnessctl XF86MonBrightness binds:
+  # hypr-deb.lua (required last) rebinds those keys to brightness-sync
+  # (issue #66). Binds register per hl.bind() call, so leaving the upstream
+  # pair in place loads BOTH and every brightness keypress fires twice.
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i -E '/XF86MonBrightness(Up|Down).*brightnessctl/d' "${menu_mod}"
+  done
   # swww manages the wallpaper, so disable Hyprland's built-in default wallpaper
   # and logo (else the mascot flashes before swww draws). Patch the values in
   # whichever upstream-split module sets them inside its misc config table.
