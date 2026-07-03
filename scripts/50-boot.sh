@@ -140,9 +140,10 @@ stage_mok_enrollment() {
       "installed system with a 8-16 char password."
     return 0
   fi
+  local out=""
   if [[ -n "${USER_PASSWORD}" ]]; then
-    printf '%s\n%s\n' "${USER_PASSWORD}" "${USER_PASSWORD}" |
-      chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
+    out="$(printf '%s\n%s\n' "${USER_PASSWORD}" "${USER_PASSWORD}" |
+      chroot "${TARGET}" mokutil --import "${MOK_CRT}" 2>&1)" || rc=$?
   elif ((IS_INTERACTIVE)); then
     info "Choose a MOK password (you will re-enter it at first boot):"
     with_console chroot "${TARGET}" mokutil --import "${MOK_CRT}" || rc=$?
@@ -152,9 +153,12 @@ stage_mok_enrollment() {
     return 0
   fi
   if ((rc != 0)); then
-    warn "mokutil --import failed — usually no efivars in this" \
-      "environment, or a password outside mokutil's 8-16 character" \
-      "range. Run 'mokutil --import ${MOK_CRT}' on the installed system," \
+    # Surface mokutil's own words: "This system doesn't support Secure Boot"
+    # means SB-incapable firmware (e.g. plain OVMF in a VM — testbed needs the
+    # secboot build, see tools/recreate-hypr-test.sh); other causes include no
+    # efivars in the environment or a password outside mokutil's 8-16 chars.
+    warn "mokutil --import failed${out:+: ${out}}. Run 'mokutil --import" \
+      "${MOK_CRT}' on the installed system (SB-capable firmware required)," \
       "then reboot and enroll at the MokManager screen."
   fi
 }
