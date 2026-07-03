@@ -199,10 +199,15 @@ phase_verify() {
     vcheck "loader MOK signature valid" in_target \
       "sbverify --cert '${MOK_PEM}' '${ESP_MOUNT}/EFI/${sb_dir}/grubx64.efi'"
   fi
-  # Warn-only: VMs without efivars cannot stage the import.
+  # Warn-only: SB-incapable firmware / no efivars cannot stage the import.
+  # MOK_STAGED also gates the closing "Secure boot: ready" message — do not
+  # promise the MokManager first-boot screen when nothing was staged.
+  MOK_STAGED=1
   if ! in_target "mokutil --list-new 2>/dev/null | grep -q ."; then
-    warn "MOK enrollment not staged (no efivars?). On the installed" \
-      "system run: mokutil --import ${MOK_CRT}"
+    MOK_STAGED=0
+    warn "MOK enrollment not staged — the boot-phase warning above has" \
+      "mokutil's reason. On the installed system run:" \
+      "mokutil --import ${MOK_CRT}"
   fi
 
   vcheck "fstab ESP UUID valid" bash -c \
@@ -225,7 +230,13 @@ phase_verify() {
 
   verify_report || fatal "Verification failed — installation is NOT complete."
   info "SUCCESS: bootable Debian + Hyprland conditions both met."
-  info "Secure boot: ready. First boot shows the blue MokManager screen —"
-  info "choose 'Enroll MOK' and enter your user password. After that you"
-  info "may enable secure boot in firmware at any time."
+  if ((${MOK_STAGED:-0})); then
+    info "Secure boot: ready. First boot shows the blue MokManager screen —"
+    info "choose 'Enroll MOK' and enter your user password. After that you"
+    info "may enable secure boot in firmware at any time."
+  else
+    info "Secure boot: NOT staged (see MOK warnings above). The system boots"
+    info "with secure boot off; stage later with 'mokutil --import ${MOK_CRT}'"
+    info "on the installed system, then reboot and enroll at MokManager."
+  fi
 }
