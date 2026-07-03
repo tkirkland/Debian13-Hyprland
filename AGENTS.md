@@ -115,18 +115,23 @@ pinning test with the fix.
 
 Conventional Commits, lowercase after the prefix:
 `feat:` / `fix:` / `test:` / `docs:` / `chore:` / `refactor:`.
-One concern per commit. Work directly on `develop` — one fix at a time, no
-per-change "leaf" branch — and open a pull request into `master` once the
-gates pass. Never commit straight to `master` (it is protected: PR-only).
+One concern per commit, and commits grouped by **fix type**: all work on one
+topic (e.g. "the audio card") lives on one short-lived branch
+(`feat/...` / `fix/...` / etc.) cut from `develop` — as many commits as the
+topic needs, never a second topic. Never commit directly to `develop` (loose
+commits there are untrackable) and never to `master` (protected: PR-only).
 History on GitHub is append-only — no rewrites.
 
 ## Pull requests
 
-Two long-lived branches: `develop` (where work lands, one fix at a time)
-and `master` (the reviewed line). No per-change leaf branch. The loop:
+Two long-lived branches: `develop` (where fix-group PRs land) and `master`
+(the reviewed line), plus one short-lived branch per fix group. The loop:
 
-1. Work is committed to `develop` and pushed.
-2. The agent opens a PR `develop` → `master`.
+1. Work is committed to a per-fix-group branch, pushed, and the agent opens
+   a PR into `develop`. The user reviews; on his explicit go-ahead the agent
+   merges it with a **merge commit** (squash/rebase are disabled repo-wide).
+   One PR = one fix type, so each fix stays trackable as a unit.
+2. For a release, the agent opens a PR `develop` → `master`.
 3. The user reviews and gives the verdict in-session:
    - **Approved** ("gtg" / "all good" / similar) — the agent merges with a
      **merge commit** (never squash/rebase: only the merge-commit method
