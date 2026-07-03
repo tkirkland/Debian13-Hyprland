@@ -1028,6 +1028,41 @@ EOF
 EOF
 }
 
+# Stage the kitty terminal config. kitty is installed by apt but was shipped
+# with no user config at all — stock white-background defaults. These are the
+# reference machine's effective settings (comment/default lines stripped):
+# LythMonoTerm Nerd Font (harvested into the offline pool, see
+# harvest_lythmono_fonts), translucent blurred background, no audio bell,
+# remote control on a socket for kitten/script use, alt+,/. window cycling,
+# keypad font-size zoom. Ownership comes from the later chown -R, same as the
+# other staged user configs.
+stage_kitty_config() {
+  local kitty_dir="${TARGET}/home/${TARGET_USERNAME}/.config/kitty"
+  install -d "${kitty_dir}"
+  cat >"${kitty_dir}/kitty.conf" <<'EOF'
+# Staged by installer.sh — matches the reference machine's kitty setup.
+font_family      LythMonoTerm Nerd Font
+font_size 12.0
+cursor_shape block
+cursor_blink_interval 0
+enable_audio_bell no
+visual_bell_duration 0.2
+visual_bell_color #ffffff
+background_opacity 0.7
+background_blur 4
+dynamic_background_opacity yes
+allow_remote_control socket-only
+listen_on unix:@mykitty
+shell_integration no-cursor
+map kitty_mod+] no_op
+map alt+. next_window
+map kitty_mod+[ no_op
+map alt+, previous_window
+map kp_add      change_font_size all +1.0
+map kp_subtract change_font_size all -1.0
+EOF
+}
+
 # Static, unconditional portal routing + dark-mode default (epic #67 items 3/4,
 # #57). The broker uses the hyprland impl when xdph is installed and otherwise
 # falls through to wlr (always installed as the packaged xdg-desktop-portal-wlr),
@@ -1530,6 +1565,7 @@ HYPRDIM_SERVICE
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
+  stage_kitty_config
   # Portal routing + dark-mode default; before the chown -R so the user config
   # (hyprland-portals.conf) is owned by the target user.
   write_portal_config
