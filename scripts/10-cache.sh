@@ -18,6 +18,30 @@ cache_repo_exists() {
   [[ -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]
 }
 
+# Stable hash of the package sets that determine the pool's contents (the exact
+# arrays cache_populate_debs feeds to the closure apt-get). Sorted so reordering
+# does not invalidate the pool. Used to detect when the pool is stale because a
+# package was added/removed since it was last populated.
+cache_pkgset_hash() {
+  printf '%s\n' \
+    "${TARGET_BASE_PACKAGES[@]}" \
+    "${HYPR_BUILD_PACKAGES[@]}" \
+    "${LIVE_TOOL_PACKAGES[@]}" \
+    "${HYPR_TOOLCHAIN_PACKAGES[@]}" \
+    "${HYPR_BACKPORTS_PACKAGES[@]}" |
+    sort | sha256sum | awk '{print $1}'
+}
+
+# True only when the pool was stamped with the CURRENT package-set hash. A
+# missing stamp (a pre-stamp cache, or one populated before this guard existed)
+# reads as stale, so it is repopulated rather than silently reused — that reuse
+# was the "Unable to locate package" depsim failure this guard prevents.
+cache_pkgset_fresh() {
+  local stamp="${CACHE_DIR}/.pkgset.sha256"
+  [[ -f "${stamp}" ]] || return 1
+  [[ "$(cat "${stamp}")" == "$(cache_pkgset_hash)" ]]
+}
+
 # Configure apt (live env) to install from the cache repo only.
 install_from_cache_repo() {
   local list="/etc/apt/sources.list.d/hypr-deb-cache.list"
@@ -37,8 +61,8 @@ cache_populate_debs() {
   mkdir -p "${pool}" "${work}"
 
   # Shared debootstrap deb cache, set+exported by build-iso.sh. Referenced
-  # DEFENSIVELY: the installer phase_cache leaves it UNSET, so this expands to
-  # empty and NO --cache-dir is passed (installer path byte-for-byte unchanged).
+  # DEFENSIVELY: when unset (any caller other than build-iso.sh) this expands to
+  # empty and NO --cache-dir is passed.
   # For the build-iso path it points at the cache the buildroot debootstrap
   # already filled, so the closure debootstrap reuses the base instead of
   # re-downloading it. (The dedicated --download-only bootstrap pass that used
@@ -144,6 +168,10 @@ SRC
   "
   cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
   rm -rf "${work}"
+  # Stamp the pool with the package-set hash so a later build reuses it only
+  # while the sets are unchanged (cache_pkgset_fresh); adding/removing a package
+  # now invalidates it and forces a repopulate instead of a stale reuse.
+  cache_pkgset_hash >"${CACHE_DIR}/.pkgset.sha256"
   info "Pool populated: $(find "${pool}" -name '*.deb' | wc -l) packages"
 }
 
@@ -186,34 +214,6 @@ cache_index_repo() {
       -o "APT::FTPArchive::Release::Architectures=${ARCH}" \
       release "dists/${SUITE}" >"dists/${SUITE}/Release"
   )
-}
-
-# GitHub's tag tarballs omit git submodules (Hyprland vendors udis86 that
-# way), so sources are cached from recursive clones, not codeload tarballs.
-cache_populate_sources() {
-  local name="" repo="" tag="" clone="" manifest="${CACHE_DIR}/sources/MANIFEST"
-  mkdir -p "${CACHE_DIR}/sources"
-  : >"${manifest}"
-  for name in "${HYPR_BUILD_ORDER[@]}"; do
-    repo="${HYPR_REPO_URL[${name}]}"
-    tag="$(resolve_latest_release_tag "${repo}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-    info "Caching ${name} ${tag}"
-    clone="${CACHE_DIR}/sources/${name}-${tag}"
-    rm -rf "${clone}"
-    git -c advice.detachedHead=false clone --depth 1 --branch "${tag}" \
-      --recurse-submodules --shallow-submodules "${repo}" "${clone}"
-    tar -czf "${CACHE_DIR}/sources/${name}-${tag}.tar.gz" \
-      --exclude-vcs -C "${CACHE_DIR}/sources" "${name}-${tag}"
-    rm -rf "${clone}"
-    echo "${name} ${tag}" >>"${manifest}"
-  done
-}
-
-cache_populate_zbm() {
-  info "Caching ZFSBootMenu EFI binary..."
-  # fetch_zbm_efi lives in scripts/50-boot.sh (sourced by the orchestrator
-  # before any phase runs).
-  fetch_zbm_efi "${CACHE_DIR}/zfsbootmenu.EFI"
 }
 
 # Validate the offline apt repo that debootstrap and in-chroot apt consume.
@@ -277,17 +277,4 @@ cache_validate() {
     fatal "Cache validation failed (${#problems[@]} problem(s))."
   fi
   info "Cache repo valid: ${CACHE_REPO_DIR}"
-}
-
-phase_cache() {
-  if ((NETWORK_AVAILABLE)); then
-    cache_populate_debs
-    cache_populate_chezmoi
-    cache_index_repo
-    cache_populate_sources
-    cache_populate_zbm
-  else
-    info "No network: validating existing cache instead of populating."
-  fi
-  cache_validate
 }

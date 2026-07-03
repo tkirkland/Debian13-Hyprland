@@ -250,20 +250,26 @@ build_custom_swww() {
   "
 }
 
-# hypr-dim: per-display gamma brightness daemon for external outputs (issue #66).
+# hyprdim: per-display gamma brightness daemon for external outputs (issue #66).
 # Cargo build, mirroring build_custom_swww (its own CARGO_HOME, --release
 # --locked, install to /usr/bin, then drop the cargo home). The
-# hypr-dim.service user unit (staged in configure_session) starts the installed
+# hyprdim.service user unit (staged in configure_session) starts the installed
 # binary; the brightness-sync wrapper drives it over D-Bus dev.hyprdim.
-build_custom_hypr_dim() {
-  info "Building hypr-dim ${HYPR_RESOLVED_TAG[hypr-dim]} (cargo)..."
+build_custom_hyprdim() {
+  info "Building hyprdim ${HYPR_RESOLVED_TAG[hyprdim]} (cargo)..."
   in_target "
     set -e
-    cd '${HYPR_SRC_DIR}/hypr-dim'
-    export CARGO_HOME=/tmp/hypr-dim-cargo
+    cd '${HYPR_SRC_DIR}/hyprdim'
+    export CARGO_HOME=/tmp/hyprdim-cargo
     cargo build --release --locked
-    install -Dm755 target/release/hypr-dim -t \"${HYPR_DESTDIR:-}/usr/bin/\"
-    rm -rf /tmp/hypr-dim-cargo
+    # Install to the fixed name /usr/bin/hyprdim (the systemd unit's ExecStart)
+    # regardless of the crate's basename: releases <= v0.90.0 built the binary as
+    # 'hypr-dim', v0.90.1+ builds it 'hyprdim'. Tolerate either so a cached older
+    # tag still installs correctly.
+    bin=target/release/hyprdim
+    [ -f \"\$bin\" ] || bin=target/release/hypr-dim
+    install -Dm755 \"\$bin\" \"${HYPR_DESTDIR:-}/usr/bin/hyprdim\"
+    rm -rf /tmp/hyprdim-cargo
   "
 }
 
@@ -277,6 +283,7 @@ build_one() {
     return 0
   fi
   local meson_args="${HYPR_MESON_ARGS[${name}]:-}"
+  local cmake_args="${HYPR_CMAKE_ARGS[${name}]:-}"
   # Empty --jobs means one job per CPU (expanded inside the target).
   local jobs="${HYPR_BUILD_JOBS:-}"
   [[ -n "${jobs}" ]] || jobs="\$(nproc)"
@@ -287,7 +294,7 @@ build_one() {
     cd '${HYPR_SRC_DIR}/${name}'
     if [[ -f CMakeLists.txt ]]; then
       cmake -B build -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr
+        -DCMAKE_INSTALL_PREFIX=/usr ${cmake_args}
       cmake --build build -j\"${jobs}\"
       DESTDIR=\"${HYPR_DESTDIR:-}\" cmake --install build
     elif [[ -f meson.build ]]; then
@@ -354,7 +361,7 @@ purge_build_deps() {
       xargs -r dpkg -S 2>/dev/null | cut -d: -f1 | sort -u |
       xargs -r apt-mark manual
   "
-  info "Purging build dependencies (cached debs remain in ${TARGET_CACHE_DIR})..."
+  info "Purging build dependencies..."
   # dkms rebuilds (and re-signs) the zfs module on every kernel update, so
   # ZFS_BUILD_PACKAGES must stay installed for the system's lifetime.
   # Several of them overlap the Hyprland build deps (build-essential,
@@ -509,17 +516,25 @@ hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
 hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
 -- Brightness keys drive brightness-sync: every connected display as one level —
 -- real backlight where present (brightnessctl, internal panel and ddcci-exposed
--- externals) else gamma via hypr-dim. locked+repeating so they work on the lock
+-- externals) else gamma via hyprdim. locked+repeating so they work on the lock
 -- screen and while held. Issue #66.
 hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightness-sync up"),   { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightness-sync down"), { locked = true, repeating = true })
--- Screenshots (grim/slurp) and screen recording (wf-recorder), traditional
--- Print-key cluster. grimblast is not packaged in Debian, so bind the standard
--- tools directly. Region capture covers arbitrary windows.
-hl.bind("Print", hl.dsp.exec_cmd([[sh -c 'grim - | wl-copy']]))                              -- full screen -> clipboard
-hl.bind("SHIFT + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | wl-copy']]))        -- region -> clipboard
-hl.bind("SUPER + Print", hl.dsp.exec_cmd([[sh -c 'grim -g "$(slurp)" - | swappy -f -']]))    -- region -> annotate (swappy)
-hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd([[sh -c 'pkill -INT wf-recorder || wf-recorder -f "$HOME/recording-$(date +%s).mp4"']])) -- toggle recording
+-- Screenshots + screen recording (epic #67, item 1): the staged helper scripts
+-- linux-screenshot / linux-screen-record (in /usr/local/bin). They save
+-- timestamped files (~/Pictures/Screenshots, ~/Videos/Screen Recordings), copy
+-- to the clipboard, and hold an atomic lock so repeated presses don't stack
+-- selectors. Conventional Print cluster; the user's dotfiles override these.
+hl.bind("Print", hl.dsp.exec_cmd("linux-screenshot region"))               -- region -> file + clipboard
+hl.bind("SHIFT + Print", hl.dsp.exec_cmd("linux-screenshot monitor"))      -- monitor under pointer
+hl.bind("CTRL + Print", hl.dsp.exec_cmd("linux-screenshot full"))          -- all outputs
+hl.bind("SUPER + Print", hl.dsp.exec_cmd("linux-screenshot annotate"))     -- region -> swappy annotate
+hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd("linux-screen-record desktop")) -- toggle record (desktop audio)
+hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))     -- toggle record (microphone)
+-- Notifications (swaync, epic #67 item 2): toggle the notification-center panel
+-- and Do-Not-Disturb. -sw skips waiting for the daemon.
+hl.bind("SUPER + N", hl.dsp.exec_cmd("swaync-client -t -sw"))         -- toggle panel
+hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw")) -- toggle DND
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
@@ -602,7 +617,7 @@ general {
 }
 
 # 5 min — dim ALL connected displays as one level: real backlight where present
-# (brightnessctl) else gamma via hypr-dim, saving/restoring levels. Issue #66.
+# (brightnessctl) else gamma via hyprdim, saving/restoring levels. Issue #66.
 # on-resume actively re-asserts (DPMS/lock can drop the gamma LUT).
 listener {
     timeout = 300
@@ -706,6 +721,338 @@ for out in "${outputs[@]}"; do
 done
 EOF
   chmod +x "${TARGET}/usr/local/bin/swww-cycle"
+}
+
+# Stage the screenshot/recording capture helpers (epic #67, item 1; verified on
+# the live box, recorded in linux-fixes/fixes.md). Bound to the Print cluster in
+# hypr-deb.lua. Both helpers self-create their output dirs and hold an atomic
+# selector lock so repeated key presses can't stack concurrent slurp overlays.
+# Deviations from the live copy: the record codec defaults to libx264 (software,
+# universal) instead of the live box's NVIDIA-only h264_nvenc — overridable via
+# SCREEN_RECORD_CODEC. Notifications need a daemon (swaync, #67 item 2); the
+# capture still saves the file without one.
+stage_capture_helpers() {
+  install -d "${TARGET}/usr/local/bin"
+  cat >"${TARGET}/usr/local/bin/linux-screenshot" <<'EOF'
+#!/bin/sh
+set -eu
+
+mode=${1:-region}
+directory=${XDG_PICTURES_DIR:-"$HOME/Pictures"}/Screenshots
+timestamp=$(date +%Y-%m-%d_%H-%M-%S)
+output="$directory/screenshot_$timestamp.png"
+lock_directory=${XDG_RUNTIME_DIR:-/tmp}/linux-screenshot.lock
+raw=
+
+mkdir -p "$directory"
+
+if ! mkdir "$lock_directory" 2>/dev/null; then
+    exit 0
+fi
+
+cleanup() {
+    [ -z "$raw" ] || rm -f "$raw"
+    rmdir "$lock_directory" 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+cursor_monitor_box() {
+    # Logical box "X,Y WxH" (slurp coords) of the monitor under the pointer.
+    set -- $(hyprctl cursorpos 2>/dev/null | tr -d ',')
+    hyprctl monitors -j 2>/dev/null | jq -r --argjson x "${1:-0}" --argjson y "${2:-0}" '
+        .[] | select(.x <= $x and $x < (.x + .width / .scale)
+                 and .y <= $y and $y < (.y + .height / .scale))
+        | "\(.x),\(.y) \((.width / .scale)|floor)x\((.height / .scale)|floor)"' | head -n1
+}
+
+select_geometry() {
+    if [ -n "${SCREEN_CAPTURE_GEOMETRY:-}" ]; then
+        printf '%s\n' "$SCREEN_CAPTURE_GEOMETRY"
+        return
+    fi
+
+    box=$(cursor_monitor_box)
+    case $mode in
+        region|annotate)
+            # Free click-drag selection. slurp's overlay spans all outputs;
+            # it cannot confine a drawn region to one monitor.
+            slurp
+            ;;
+        monitor)
+            # Whole monitor under the pointer; no click needed.
+            printf '%s\n' "$box"
+            ;;
+        full)
+            printf '%s\n' ""
+            ;;
+        *)
+            printf 'Usage: %s {region|monitor|full|annotate}\n' "$0" >&2
+            exit 2
+            ;;
+    esac
+}
+
+geometry=$(select_geometry) || exit 0
+
+if [ "$mode" = annotate ]; then
+    raw=$(mktemp --suffix=.png)
+    grim -g "$geometry" "$raw"
+    swappy -f "$raw" -o "$output"
+    [ -s "$output" ] || exit 0
+else
+    if [ -n "$geometry" ]; then
+        grim -g "$geometry" "$output"
+    else
+        grim "$output"
+    fi
+fi
+
+wl-copy --type image/png < "$output"
+notify-send "Screenshot saved" "$output"
+EOF
+  chmod +x "${TARGET}/usr/local/bin/linux-screenshot"
+
+  cat >"${TARGET}/usr/local/bin/linux-screen-record" <<'EOF'
+#!/bin/sh
+set -eu
+
+mode=${1:-desktop}
+runtime=${XDG_RUNTIME_DIR:-/tmp}/linux-screen-record
+pid_file=$runtime/pid
+output_file=$runtime/output
+selection_lock=$runtime/selection.lock
+directory="${XDG_VIDEOS_DIR:-"$HOME/Videos"}/Screen Recordings"
+
+mkdir -p "$runtime" "$directory"
+
+stop_recording() {
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    output=$(cat "$output_file" 2>/dev/null || true)
+    command_line=
+
+    if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ]; then
+        command_line=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+    fi
+
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null &&
+        printf '%s\n' "$command_line" | grep -q 'wf-recorder'; then
+        kill -INT "$pid"
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 0.1
+        done
+        notify-send "Screen recording saved" "$output"
+    else
+        notify-send "Screen recording" "Removed stale recorder state."
+    fi
+
+    rm -f "$pid_file" "$output_file"
+}
+
+if [ -f "$pid_file" ]; then
+    stop_recording
+    exit 0
+fi
+
+if ! mkdir "$selection_lock" 2>/dev/null; then
+    exit 0
+fi
+
+cleanup_selection() {
+    rmdir "$selection_lock" 2>/dev/null || true
+}
+trap cleanup_selection EXIT HUP INT TERM
+
+case $mode in
+    desktop)
+        sink=$(pactl get-default-sink)
+        audio_source=$sink.monitor
+        label="desktop audio"
+        ;;
+    mic)
+        audio_source=$(pactl get-default-source)
+        label="microphone"
+        ;;
+    *)
+        printf 'Usage: %s {desktop|mic}\n' "$0" >&2
+        exit 2
+        ;;
+esac
+
+if [ -n "${SCREEN_CAPTURE_GEOMETRY:-}" ]; then
+    geometry=$SCREEN_CAPTURE_GEOMETRY
+else
+    geometry=$(slurp) || exit 0
+fi
+timestamp=$(date +%Y-%m-%d_%H-%M-%S)
+output="$directory/screen_recording_$timestamp.mkv"
+codec=${SCREEN_RECORD_CODEC:-libx264}
+
+wf-recorder \
+    -g "$geometry" \
+    --audio="$audio_source" \
+    -c "$codec" \
+    -f "$output" \
+    -y \
+    >/dev/null 2>&1 &
+pid=$!
+
+printf '%s\n' "$pid" > "$pid_file"
+printf '%s\n' "$output" > "$output_file"
+
+sleep 0.5
+if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file" "$output_file"
+    notify-send "Screen recording failed" "wf-recorder exited during startup."
+    exit 1
+fi
+
+cleanup_selection
+trap - EXIT HUP INT TERM
+notify-send "Screen recording started" "Region capture with $label. Press the same shortcut to stop."
+EOF
+  chmod +x "${TARGET}/usr/local/bin/linux-screen-record"
+  # Default the record codec to NVENC when an NVIDIA driver was selected at
+  # install time (h264_nvenc needs the driver, not just a card present), else
+  # keep the portable software libx264. SCREEN_RECORD_CODEC still overrides
+  # either default at runtime.
+  if nvidia_install_requested; then
+    sed -i 's/SCREEN_RECORD_CODEC:-libx264/SCREEN_RECORD_CODEC:-h264_nvenc/' \
+      "${TARGET}/usr/local/bin/linux-screen-record"
+  fi
+}
+
+# Stage the swaync (sway-notification-center) config (epic #67, item 2). The
+# Debian package ships + auto-enables swaync.service via graphical-session.target
+# .wants, so this only writes the user config. Authored from linux-fixes/fixes.md
+# (no tracked original existed). style.css matches the installer's window accent
+# (#33ccff->#00ff99 45deg gradient, as in hyprlock); the chown -R in the Hyprland
+# phase gives the user ownership. Mako is intentionally never installed.
+stage_swaync_config() {
+  local sw_dir="${TARGET}/home/${TARGET_USERNAME}/.config/swaync"
+  install -d "${sw_dir}"
+  cat >"${sw_dir}/config.json" <<'EOF'
+{
+  "$schema": "/etc/xdg/swaync/configSchema.json",
+  "positionX": "right",
+  "positionY": "bottom",
+  "layer": "overlay",
+  "control-center-layer": "top",
+  "layer-shell": true,
+  "cssPriority": "application",
+  "timeout": 5,
+  "timeout-low": 5,
+  "timeout-critical": 0,
+  "fit-to-screen": true,
+  "control-center-width": 400,
+  "control-center-height": 600,
+  "notification-window-width": 400,
+  "keyboard-shortcuts": true,
+  "image-visibility": "when-available",
+  "transition-time": 200,
+  "hide-on-clear": false,
+  "hide-on-action": true,
+  "text-empty": "No Notifications",
+  "widgets": [
+    "title",
+    "dnd",
+    "mpris",
+    "notifications"
+  ],
+  "widget-config": {
+    "title": {
+      "text": "Notifications",
+      "clear-all-button": true,
+      "button-text": "Clear All"
+    },
+    "dnd": {
+      "text": "Do Not Disturb"
+    },
+    "mpris": {
+      "image-size": 96,
+      "image-radius": 8
+    }
+  }
+}
+EOF
+  cat >"${sw_dir}/style.css" <<'EOF'
+/* swaync style — installer baseline (epic #67, item 2).
+ * Solid #4a6f9a border (rgba 4a6f9aee), 1px, card radius 7 (window rounding 6 +
+ * 1px border); dark card #1e1e2e / text #f5f5f5. Kept identical to the live
+ * desktop's swaync config (chezmoi). swaync links libgtk-3. */
+
+@keyframes swaync-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.notification-row {
+  background: transparent;
+}
+
+.notification {
+  margin: 6px;
+  border-radius: 7px;
+  border: 1px solid #4a6f9a;
+  background-color: #1e1e2e;
+  animation: swaync-fadein 200ms ease-in;
+}
+
+.notification.critical {
+  box-shadow: inset 0 0 0 1px #ff3355;
+}
+
+.notification-content {
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.notification .summary {
+  color: #f5f5f5;
+  font-weight: bold;
+}
+
+.notification .body,
+.notification .time {
+  color: #f5f5f5;
+}
+
+.control-center {
+  border-radius: 7px;
+  border: 1px solid #4a6f9a;
+  background-color: #1e1e2e;
+}
+
+.control-center .notification {
+  margin: 6px;
+}
+EOF
+}
+
+# Static, unconditional portal routing + dark-mode default (epic #67 items 3/4,
+# #57). The broker uses the hyprland impl when xdph is installed and otherwise
+# falls through to wlr (always installed as the packaged xdg-desktop-portal-wlr),
+# so this IDENTICAL config ships on every path with no install-time backend
+# detection. The prefer-dark gschema override drives the GTK/portal color scheme;
+# glib-compile-schemas compiles it into the target's schema cache (needs
+# libglib2.0-bin). Called from configure_session BEFORE its chown -R so the user
+# config file is owned by the target user.
+write_portal_config() {
+  local portal_dir="${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal"
+  install -d "${portal_dir}"
+  cat >"${portal_dir}/hyprland-portals.conf" <<'EOF'
+[preferred]
+default=gtk
+org.freedesktop.impl.portal.ScreenCast=hyprland;wlr
+org.freedesktop.impl.portal.Screenshot=hyprland;wlr
+EOF
+  install -d "${TARGET}/usr/share/glib-2.0/schemas"
+  cat >"${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override" <<'EOF'
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'
+EOF
+  # Guarded: a missing/failed compile must not abort the install (the override is
+  # cosmetic). libglib2.0-bin provides glib-compile-schemas.
+  in_target "glib-compile-schemas /usr/share/glib-2.0/schemas || true"
 }
 
 configure_session() {
@@ -903,9 +1250,9 @@ EOF
   # ONE logical level across every connected display: a real hardware backlight
   # where present (brightnessctl — internal panel, and external monitors exposed
   # as /sys/class/backlight by ddcci-dkms over DDC/CI) else GAMMA via the resident
-  # hypr-dim daemon (D-Bus dev.hyprdim). The brightness keys, hypridle's idle
+  # hyprdim daemon (D-Bus dev.hyprdim). The brightness keys, hypridle's idle
   # dim/restore, and the lock_cmd all route through it. Staged like drm-reprobe
-  # (literal heredoc + chmod). The hypr-dim binary is built by build_custom_hypr_dim.
+  # (literal heredoc + chmod). The hyprdim binary is built by build_custom_hyprdim.
   install -d "${TARGET}/usr/local/bin"
   cat >"${TARGET}/usr/local/bin/brightness-sync" <<'BRIGHTNESS_SYNC'
 #!/bin/sh
@@ -918,7 +1265,7 @@ EOF
 #   - a real hardware backlight (/sys/class/backlight) mapped to the connector
 #     (ddcci reverse-symlink, embedded-panel heuristic, or ddcci<bus> on the
 #     connector's i2c bus) -> brightnessctl -d <node>
-#   - else GAMMA via the resident hypr-dim daemon (D-Bus dev.hyprdim).
+#   - else GAMMA via the resident hyprdim daemon (D-Bus dev.hyprdim).
 # Internal backlight keeps the perceptual -e4 curve; gamma 0..1 ~ that curve, so
 # level N reads about the same on both (e.g. 85 ~ perceptual 0.85 ~ gamma 0.85).
 #
@@ -1141,17 +1488,17 @@ case "$cmd" in
 esac
 BRIGHTNESS_SYNC
   chmod 755 "${TARGET}/usr/local/bin/brightness-sync"
-  # hypr-dim user unit. The ExecStart points at the compiled binary in /usr/bin
-  # (upstream's unit uses %h/.local/bin/hypr-dim). Resident, supervised,
+  # hyprdim user unit. The ExecStart points at the compiled binary in /usr/bin
+  # (upstream's unit uses %h/.local/bin/hyprdim). Resident, supervised,
   # respawning; brightness-sync re-asserts external gamma after a restart. Enabled
   # for the user the same way hypridle is: a plain symlink into
   # graphical-session.target.wants (works even when the stack builds at first boot —
   # the link dangles until the unit lands and resolves at session start).
   mkdir -p "${TARGET}/usr/local/lib/systemd/user"
-  cat >"${TARGET}/usr/local/lib/systemd/user/hypr-dim.service" <<'HYPR_DIM_SERVICE'
+  cat >"${TARGET}/usr/local/lib/systemd/user/hyprdim.service" <<'HYPRDIM_SERVICE'
 [Unit]
-Description=hypr-dim — per-display gamma brightness daemon (external outputs)
-# Locally-built daemon (binary hypr-dim, D-Bus dev.hyprdim). Source, upstream
+Description=hyprdim — per-display gamma brightness daemon (external outputs)
+# Locally-built daemon (binary hyprdim, D-Bus dev.hyprdim). Source, upstream
 # provenance and rebuild script (build-install.sh) live in ~/src/gamma-fix.
 # Driven by the `brightness-sync` wrapper to dim external displays. Issue #66.
 PartOf=graphical-session.target
@@ -1160,7 +1507,7 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/hypr-dim
+ExecStart=/usr/bin/hyprdim
 # Resident, supervised: always respawn. State (per-output gamma) is in memory
 # only, and a gamma_control Failed permanently drops an output — restart is the
 # recovery path; `brightness-sync restore` re-asserts levels afterward.
@@ -1169,18 +1516,23 @@ RestartSec=1
 
 [Install]
 WantedBy=graphical-session.target
-HYPR_DIM_SERVICE
+HYPRDIM_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
   # hypridle is part of the source-compiled stack, now shipped as a .deb with
   # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
-  # hand-written hypr-dim.service below stays in /usr/local (installer glue,
+  # hand-written hyprdim.service below stays in /usr/local (installer glue,
   # not owned by any .deb).
   ln -sf /usr/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
-  ln -sf /usr/local/lib/systemd/user/hypr-dim.service \
-    "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypr-dim.service"
+  ln -sf /usr/local/lib/systemd/user/hyprdim.service \
+    "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
   write_hypr_lua_config
   stage_wallpapers
+  stage_capture_helpers
+  stage_swaync_config
+  # Portal routing + dark-mode default; before the chown -R so the user config
+  # (hyprland-portals.conf) is owned by the target user.
+  write_portal_config
   in_target "
     set -e
     # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
@@ -1273,9 +1625,12 @@ stage_firstboot() {
   done
   install_build_deps # toolchain present so firstboot works offline
 
-  # Authoritative manifest so the staged resolve_all_tags works offline.
-  local manifest="${TARGET}${TARGET_CACHE_DIR}/sources/MANIFEST"
-  mkdir -p "${TARGET}${TARGET_CACHE_DIR}/sources"
+  # Authoritative manifest so the staged resolve_all_tags works offline. Lives
+  # next to the staged source trees (${HYPR_SRC_DIR}/sources), a target-internal
+  # path — NOT the removed install-time cache. The firstboot runner sets
+  # CACHE_DIR=${HYPR_SRC_DIR} so resolve_all_tags reads it from here.
+  local manifest="${TARGET}${HYPR_SRC_DIR}/sources/MANIFEST"
+  mkdir -p "${TARGET}${HYPR_SRC_DIR}/sources"
   : >"${manifest}"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     echo "${name} ${HYPR_RESOLVED_TAG["${name}"]}" >>"${manifest}"
@@ -1294,7 +1649,7 @@ source /usr/local/lib/hypr-deb/01-log.sh
 source /usr/local/lib/hypr-deb/60-hyprland.sh
 TARGET=""           # build on the running system
 NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
-CACHE_DIR="${TARGET_CACHE_DIR}"
+CACHE_DIR="${HYPR_SRC_DIR}"
 KEEP_BUILD_DEPS=${KEEP_BUILD_DEPS}
 resolve_all_tags
 check_compat "\${HYPR_SRC_DIR}/hyprland/CMakeLists.txt"
@@ -1314,6 +1669,27 @@ EOF
 # shipped debs are already the newest (freshness is a build-time concern). The
 # deb data trees (binaries in /usr/bin, the example config in /usr/share/hypr)
 # land here, so configure_session reads the installed example afterwards.
+# xdg-desktop-portal-hyprland (xdph): the Qt6 share-picker ScreenCast backend,
+# built against our OWN source-built hypr* libs. OPTIONAL and best-effort — it is
+# deliberately NOT a member of HYPR_BUILD_ORDER (that set is MUST-SUCCEED and its
+# failure would strand uwsm / abort the offline apt transaction; see the #64
+# dead-greeter revert). If the deb is not in the file:// pool, or the install
+# fails, the packaged xdg-desktop-portal-wlr backend (always installed) plus the
+# static hyprland;wlr routing stand and the install/ISO continues. ALWAYS returns 0.
+install_xdph_best_effort() {
+  if ! in_target "apt-cache show '${XDPH_COMPONENT}' >/dev/null 2>&1"; then
+    info "xdph deb (${XDPH_COMPONENT}) not in the pool; keeping the wlr" \
+      "ScreenCast backend only."
+    return 0
+  fi
+  info "Installing xdph (${XDPH_COMPONENT}) best-effort (Hyprland ScreenCast backend)..."
+  in_target "
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y ${XDPH_COMPONENT}
+  " || warn "xdph install failed; the packaged wlr ScreenCast backend + routing stand."
+  return 0
+}
+
 install_prebuilt_stack() {
   info "Installing prebuilt Hyprland stack from the on-ISO repo" \
     "(${#HYPR_BUILD_ORDER[@]} packages)..."
@@ -1328,6 +1704,8 @@ install_prebuilt_stack() {
   # greetd boots to a dead greeter. Verify it landed, same as build_stack does.
   in_target "test -x /usr/bin/uwsm" ||
     fatal "uwsm binary missing after prebuilt-stack install (the session would not launch)."
+  # Optional ScreenCast backend, best-effort AFTER the must-succeed stack landed.
+  install_xdph_best_effort
 }
 
 # --online: when the on-ISO/cache repo is present, install whatever custom-stack
@@ -1360,6 +1738,8 @@ online_install_prebuilt() {
     "
     info "Installed prebuilt debs: ${avail[*]}"
   fi
+  # Optional ScreenCast backend from the same file:// pool, best-effort.
+  install_xdph_best_effort
 }
 
 phase_hyprland() {

@@ -140,10 +140,18 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
     "SUPER+L locks the session (hyprlock via hypridle)"
   assert_contains "${deb}" "/usr/local/bin/swww-cycle" \
     "SUPER+SHIFT+W cycles wallpapers"
-  assert_contains "${deb}" "grim -g" \
-    "screenshot region bind present (grim/slurp)"
-  assert_contains "${deb}" "wf-recorder" \
-    "screen-record toggle bind present (wf-recorder)"
+  assert_contains "${deb}" 'hl.bind("Print", hl.dsp.exec_cmd("linux-screenshot region"))' \
+    "Print captures a region via linux-screenshot"
+  assert_contains "${deb}" 'hl.bind("SUPER + Print", hl.dsp.exec_cmd("linux-screenshot annotate"))' \
+    "SUPER+Print annotates via linux-screenshot/swappy"
+  assert_contains "${deb}" 'hl.bind("SUPER + SHIFT + R", hl.dsp.exec_cmd("linux-screen-record desktop"))' \
+    "SUPER+SHIFT+R records desktop audio via linux-screen-record"
+  assert_contains "${deb}" 'hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))' \
+    "SUPER+CTRL+R records the microphone via linux-screen-record"
+  assert_contains "${deb}" 'hl.bind("SUPER + N", hl.dsp.exec_cmd("swaync-client -t -sw"))' \
+    "SUPER+N toggles the swaync panel"
+  assert_contains "${deb}" 'hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw"))' \
+    "SUPER+SHIFT+N toggles swaync Do-Not-Disturb"
 else
   echo "  FAIL: hypr-deb.lua module missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
@@ -187,24 +195,24 @@ greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
 assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
   "greetd session command uses the wrapper"
 
-# hypr-dim.service (issue #66): the unit FILE is installer glue and stays under
+# hyprdim.service (issue #66): the unit FILE is installer glue and stays under
 # /usr/local, but its ExecStart points at the COMPILED binary, which Phase 2
-# moved to /usr (shipped as a .deb). It must therefore exec /usr/bin/hypr-dim,
-# never the pre-move /usr/local/bin/hypr-dim.
-dim_unit="${TARGET}/usr/local/lib/systemd/user/hypr-dim.service"
+# moved to /usr (shipped as a .deb). It must therefore exec /usr/bin/hyprdim,
+# never the pre-move /usr/local/bin/hyprdim.
+dim_unit="${TARGET}/usr/local/lib/systemd/user/hyprdim.service"
 if [[ -f "${dim_unit}" ]]; then
-  echo "  ok: hypr-dim.service unit staged under /usr/local (installer glue)"
+  echo "  ok: hyprdim.service unit staged under /usr/local (installer glue)"
   dim_txt="$(<"${dim_unit}")"
-  assert_contains "${dim_txt}" "ExecStart=/usr/bin/hypr-dim" \
-    "hypr-dim.service execs the compiled binary at its /usr prefix"
-  if [[ "${dim_txt}" == *"ExecStart=/usr/local/bin/hypr-dim"* ]]; then
-    echo "  FAIL: hypr-dim.service still execs the pre-move /usr/local/bin/hypr-dim" >&2
+  assert_contains "${dim_txt}" "ExecStart=/usr/bin/hyprdim" \
+    "hyprdim.service execs the compiled binary at its /usr prefix"
+  if [[ "${dim_txt}" == *"ExecStart=/usr/local/bin/hyprdim"* ]]; then
+    echo "  FAIL: hyprdim.service still execs the pre-move /usr/local/bin/hyprdim" >&2
     TEST_FAILURES=$((TEST_FAILURES + 1))
   else
-    echo "  ok: hypr-dim.service has no stale /usr/local/bin/hypr-dim ExecStart"
+    echo "  ok: hyprdim.service has no stale /usr/local/bin/hyprdim ExecStart"
   fi
 else
-  echo "  FAIL: hypr-dim.service unit missing" >&2
+  echo "  FAIL: hyprdim.service unit missing" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
