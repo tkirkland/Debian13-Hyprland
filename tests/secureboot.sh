@@ -138,6 +138,23 @@ assert_contains "${ver_body}" "mokutil --list-new" \
   "verify reports enrollment staging (warn-only)"
 assert_contains "${ver_body}" "Enroll MOK" "success notice explains first boot"
 
+# The "Secure boot: ready / MokManager first boot" notice must be gated on
+# staging having actually happened (MOK_STAGED), with an honest alternative —
+# an SB-incapable VM firmware run printed the MokManager promise right after
+# warning that nothing was staged (2026-07-03).
+assert_contains "${ver_body}" "MOK_STAGED" \
+  "verify gates the MokManager notice on staging"
+assert_contains "${ver_body}" "NOT staged" \
+  "verify has an honest not-staged closing notice"
+
+# stage_mok_enrollment must capture and surface mokutil's own error text
+# (e.g. "This system doesn't support Secure Boot" on SB-incapable firmware)
+# instead of guessing at causes.
+assert_contains "${enroll_body}" "2>&1" \
+  "stage_mok_enrollment captures mokutil output"
+assert_contains "${enroll_body}" 'out' \
+  "stage_mok_enrollment surfaces mokutil's error in the warn"
+
 # --- Final integration review fixes -----------------------------------------
 
 # Fix 1: the in-chroot Hyprland build-dep purge must spare the ZFS
