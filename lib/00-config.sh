@@ -381,11 +381,17 @@ declare -A HYPR_MESON_ARGS=(
   # see docs/2026-07-04-build-completeness-audit.md, finding 1).
   ["uwsm"]="-Duwsm-app=enabled -Duuctl=enabled"
 )
-# Extra CMake options per cmake-built component (consumed by build_one). Empty
-# by default: xdph's Qt6 share-picker builds automatically when Qt6 is present
-# (no enable flag), so no xdph entry is needed unless a mandatory-off default is
-# ever found in the staged CMakeLists — then add ["xdg-desktop-portal-hyprland"]=...
-declare -gA HYPR_CMAKE_ARGS=()
+# Extra CMake options per cmake-built component (consumed by build_one).
+# xdph: SYSTEMD_SERVICES is the mandatory-off default this comment used to
+# warn about. Default-OFF upstream, it omits the systemd user unit — but the
+# unconditionally-installed D-Bus service file declares SystemdService=, and on
+# a systemd user bus that activation path has NO Exec fallback. Without the
+# unit, xdph never activates and the broker silently falls back to wlr (the
+# share-picker never appears, no error anywhere). See
+# docs/2026-07-04-build-completeness-audit.md finding 2 and #57.
+declare -gA HYPR_CMAKE_ARGS=(
+  ["xdg-desktop-portal-hyprland"]="-DSYSTEMD_SERVICES=ON"
+)
 
 # Compiler for the source-built stack. Trixie's default GCC 14 libstdc++
 # lacks C++23 container-ranges members (std::vector::append_range) that
