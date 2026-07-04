@@ -348,7 +348,7 @@ purge_build_deps() {
   # only -dev provider (libpugixml-dev) is a purged build dep. Pinning
   # solely off Hyprland + libs leaves those scanners' runtime libs
   # unprotected, so the purge strips libpugixml1v5 and they break for every
-  # later source build (hyprlock/hypridle/hyprlauncher/swww add-ons).
+  # later source build (hyprlock/hypridle/swww add-ons).
   # Pinning the runtime-lib packages of all /usr binaries is harmless to the
   # purge goal — build deps are -dev/toolchain packages that no binary links
   # against, so ldd never lists them. ldd on a non-ELF entry (the hand-written
@@ -445,18 +445,32 @@ write_hypr_lua_config() {
   ((${#modules[@]} > 0)) ||
     fatal "No section headers found in ${example} — upstream changed the" \
       "example format; the section splitter needs updating."
-  # Default app launcher: repoint the upstream example's `$menu` (bound to
-  # SUPER+R) at the hyprlauncher we build, instead of the example's default.
-  # Done by rewriting the assignment in whichever split module defines it,
-  # since the bind captures `menu`'s value at require() time (a later
-  # reassignment in hypr-deb.lua would not affect the already-registered bind).
+  # Default app launcher: repoint the upstream example's `$menu` at the
+  # harvested walker, instead of the example's default. Done by rewriting the
+  # assignment in whichever split module defines it, since the bind captures
+  # `menu`'s value at require() time (a later reassignment in hypr-deb.lua
+  # would not affect the already-registered bind).
   local menu_mod=""
   for menu_mod in "${cfg_dir}"/*.lua; do
     if grep -qE '^menu[[:space:]]*=' "${menu_mod}"; then
-      sed -i 's/^menu\([[:space:]]*=[[:space:]]*\).*/menu\1"hyprlauncher"/' \
+      sed -i 's/^menu\([[:space:]]*=[[:space:]]*\).*/menu\1"walker"/' \
         "${menu_mod}"
       break
     fi
+  done
+  # Launcher on a bare SUPER tap instead of the example's SUPER+R: a release
+  # bind on the modifier key itself, suppressed when SUPER participated in
+  # another chord (proven on the reference machine).
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i 's/hl\.bind(mainMod \.\. " + R", hl\.dsp\.exec_cmd(menu))/hl.bind(mainMod .. " + SUPER_L", hl.dsp.exec_cmd(menu), { release = true })/' \
+      "${menu_mod}"
+  done
+  # Drop the upstream example's raw-brightnessctl XF86MonBrightness binds:
+  # hypr-deb.lua (required last) rebinds those keys to brightness-sync
+  # (issue #66). Binds register per hl.bind() call, so leaving the upstream
+  # pair in place loads BOTH and every brightness keypress fires twice.
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i -E '/XF86MonBrightness(Up|Down).*brightnessctl/d' "${menu_mod}"
   done
   # swww manages the wallpaper, so disable Hyprland's built-in default wallpaper
   # and logo (else the mascot flashes before swww draws). Patch the values in
@@ -465,6 +479,19 @@ write_hypr_lua_config() {
     sed -i -E \
       -e 's/(force_default_wallpaper[[:space:]]*=[[:space:]]*)-?[0-9]+/\10/' \
       -e 's/(disable_hyprland_logo[[:space:]]*=[[:space:]]*)(false|true)/\1true/' \
+      "${menu_mod}"
+  done
+  # Window border/rounding theme: replace the upstream example's cyan/green
+  # gradient with the solid #4a6f9a accent the swaync CSS is built around
+  # (1px border + rounding 6 -> the CSS's card radius 7). Values patched in
+  # whichever upstream-split module carries the general/decoration tables.
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i -E \
+      -e 's/(border_size[[:space:]]*=[[:space:]]*)2,/\11,/' \
+      -e 's/(active_border[[:space:]]*=[[:space:]]*\{[[:space:]]*colors[[:space:]]*=[[:space:]]*)\{[^}]*\}/\1{"rgba(4a6f9aee)"}/' \
+      -e 's/(inactive_border[[:space:]]*=[[:space:]]*)"rgba\([0-9a-fA-F]+\)"/\1"rgba(333333aa)"/' \
+      -e 's/(rounding[[:space:]]+=[[:space:]]*)10,/\16,/' \
+      -e 's/(rounding_power[[:space:]]*=[[:space:]]*)2,/\13,/' \
       "${menu_mod}"
   done
   for slug in "${modules[@]}"; do
@@ -504,6 +531,12 @@ hl.on("hyprland.start", function()
   -- this, swww-daemon restores the cached selection on every later login.
   hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/local/bin/swww-cycle && touch "$m"; }']])
   hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
+  -- Walker launcher backend (elephant) + walker in service mode so the bare
+  -- SUPER tap opens instantly. Prebuilt binaries in /usr/local/bin ship
+  -- neither a systemd user unit nor an XDG autostart entry — the
+  -- reserved-hook case, like swww above.
+  hl.exec_cmd([[sh -c 'pgrep -x elephant >/dev/null || elephant']])
+  hl.exec_cmd([[sh -c 'sleep 1; walker --gapplication-service']])
 end)
 
 -- Default keybinds (installer baseline; the user's chezmoi dotfiles override
@@ -924,9 +957,10 @@ EOF
 # Stage the swaync (sway-notification-center) config (epic #67, item 2). The
 # Debian package ships + auto-enables swaync.service via graphical-session.target
 # .wants, so this only writes the user config. Authored from linux-fixes/fixes.md
-# (no tracked original existed). style.css matches the installer's window accent
-# (#33ccff->#00ff99 45deg gradient, as in hyprlock); the chown -R in the Hyprland
-# phase gives the user ownership. Mako is intentionally never installed.
+# (no tracked original existed). style.css carries the #4a6f9a/#1e1e2e theme the
+# window borders are patched to in write_hypr_lua_config (card radius 7 = window
+# rounding 6 + 1px border); the chown -R in the Hyprland phase gives the user
+# ownership. Mako is intentionally never installed.
 stage_swaync_config() {
   local sw_dir="${TARGET}/home/${TARGET_USERNAME}/.config/swaync"
   install -d "${sw_dir}"
@@ -1044,6 +1078,30 @@ stage_kitty_config() {
   fi
   install -d "${kitty_dir}"
   install -m644 "${example}" "${kitty_dir}/kitty.conf"
+}
+
+# Install the walker launcher stack from the offline store (harvested at BUILD
+# time by harvest_walker_launcher / build-iso step_stage_walker — NO network
+# here). Binaries land in /usr/local/bin; the elephant provider plugins are
+# staged into the user's config (~/.config/elephant/providers is where the
+# daemon discovers them — proven on the reference machine), owned by the later
+# chown -R like the other staged user configs. Runtime libs
+# (WALKER_RUNTIME_PACKAGES) come from the apt base set.
+stage_walker_launcher() {
+  local src="${CACHE_REPO_DIR:-}/${WALKER_STORE_SUBDIR:-walker}" p=""
+  local prov_dir="${TARGET}/home/${TARGET_USERNAME}/.config/elephant/providers"
+  if [[ ! -x "${src}/walker" || ! -x "${src}/elephant" ]]; then
+    warn "walker launcher stack absent from the offline store (${src}); skipping."
+    return 0
+  fi
+  info "Installing walker + elephant from the offline store (${src})..."
+  install -m755 "${src}/walker" "${TARGET}/usr/local/bin/walker"
+  install -m755 "${src}/elephant" "${TARGET}/usr/local/bin/elephant"
+  install -d "${prov_dir}"
+  for p in "${ELEPHANT_PROVIDERS[@]}"; do
+    [[ -f "${src}/${p}.so" ]] || { warn "elephant provider ${p}.so missing from store"; continue; }
+    install -m644 "${src}/${p}.so" "${prov_dir}/${p}.so"
+  done
 }
 
 # Static, unconditional portal routing + dark-mode default (epic #67 items 3/4,
@@ -1549,6 +1607,7 @@ HYPRDIM_SERVICE
   stage_capture_helpers
   stage_swaync_config
   stage_kitty_config
+  stage_walker_launcher
   # Portal routing + dark-mode default; before the chown -R so the user config
   # (hyprland-portals.conf) is owned by the target user.
   write_portal_config
