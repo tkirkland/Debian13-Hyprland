@@ -519,8 +519,17 @@ step_stage_fonts() {
 #     (scripts/60-hyprland.sh) installs from there on an OFFLINE install — NO
 #     GitHub fetch. Same lazy-source pattern as step_stage_fonts.
 step_stage_walker() {
-  local dest="${CACHE_DIR}/repo/${WALKER_STORE_SUBDIR}"
-  if [[ -x "${dest}/walker" && -x "${dest}/elephant" ]]; then
+  local dest="${CACHE_DIR}/repo/${WALKER_STORE_SUBDIR}" p=""
+  # Reuse only if the binaries AND every configured provider .so are present —
+  # a store staged before ELEPHANT_PROVIDERS grew must be re-harvested, or the
+  # ISO silently ships without the new providers (dead walker prefixes on the
+  # installed system; hit live 2026-07-04 after websearch/runner/windows).
+  local complete=1
+  [[ -x "${dest}/walker" && -x "${dest}/elephant" ]] || complete=0
+  for p in "${ELEPHANT_PROVIDERS[@]}"; do
+    [[ -f "${dest}/${p}.so" ]] || { complete=0; break; }
+  done
+  if [[ "${complete}" -eq 1 ]]; then
     info "[build] reusing staged walker launcher stack (${dest})"
     return 0
   fi

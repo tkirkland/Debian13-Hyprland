@@ -62,7 +62,9 @@ sudo virt-xml -c "$URI" "$VM" --edit --boot cdrom,hd
 # 6. Boot it and open the console.
 sudo virsh -c "$URI" start "$VM"
 echo ">> '$VM' started — launching virt-viewer..."
-# Plain detached launch (verified working). Opens on the focused monitor; for
-# deterministic display-1 pinning add a persistent hl.window_rule for class
-# virt-viewer in hyprland.lua — exec_cmd can't pin workspace inline on 0.55.
-setsid virt-viewer --connect "$URI" "$VM" >/dev/null 2>&1 </dev/null &
+# Detached launch. --attach: the domain's spice graphics has listen=none (no
+# socket), so the display is only reachable by attaching through the libvirt
+# connection. Opens on the focused monitor; for deterministic display-1
+# pinning add a persistent hl.window_rule for class virt-viewer in
+# hyprland.lua — exec_cmd can't pin workspace inline on 0.55.
+setsid virt-viewer --connect "$URI" --attach "$VM" >/dev/null 2>&1 </dev/null &
