@@ -211,6 +211,7 @@ cache_populate_chezmoi() {
 cache_populate_brave() {
   local pool="${CACHE_DIR}/repo/pool" ver="${BRAVE_VERSION:-}"
   local index="" filename="" dest="" keyring_dest="${CACHE_DIR}/repo/${BRAVE_KEYRING_NAME}"
+  local kpkg_file="" kpkg_dest=""
   mkdir -p "${pool}"
   index="$(curl -fsSL --retry 3 \
     "${BRAVE_APT_BASE_URL}/dists/stable/main/binary-amd64/Packages")" ||
@@ -225,14 +226,28 @@ cache_populate_brave() {
     }' | sort -V | tail -1 | cut -d' ' -f2)"
   [[ -n "${filename}" ]] ||
     fatal "brave-browser ${ver:-<latest>} not found in Brave's Packages index."
+  # brave-browser Depends: brave-keyring (a real package, not just the .gpg
+  # file) since 1.92 — without it in the pool, depsim's offline closure is
+  # unsatisfiable. Always take the index's newest; it is versioned
+  # independently of the browser.
+  kpkg_file="$(printf '%s\n' "${index}" | awk '
+    $1 == "Package:"  { pkg = $2 }
+    $1 == "Version:"  { v = $2 }
+    $1 == "Filename:" { if (pkg == "brave-keyring") print v, $2 }
+    ' | sort -V | tail -1 | cut -d' ' -f2)"
+  [[ -n "${kpkg_file}" ]] ||
+    fatal "brave-keyring not found in Brave's Packages index."
   dest="${pool}/${filename##*/}"
-  if [[ -f "${dest}" && -f "${keyring_dest}" ]]; then
+  kpkg_dest="${pool}/${kpkg_file##*/}"
+  if [[ -f "${dest}" && -f "${kpkg_dest}" && -f "${keyring_dest}" ]]; then
     info "reuse pooled ${dest##*/}"
     return 0
   fi
-  info "Harvesting ${filename##*/} into the pool..."
+  info "Harvesting ${filename##*/} + ${kpkg_file##*/} into the pool..."
   curl -fsSL --retry 3 -o "${dest}" "${BRAVE_APT_BASE_URL}/${filename}" ||
     fatal "Failed to harvest brave-browser (${BRAVE_APT_BASE_URL}/${filename})."
+  curl -fsSL --retry 3 -o "${kpkg_dest}" "${BRAVE_APT_BASE_URL}/${kpkg_file}" ||
+    fatal "Failed to harvest brave-keyring (${BRAVE_APT_BASE_URL}/${kpkg_file})."
   curl -fsSL --retry 3 -o "${keyring_dest}" "${BRAVE_APT_BASE_URL}/${BRAVE_KEYRING_NAME}" ||
     fatal "Failed to harvest the Brave archive keyring."
 }
