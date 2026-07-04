@@ -376,6 +376,10 @@ declare -A HYPR_TAG_PATTERN=(
 declare -A HYPR_MESON_ARGS=(
   ["wayland"]="-Ddocumentation=false -Dtests=false"
   ["xkbcommon"]="-Denable-docs=false"
+  # uwsm's client scripts are default-DISABLED meson features; elephant hard-
+  # depends on uwsm-app for every app launch (silent dead launcher without it —
+  # see docs/2026-07-04-build-completeness-audit.md, finding 1).
+  ["uwsm"]="-Duwsm-app=enabled -Duuctl=enabled"
 )
 # Extra CMake options per cmake-built component (consumed by build_one). Empty
 # by default: xdph's Qt6 share-picker builds automatically when Qt6 is present
@@ -603,12 +607,17 @@ ELEPHANT_REPO_URL="${ELEPHANT_REPO_URL:-https://github.com/abenz1267/elephant}"
 ELEPHANT_VERSION="${ELEPHANT_VERSION:-}"
 WALKER_STORE_SUBDIR="${WALKER_STORE_SUBDIR:-walker}"
 # Elephant data providers shipped (the .so set proven on the reference machine).
+# websearch/runner/windows are bound in walker's embedded defaults (@ > $) —
+# omitting them leaves dead prefixes (audit findings 6 + risk item).
 ELEPHANT_PROVIDERS=(
   desktopapplications calc clipboard files symbols providerlist menus
+  websearch runner windows
 )
 # walker runtime deps (prebuilt binary links against these; everything else in
 # its closure is already pooled via the base set's GTK/Poppler dependents).
-WALKER_RUNTIME_PACKAGES=(libgtk4-layer-shell0 libpoppler-glib8)
+# qalc + imagemagick: elephant's calc and clipboard providers probe for them at
+# startup and silently self-disable when absent (audit findings 4/5).
+WALKER_RUNTIME_PACKAGES=(libgtk4-layer-shell0 libpoppler-glib8 qalc imagemagick)
 
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
