@@ -581,16 +581,18 @@ run_heavy_build() {
 }
 
 main() {
-  local confirm=0
+  local confirm=0 clear_cache=0
   while (($#)); do
     case "$1" in
       --confirm) confirm=1 ;;
+      --clear-cache) clear_cache=1 ;;
       -h | --help)
         plan_summary
         printf '\nRun with --confirm to execute the build (root required).\n'
+        printf 'Add --clear-cache to wipe %s first (full re-download/rebuild).\n' "${CACHE_DIR}"
         return 0
         ;;
-      *) fatal "unknown argument: $1 (use --confirm to build, or no args for a dry-run plan)" ;;
+      *) fatal "unknown argument: $1 (use --confirm to build, --clear-cache to wipe the cache first, or no args for a dry-run plan)" ;;
     esac
     shift
   done
@@ -599,6 +601,7 @@ main() {
   # sandbox check, no mutation — this path is what the unit test exercises.
   if ((confirm == 0)); then
     info "DRY-RUN (no --confirm): printing plan, mutating nothing."
+    ((clear_cache)) && info "(--clear-cache noted: ${CACHE_DIR} would be removed first)"
     plan_summary
     return 0
   fi
@@ -611,6 +614,14 @@ main() {
   # escape the buildroot before any mutating step runs.
   assert_stage_under_target "${TARGET}" "${BUILD_STAGE_REL}" \
     || fatal "unsafe BUILD_STAGE_REL (escapes buildroot): ${BUILD_STAGE_REL}"
+
+  # --clear-cache: wipe BEFORE any mounts exist (never rm -rf CACHE_DIR once
+  # the buildroot binds are live — see teardown_chroot_binds). Sandbox assert
+  # above already proved the workspace path is safe.
+  if ((clear_cache)); then
+    info "[build] --clear-cache: removing ${CACHE_DIR}"
+    rm -rf "${CACHE_DIR}"
+  fi
 
   # Mounts must never leak, even on failure; and the root build must not leave
   # root-owned droppings in the operator's workspace/output (which strand the
