@@ -1062,6 +1062,24 @@ EOF
 EOF
 }
 
+# Stage the kitty terminal config. kitty is installed by apt but ships no
+# user config — ~/.config/kitty stays empty. Copy the package's full annotated
+# default (every option documented inline, all values commented out at their
+# defaults) so the user edits a real kitty.conf instead of starting from a
+# blank file — the same starting point the reference machine's config grew
+# from. Read from the installed package in the target (like the Hyprland
+# example config); ownership comes from the later chown -R.
+stage_kitty_config() {
+  local example="${TARGET}/usr/share/doc/kitty/examples/kitty.conf"
+  local kitty_dir="${TARGET}/home/${TARGET_USERNAME}/.config/kitty"
+  if [[ ! -f "${example}" ]]; then
+    warn "kitty annotated default config missing (${example}); skipping."
+    return 0
+  fi
+  install -d "${kitty_dir}"
+  install -m644 "${example}" "${kitty_dir}/kitty.conf"
+}
+
 # Install the walker launcher stack from the offline store (harvested at BUILD
 # time by harvest_walker_launcher / build-iso step_stage_walker — NO network
 # here). Binaries land in /usr/local/bin; the elephant provider plugins are
@@ -1588,6 +1606,7 @@ HYPRDIM_SERVICE
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
+  stage_kitty_config
   stage_walker_launcher
   # Portal routing + dark-mode default; before the chown -R so the user config
   # (hyprland-portals.conf) is owned by the target user.
