@@ -190,6 +190,9 @@ step_cache() {
   # into the pool so the target installs it offline by name. Own reuse guard, so
   # it runs even on the cache_repo_exists resume path.
   cache_populate_chezmoi
+  # brave-browser: same out-of-archive pattern (Brave's apt repo, own reuse
+  # guard); also harvests the archive keyring for the target's sources entry.
+  cache_populate_brave
   cache_index_repo
 }
 
@@ -371,6 +374,13 @@ step_depsim() {
   if compgen -G "${POOL}/${XDPH_COMPONENT}_*.deb" >/dev/null; then
     xdph_sim="${XDPH_COMPONENT}"
   fi
+  # Out-of-archive pooled debs (chezmoi, brave-browser) are installed by name at
+  # install time, so their closures must prove out offline too. Guarded like
+  # xdph so a resumed pre-brave cache doesn't abort on an unknown package name
+  # (chezmoi was never simulated before — pre-existing gap, closed here).
+  local extra_sim=""
+  compgen -G "${POOL}/chezmoi_*.deb" >/dev/null && extra_sim+=" chezmoi"
+  compgen -G "${POOL}/brave-browser_*.deb" >/dev/null && extra_sim+=" brave-browser"
   # Bootstrap the throwaway base DIRECTLY from the offline pool — ZERO network.
   # step_reindex (step 5) already wrote ${CACHE_DIR}/repo/dists/${SUITE}/{Release,
   # main/binary-${ARCH}/Packages}, and the base debs were pooled at step 1, so the
@@ -396,7 +406,7 @@ step_depsim() {
     set -e
     apt-get update -o APT::Get::List-Cleanup=0 >/dev/null
     DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y \
-      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]} ${xdph_sim}
+      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]} ${xdph_sim} ${extra_sim}
   ")" && rc=0 || rc=$?
   # Unmount + remove the throwaway simroot now. The bind is also trap-tracked;
   # teardown_chroot_binds re-checks mountpoint, so this is not a double-unmount.

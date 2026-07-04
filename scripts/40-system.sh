@@ -464,6 +464,36 @@ install_chezmoi() {
   "
 }
 
+# Brave (default browser, SUPER+B): installs by NAME from the on-ISO store like
+# chezmoi (deb + keyring harvested at build by cache_populate_brave), then
+# stages Brave's archive keyring and a deb822 sources entry so the INSTALLED
+# system tracks Brave's apt repo for updates — the pooled deb only seeds the
+# first install. Keyring missing from the store = non-fatal warn (older ISO):
+# the browser still installs; only self-updating is lost until wired by hand.
+install_brave() {
+  info "Installing brave-browser from the offline store..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y brave-browser
+  "
+  local keyring_src="${CACHE_REPO_DIR}/${BRAVE_KEYRING_NAME}"
+  if [[ ! -f "${keyring_src}" ]]; then
+    warn "Brave archive keyring absent from the offline store (${keyring_src});"
+    warn "brave-browser installed but will NOT receive updates until its apt repo is added."
+    return 0
+  fi
+  install -m644 "${keyring_src}" "${TARGET}/usr/share/keyrings/${BRAVE_KEYRING_NAME}"
+  cat >"${TARGET}/etc/apt/sources.list.d/brave-browser-release.sources" <<EOF
+Types: deb
+URIs: ${BRAVE_APT_BASE_URL}
+Suites: stable
+Components: main
+Architectures: amd64 arm64
+Signed-By: /usr/share/keyrings/${BRAVE_KEYRING_NAME}
+EOF
+}
+
 # Build-time harvester (the build host is online): download every LythMono
 # variant zip and EXTRACT its TTFs into DEST, so the ISO ships the fonts in the
 # offline store (DEST = ${CACHE_DIR}/repo/${LYTHMONO_STORE_SUBDIR}, grafted to

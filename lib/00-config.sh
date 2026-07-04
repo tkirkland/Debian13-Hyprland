@@ -578,6 +578,17 @@ ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
 # latest release tag at BUILD time only (the build host is online).
 CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
 CHEZMOI_VERSION="${CHEZMOI_VERSION:-}"
+# Brave (the distro's default browser; SUPER+B in the installer keybinds) is not
+# in Debian; same offline pattern as chezmoi: the latest .deb is HARVESTED from
+# Brave's apt repo into the pool at BUILD time (cache_populate_brave) together
+# with the archive keyring, apt-installed by name OFFLINE at install time
+# (install_brave), which also stages the keyring + a deb822 .sources entry so
+# INSTALLED systems track Brave's repo for updates. step_runtime_closure pools
+# the deb's dependency closure like any other pooled deb. BRAVE_VERSION pins the
+# harvested release; empty harvests the repo's current stable at BUILD time.
+BRAVE_APT_BASE_URL="${BRAVE_APT_BASE_URL:-https://brave-browser-apt-release.s3.brave.com}"
+BRAVE_KEYRING_NAME="brave-browser-archive-keyring.gpg"
+BRAVE_VERSION="${BRAVE_VERSION:-}"
 # LythMono font: GitHub-only (one zip of TTFs per variant). The TTFs are
 # HARVESTED at BUILD time (harvest_lythmono_fonts) and EXTRACTED into the offline
 # store under LYTHMONO_STORE_SUBDIR, which iso-assemble grafts onto the ISO at

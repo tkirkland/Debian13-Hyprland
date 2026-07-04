@@ -568,6 +568,10 @@ hl.bind("SUPER + CTRL + R", hl.dsp.exec_cmd("linux-screen-record mic"))     -- t
 -- and Do-Not-Disturb. -sw skips waiting for the daemon.
 hl.bind("SUPER + N", hl.dsp.exec_cmd("swaync-client -t -sw"))         -- toggle panel
 hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw")) -- toggle DND
+-- Default browser: brave (the distro's chosen default; the upstream example
+-- defines fileManager but no browser at all). Conventional SUPER+B; the
+-- user's dotfiles override.
+hl.bind("SUPER + B", hl.dsp.exec_cmd("brave-browser"))
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
