@@ -1111,14 +1111,16 @@ stage_walker_launcher() {
   done
 }
 
-# Static, unconditional portal routing + dark-mode default (epic #67 items 3/4,
-# #57). The broker uses the hyprland impl when xdph is installed and otherwise
-# falls through to wlr (always installed as the packaged xdg-desktop-portal-wlr),
-# so this IDENTICAL config ships on every path with no install-time backend
-# detection. The prefer-dark gschema override drives the GTK/portal color scheme;
-# glib-compile-schemas compiles it into the target's schema cache (needs
-# libglib2.0-bin). Called from configure_session BEFORE its chown -R so the user
-# config file is owned by the target user.
+# Static, unconditional portal routing + dark theming defaults (epic #67 items
+# 3/4, #57, #51/#76). The broker uses the hyprland impl when xdph is installed
+# and otherwise falls through to wlr (always installed as the packaged
+# xdg-desktop-portal-wlr), so this IDENTICAL config ships on every path with no
+# install-time backend detection. The gschema override drives the GTK/portal
+# color scheme plus the GTK (adw-gtk3-dark, installed by install_adw_gtk3_theme),
+# icon (Papirus-Dark) and cursor (Adwaita) themes; glib-compile-schemas compiles
+# it into the target's schema cache (needs libglib2.0-bin). Called from
+# configure_session BEFORE its chown -R so the user config file is owned by the
+# target user.
 write_portal_config() {
   local portal_dir="${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal"
   install -d "${portal_dir}"
@@ -1132,10 +1134,39 @@ EOF
   cat >"${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override" <<'EOF'
 [org.gnome.desktop.interface]
 color-scheme='prefer-dark'
+gtk-theme='adw-gtk3-dark'
+icon-theme='Papirus-Dark'
+cursor-theme='Adwaita'
 EOF
   # Guarded: a missing/failed compile must not abort the install (the override is
   # cosmetic). libglib2.0-bin provides glib-compile-schemas.
   in_target "glib-compile-schemas /usr/share/glib-2.0/schemas || true"
+}
+
+# Session environment: uwsm sources ~/.config/uwsm/env into the systemd user
+# environment before Hyprland starts. Written UNCONDITIONALLY: the theming
+# block (issues #51/#76) applies to every install — QT_QPA_PLATFORMTHEME=gtk3
+# makes Qt6 apps follow the GTK theme via qt6-gtk-platformtheme
+# (THEME_PACKAGES), and XCURSOR_THEME pins the Adwaita cursor so Wayland-native
+# apps match the gschema cursor-theme. The Hyprland-wiki NVIDIA variables
+# (issue #4) are appended only when an NVIDIA driver install was requested.
+write_uwsm_env() {
+  mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm"
+  cat >"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
+# Managed by hypr-deb: session environment sourced by uwsm into the systemd
+# user environment. Theming defaults (issues #51/#76): Qt6 apps follow the GTK
+# theme through the gtk3 platform theme; Adwaita cursors everywhere.
+export QT_QPA_PLATFORMTHEME=gtk3
+export XCURSOR_THEME=Adwaita
+EOF
+  if nvidia_install_requested; then
+    cat >>"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
+# NVIDIA environment for the Hyprland session (issue #4).
+export LIBVA_DRIVER_NAME=nvidia
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export GBM_BACKEND=nvidia-drm
+EOF
+  fi
 }
 
 configure_session() {
@@ -1265,20 +1296,10 @@ vt = 1
 command = "${session_command}"
 user = "${session_user}"
 EOF
-  # NVIDIA session environment (issue #4): uwsm sources ~/.config/uwsm/env
-  # into the systemd user session before Hyprland starts. These are the
-  # Hyprland-wiki variables for NVIDIA GPUs; the chown -R below covers the
-  # file's ownership.
-  if nvidia_install_requested; then
-    mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm"
-    cat >"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
-# Managed by hypr-deb (issue #4): NVIDIA environment for the Hyprland
-# session. Sourced by uwsm into the systemd user environment.
-export LIBVA_DRIVER_NAME=nvidia
-export __GLX_VENDOR_LIBRARY_NAME=nvidia
-export GBM_BACKEND=nvidia-drm
-EOF
-  fi
+  # Session environment (~/.config/uwsm/env): written unconditionally now that
+  # it carries the theming defaults, NVIDIA lines appended only when requested.
+  # The chown -R below covers the file's ownership.
+  write_uwsm_env
   # External-display recovery (DP-3 HPD-dark after login). The greeter wrapper
   # disables every non-primary output with `wlr-randr --output <conn> --off`.
   # On NVIDIA that disable leaves the connector hot-plug-detect dark: the kernel
