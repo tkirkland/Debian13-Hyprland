@@ -640,6 +640,19 @@ ELEPHANT_PROVIDERS=(
 # qalc + imagemagick: elephant's calc and clipboard providers probe for them at
 # startup and silently self-disable when absent (audit findings 4/5).
 WALKER_RUNTIME_PACKAGES=(libgtk4-layer-shell0 libpoppler-glib8 qalc imagemagick)
+# adw-gtk3 (issues #51/#76): the unofficial GTK3 port of libadwaita's GTK4
+# look, GitHub-only. The release tarball is HARVESTED into the offline store at
+# BUILD time (harvest_adw_gtk3, 40-system.sh) under ADW_GTK3_STORE_SUBDIR and
+# its two theme dirs (adw-gtk3/, adw-gtk3-dark/) are copied from there OFFLINE
+# at install time (install_adw_gtk3_theme) — never fetched during an install.
+# ADW_GTK3_VERSION pins the release deterministically (e.g. v6.5); empty
+# resolves the latest tag at BUILD time only. Upstream tags are vX.Y (no patch
+# component — v6.5), so the default vX.Y.Z pattern needs overriding here.
+ADW_GTK3_REPO_URL="${ADW_GTK3_REPO_URL:-https://github.com/lassekongo83/adw-gtk3}"
+ADW_GTK3_VERSION="${ADW_GTK3_VERSION:-}"
+ADW_GTK3_TAG_PATTERN="${ADW_GTK3_TAG_PATTERN:-^v[0-9]+(\.[0-9]+)+$}"
+# Subdir under the offline store root (CACHE_REPO_DIR) holding the theme dirs.
+ADW_GTK3_STORE_SUBDIR="${ADW_GTK3_STORE_SUBDIR:-adw-gtk3}"
 
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
@@ -704,6 +717,17 @@ PORTAL_PACKAGES=(
   libglib2.0-bin
 )
 
+# Dark theming defaults (issues #51/#76), proven on the reference machine.
+# gnome-themes-extra ships the GTK3 Adwaita-dark fallback theme;
+# qt6-gtk-platformtheme lets Qt6 apps read the GTK settings (paired with
+# QT_QPA_PLATFORMTHEME=gtk3 in the uwsm env); papirus-icon-theme provides the
+# Papirus-Dark icon set; adwaita-icon-theme is pinned explicitly for the
+# Adwaita cursor theme (otherwise only a transitive dependency). All in main.
+THEME_PACKAGES=(
+  gnome-themes-extra qt6-gtk-platformtheme papirus-icon-theme
+  adwaita-icon-theme
+)
+
 # lxpolkit (#67 item 4): the LXDE polkit authentication agent. Ships
 # /etc/xdg/autostart/lxpolkit.desktop and autostarts via `uwsm finalize`
 # (already wired in the hyprland.start hook) — no extra autostart line needed.
@@ -744,6 +768,7 @@ TARGET_BASE_PACKAGES=(
   "${AUDIO_PACKAGES[@]}"
   "${FNKEY_PACKAGES[@]}"
   "${PORTAL_PACKAGES[@]}"
+  "${THEME_PACKAGES[@]}"
   "${POLKIT_PACKAGES[@]}"
   "${FILEMANAGER_PACKAGES[@]}"
   "${WALKER_RUNTIME_PACKAGES[@]}"
