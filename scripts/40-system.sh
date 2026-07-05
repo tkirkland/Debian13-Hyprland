@@ -589,6 +589,35 @@ harvest_walker_launcher() {
   rm -rf "${tmp}"
 }
 
+# Build-time harvester for the adw-gtk3 GTK3 theme (the build host is online):
+# download the release tarball and EXTRACT its two theme dirs (adw-gtk3/,
+# adw-gtk3-dark/) into DEST, so the ISO ships them in the offline store
+# (DEST = ${CACHE_DIR}/repo/${ADW_GTK3_STORE_SUBDIR}, grafted to
+# ${CACHE_REPO_DIR}/${ADW_GTK3_STORE_SUBDIR} on the ISO). install_adw_gtk3_theme
+# copies them from there at install time — NO network. Pairs with build-iso's
+# step_stage_adw_gtk3. ADW_GTK3_VERSION pins the release; empty resolves the
+# latest tag (build-time only). Release asset name is adw-gtk3${tag}.tar.xz
+# (e.g. adw-gtk3v6.5.tar.xz — verified against the v6.5 release assets).
+harvest_adw_gtk3() {
+  local dest="${1:?dest dir}" tag="${ADW_GTK3_VERSION:-}" tmp=""
+  [[ -n "${tag}" ]] ||
+    tag="$(resolve_latest_release_tag "${ADW_GTK3_REPO_URL}" "${ADW_GTK3_TAG_PATTERN}")"
+  info "Harvesting adw-gtk3 ${tag} theme into ${dest}..."
+  tmp="$(mktemp -d)"
+  curl -fsSL --retry 3 -o "${tmp}/adw-gtk3.tar.xz" \
+    "${ADW_GTK3_REPO_URL}/releases/download/${tag}/adw-gtk3${tag}.tar.xz" ||
+    { rm -rf "${tmp}"; fatal "Failed to harvest adw-gtk3 (${tag})."; }
+  # Extract into tmp and swap into dest only on success — a mid-extract tar
+  # failure must not leave a partial store for a later build's reuse check to
+  # accept (pairs with step_stage_adw_gtk3's leaf-file check).
+  tar -xJf "${tmp}/adw-gtk3.tar.xz" -C "${tmp}" adw-gtk3 adw-gtk3-dark ||
+    { rm -rf "${tmp}"; fatal "adw-gtk3 ${tag} tarball lacks the theme dirs."; }
+  rm -rf "${dest}"
+  install -d "${dest}"
+  mv "${tmp}/adw-gtk3" "${tmp}/adw-gtk3-dark" "${dest}/"
+  rm -rf "${tmp}"
+}
+
 # LythMono is not packaged. Its TTFs are harvested into the offline store at
 # build time (harvest_lythmono_fonts); install them from that LOCAL store path
 # into the system font path so all users get them, fully OFFLINE — NO GitHub
@@ -603,6 +632,22 @@ install_lythmono_fonts() {
   install -d "${TARGET}/usr/local/share/fonts/LythMono"
   cp "${src}"/*.ttf "${TARGET}/usr/local/share/fonts/LythMono/"
   in_target "fc-cache -f /usr/local/share/fonts/LythMono"
+}
+
+# adw-gtk3 is not packaged in Debian. Its theme dirs are harvested into the
+# offline store at build time (harvest_adw_gtk3); copy them from that LOCAL
+# store path into the system theme path, fully OFFLINE — NO GitHub fetch, no
+# network branch. The gschema override (write_portal_config, 60-hyprland.sh)
+# selects adw-gtk3-dark as the GTK theme (issues #51/#76).
+install_adw_gtk3_theme() {
+  local src="${CACHE_REPO_DIR}/${ADW_GTK3_STORE_SUBDIR}"
+  if [[ ! -d "${src}/adw-gtk3" || ! -d "${src}/adw-gtk3-dark" ]]; then
+    warn "adw-gtk3 theme absent from the offline store (${src}); skipping."
+    return 0
+  fi
+  info "Installing adw-gtk3 theme from the offline store (${src})..."
+  install -d "${TARGET}/usr/share/themes"
+  cp -r "${src}/adw-gtk3" "${src}/adw-gtk3-dark" "${TARGET}/usr/share/themes/"
 }
 
 create_user() {
@@ -761,6 +806,7 @@ phase_system() {
   install_chezmoi
   install_brave
   install_lythmono_fonts
+  install_adw_gtk3_theme
   configure_locale_tz
   configure_time_sync
   neuter_ssh_vsock_generator
