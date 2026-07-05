@@ -557,10 +557,15 @@ step_stage_walker() {
 #     OFFLINE install — NO GitHub fetch. Same lazy-source pattern as
 #     step_stage_fonts.
 step_stage_adw_gtk3() {
-  local dest="${CACHE_DIR}/repo/${ADW_GTK3_STORE_SUBDIR}"
-  # Reuse only if BOTH theme dirs are present with their gtk-3.0 payload — a
+  local dest="${CACHE_DIR}/repo/${ADW_GTK3_STORE_SUBDIR}" f="" complete=1
+  # Reuse only if BOTH themes carry their leaf payload files (verified against
+  # the v6.5 release layout) — bare dirs appear early in the archive, so a
   # partial extract must be re-harvested, not silently shipped.
-  if [[ -d "${dest}/adw-gtk3/gtk-3.0" && -d "${dest}/adw-gtk3-dark/gtk-3.0" ]]; then
+  for f in adw-gtk3/index.theme adw-gtk3/gtk-3.0/gtk.css \
+    adw-gtk3-dark/index.theme adw-gtk3-dark/gtk-3.0/gtk.css; do
+    [[ -f "${dest}/${f}" ]] || { complete=0; break; }
+  done
+  if [[ "${complete}" -eq 1 ]]; then
     info "[build] reusing staged adw-gtk3 theme (${dest})"
     return 0
   fi

@@ -603,13 +603,18 @@ harvest_adw_gtk3() {
   [[ -n "${tag}" ]] ||
     tag="$(resolve_latest_release_tag "${ADW_GTK3_REPO_URL}" "${ADW_GTK3_TAG_PATTERN}")"
   info "Harvesting adw-gtk3 ${tag} theme into ${dest}..."
-  install -d "${dest}"
   tmp="$(mktemp -d)"
   curl -fsSL --retry 3 -o "${tmp}/adw-gtk3.tar.xz" \
     "${ADW_GTK3_REPO_URL}/releases/download/${tag}/adw-gtk3${tag}.tar.xz" ||
     { rm -rf "${tmp}"; fatal "Failed to harvest adw-gtk3 (${tag})."; }
-  tar -xJf "${tmp}/adw-gtk3.tar.xz" -C "${dest}" adw-gtk3 adw-gtk3-dark ||
+  # Extract into tmp and swap into dest only on success — a mid-extract tar
+  # failure must not leave a partial store for a later build's reuse check to
+  # accept (pairs with step_stage_adw_gtk3's leaf-file check).
+  tar -xJf "${tmp}/adw-gtk3.tar.xz" -C "${tmp}" adw-gtk3 adw-gtk3-dark ||
     { rm -rf "${tmp}"; fatal "adw-gtk3 ${tag} tarball lacks the theme dirs."; }
+  rm -rf "${dest}"
+  install -d "${dest}"
+  mv "${tmp}/adw-gtk3" "${tmp}/adw-gtk3-dark" "${dest}/"
   rm -rf "${tmp}"
 }
 
