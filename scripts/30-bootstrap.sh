@@ -90,7 +90,19 @@ ensure_target_ready() {
   if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
     # -N: never automount on import — canmount=on children mounting before
     # the noauto root dataset would be shadowed by the root overlay-mount.
-    zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null || return 0
+    if ! zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null; then
+      # Pool nowhere to be found -> fresh install before storage; a no-op.
+      zpool import 2>/dev/null | grep -qE "^\s*pool: ${POOL_NAME}\$" || return 0
+      # The pool exists but refused a plain import. Routine on maintenance
+      # runs (issue #50): a root pool is never exported at shutdown, so once
+      # the installed system has booted, the live env's hostid no longer
+      # matches and import demands -f. The disks are this machine's own
+      # (preflight validated them), so force it; failing silently here used
+      # to surface as a misleading "No kernel found in ${TARGET}/boot".
+      info "Pool ${POOL_NAME} was last active on another hostid; importing with -f."
+      zpool import -f -N -R "${TARGET}" "${POOL_NAME}" ||
+        fatal "Pool ${POOL_NAME} exists but cannot be imported (see error above)."
+    fi
   fi
   isolate_target_propagation
   if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then

@@ -158,4 +158,70 @@ else
   echo "  ok: no fatal on an absent target"
 fi
 
+# --- ensure_target_ready: import failure handling (issue #50) -----------------
+# A root pool is never exported at shutdown, so on a maintenance run the plain
+# import fails (hostid mismatch) and must be retried with -f; a genuinely
+# absent pool (fresh install before storage) must stay a silent no-op.
+run_import() { # $1 = pool visible in `zpool import` listing; $2 = plain import ok
+  bash -c '
+    set -euo pipefail
+    VISIBLE='"$1"'
+    PLAIN_OK='"$2"'
+    calls="'"${tmp}"'/import-calls"
+    : >"${calls}"
+    info() { :; }
+    warn() { :; }
+    fatal() { echo "FATAL: $*" >&2; exit 1; }
+    source scripts/30-bootstrap.sh
+    zpool() {
+      echo "zpool $*" >>"${calls}"
+      case "${1}:$#" in
+        list:*) return 1 ;;                       # pool never imported yet
+        import:1)                                  # bare listing of importables
+          ((VISIBLE)) && printf "   pool: TESTPOOL\n"
+          return 0 ;;
+        import:*)
+          [[ "$2" == "-f" ]] && return 0           # forced import succeeds
+          ((PLAIN_OK)) ;;
+      esac
+    }
+    zfs() { :; }
+    mount() { :; }
+    mountpoint() { return 0; }
+    findmnt() { printf "zfs\n"; }
+    isolate_target_propagation() { :; }
+    mount_chroot_binds() { :; }
+    TARGET=/nonexistent-target
+    POOL_NAME=TESTPOOL
+    ROOT_DATASET=TESTPOOL/ROOT/test
+    ESP_MOUNT=/boot/efi
+    ensure_target_ready && echo "READY_OK"
+    cat "${calls}"
+  ' 2>&1
+}
+
+echo "test: ensure_target_ready import failure handling"
+imp1="$(run_import 1 1)"
+assert_contains "${imp1}" "READY_OK" "plain import succeeds -> ready"
+if printf '%s\n' "${imp1}" | grep -q -- "-f"; then
+  echo "  FAIL: forced import attempted although plain import succeeded" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no -f when the plain import works"
+fi
+
+imp2="$(run_import 1 0)"
+assert_contains "${imp2}" "zpool import -f -N -R /nonexistent-target TESTPOOL" \
+  "hostid-mismatch import is retried with -f"
+assert_contains "${imp2}" "READY_OK" "forced import leads to a ready target"
+
+imp3="$(run_import 0 0)"
+assert_contains "${imp3}" "READY_OK" "absent pool stays a silent no-op"
+if printf '%s\n' "${imp3}" | grep -q -- "-f"; then
+  echo "  FAIL: forced import attempted although the pool does not exist" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no -f on an absent pool"
+fi
+
 finish_test
