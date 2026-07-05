@@ -173,7 +173,10 @@ install_build_deps() {
     apt-get install -y ${UWSM_RUNTIME_PACKAGES[*]}
   "
   # Record exactly what we may purge later (toolchain included; the
-  # upgraded runtime libs are upgrades, not purge candidates).
+  # upgraded runtime libs are upgrades, not purge candidates). Guarantee the
+  # dir here rather than at every call site — build-iso.sh's hoisted call had
+  # no paired mkdir and broke on a fresh/reused buildroot.
+  mkdir -p "${TARGET}${HYPR_SRC_DIR}"
   printf '%s\n' "${HYPR_BUILD_PACKAGES[@]}" "${HYPR_TOOLCHAIN_PACKAGES[@]}" \
     "${HYPR_BACKPORTS_PACKAGES[@]}" \
     >"${TARGET}${HYPR_SRC_DIR}/.build-deps"
