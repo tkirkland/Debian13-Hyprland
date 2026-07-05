@@ -30,9 +30,42 @@ write_mdadm_conf() {
   } >"${TARGET}/etc/mdadm/mdadm.conf"
 }
 
+# Best-effort autodetection with the config defaults as fallback. Timezone
+# comes from GeoIP (needs network — the offline default install fails the
+# 3s curl fast and keeps the fallback); locale from the live session's LANG.
+# An explicit TIMEZONE=/LOCALE= env override always wins and skips detection
+# entirely (TIMEZONE_EXPLICIT/LOCALE_EXPLICIT, lib/00-config.sh). Candidates
+# are validated against the TARGET's zoneinfo/locale.gen so a garbage GeoIP
+# answer or exotic live LANG can never produce a broken target config.
+autodetect_locale_tz() {
+  local tz="" lang=""
+  if [[ -z "${TIMEZONE_EXPLICIT}" ]]; then
+    tz="$(curl -fsS --max-time 3 https://ipapi.co/timezone 2>/dev/null ||
+      curl -fsS --max-time 3 'http://ip-api.com/line/?fields=timezone' 2>/dev/null ||
+      true)"
+    if [[ "${tz}" == */* && -e "${TARGET}/usr/share/zoneinfo/${tz}" ]]; then
+      TIMEZONE="${tz}"
+      info "Timezone autodetected via GeoIP: ${TIMEZONE}"
+    else
+      info "Timezone autodetect unavailable; using fallback ${TIMEZONE}."
+    fi
+  fi
+  if [[ -z "${LOCALE_EXPLICIT}" ]]; then
+    lang="${LANG:-}"
+    if [[ -n "${lang}" && "${lang}" != C* && "${lang}" != POSIX* ]] &&
+      grep -Eq "^#? *${lang}[[:space:]]" "${TARGET}/etc/locale.gen" 2>/dev/null; then
+      LOCALE="${lang}"
+      info "Locale autodetected from live session LANG: ${LOCALE}"
+    else
+      info "Locale autodetect unavailable; using fallback ${LOCALE}."
+    fi
+  fi
+}
+
 # Requires the locales package (/etc/locale.gen, locale-gen), so this must
 # run after install_base_packages — a minimal debootstrap does not ship it.
 configure_locale_tz() {
+  autodetect_locale_tz
   in_target "
     set -e
     test -f /etc/locale.gen ||
