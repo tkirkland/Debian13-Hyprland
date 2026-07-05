@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=tests/test-helpers.sh
 source "${HERE}/test-helpers.sh"
+# shellcheck source=tools/iso-assemble.sh
 source "${HERE}/../tools/iso-assemble.sh"     # main is guarded, so sourcing is inert
 
 echo "test: iso-assemble repo layout validation"
 good="$(mktemp -d)"; mkdir -p "${good}/dists/trixie" "${good}/pool"
 bad="$(mktemp -d)"
-validate_repo_layout "${good}" && echo "  ok: valid repo layout accepted" \
+{ validate_repo_layout "${good}" && echo "  ok: valid repo layout accepted"; } \
   || { echo "  FAIL: valid layout rejected" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 assert_fails "missing pool/dists rejected" validate_repo_layout "${bad}"
 rm -rf "${good}" "${bad}"
@@ -132,15 +134,15 @@ else
 fi
 
 echo "test: build_write_iso_args replaces the live squashfs and strips d-i"
-args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
-assert_contains "${args}" "-map" "maps a file into the ISO"
-assert_contains "${args}" "/tmp/new.squashfs" "maps the rebuilt squashfs"
-assert_contains "${args}" "/live/filesystem.squashfs" "targets the live root squashfs"
-assert_contains "${args}" "replay" "replays the stock boot images (stays bootable)"
-assert_contains "${args}" "-rm_r" "strips the unused d-i paths"
+iso_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+assert_contains "${iso_args}" "-map" "maps a file into the ISO"
+assert_contains "${iso_args}" "/tmp/new.squashfs" "maps the rebuilt squashfs"
+assert_contains "${iso_args}" "/live/filesystem.squashfs" "targets the live root squashfs"
+assert_contains "${iso_args}" "replay" "replays the stock boot images (stays bootable)"
+assert_contains "${iso_args}" "-rm_r" "strips the unused d-i paths"
 # The new squashfs must map ONTO the live squashfs path (argv: -map SOURCE TARGET),
 # i.e. it replaces the root squashfs, not added as a top-level data dir.
-maptarget="$(printf '%s\n' "${args}" | grep -A2 -- '^-map$' | tail -n1)"
+maptarget="$(printf '%s\n' "${iso_args}" | grep -A2 -- '^-map$' | tail -n1)"
 if [[ "${maptarget}" == "/live/filesystem.squashfs" ]]; then
   echo "  ok: -map source maps onto /live/filesystem.squashfs"
 else
@@ -149,8 +151,8 @@ else
 fi
 # Boot replay MUST be ordered AFTER the -map/-rm tree edits (Debian
 # RepackBootableISO rule), else BIOS/UEFI bootability can be lost.
-map_idx="$(printf '%s\n' "${args}" | grep -n -- '^-map$' | head -n1 | cut -d: -f1)"
-replay_idx="$(printf '%s\n' "${args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
+map_idx="$(printf '%s\n' "${iso_args}" | grep -n -- '^-map$' | head -n1 | cut -d: -f1)"
+replay_idx="$(printf '%s\n' "${iso_args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
 if [[ -n "${map_idx}" && -n "${replay_idx}" && "${replay_idx}" -gt "${map_idx}" ]]; then
   echo "  ok: boot replay is ordered after the tree edits"
 else
@@ -159,6 +161,7 @@ else
 fi
 
 echo "test: detect_squashfs_params reads the stock compressor + block size"
+# shellcheck disable=SC2317  # called indirectly by detect_squashfs_params
 unsquashfs() { printf 'Found a valid SQUASHFS superblock\nCompression zstd\nBlock size 1048576\nFilesystem size 12345 Kbytes\n'; }
 params="$(detect_squashfs_params /any.squashfs)"
 unset -f unsquashfs

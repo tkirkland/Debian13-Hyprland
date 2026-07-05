@@ -3,8 +3,9 @@
 # they can never land sources.list.d/preferences.d on the HOST /etc.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=tests/test-helpers.sh
 source "${HERE}/test-helpers.sh"
-cd "${HERE}/.."
+cd "${HERE}/.." || exit 1
 
 source lib/00-config.sh
 source lib/01-log.sh

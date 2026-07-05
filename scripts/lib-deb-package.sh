@@ -231,6 +231,7 @@ build_component_to_deb() {
     info "reuse cached ${name} ${debver} (upstream not newer)"
     return 0
   fi
+  # shellcheck disable=SC2034  # Cross-module global consumed by the sourced stage_source/build_one.
   HYPR_RESOLVED_TAG["${name}"]="${tag}"
   stage_source "${name}"
   destdir="$(mktemp -d)"

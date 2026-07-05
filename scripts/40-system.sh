@@ -575,15 +575,15 @@ harvest_walker_launcher() {
   curl -fsSL --retry 3 -o "${tmp}/elephant.tgz" \
     "${ELEPHANT_REPO_URL}/releases/download/${etag}/elephant-linux-amd64.tar.gz" ||
     { rm -rf "${tmp}"; fatal "Failed to harvest elephant ${etag}."; }
-  tar -xzf "${tmp}/elephant.tgz" -C "${tmp}" &&
-    install -m755 "${tmp}/elephant-linux-amd64" "${dest}/elephant" ||
+  { tar -xzf "${tmp}/elephant.tgz" -C "${tmp}" &&
+    install -m755 "${tmp}/elephant-linux-amd64" "${dest}/elephant"; } ||
     { rm -rf "${tmp}"; fatal "elephant ${etag} tarball lacks the daemon binary."; }
   for p in "${ELEPHANT_PROVIDERS[@]}"; do
     curl -fsSL --retry 3 -o "${tmp}/${p}.tgz" \
       "${ELEPHANT_REPO_URL}/releases/download/${etag}/${p}-linux-amd64.tar.gz" ||
       { rm -rf "${tmp}"; fatal "Failed to harvest elephant provider ${p} (${etag})."; }
-    tar -xzf "${tmp}/${p}.tgz" -C "${tmp}" &&
-      install -m644 "${tmp}/${p}-linux-amd64.so" "${dest}/${p}.so" ||
+    { tar -xzf "${tmp}/${p}.tgz" -C "${tmp}" &&
+      install -m644 "${tmp}/${p}-linux-amd64.so" "${dest}/${p}.so"; } ||
       { rm -rf "${tmp}"; fatal "elephant provider ${p} tarball lacks its plugin."; }
   done
   rm -rf "${tmp}"
