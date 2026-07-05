@@ -87,6 +87,11 @@ TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
+# Explicitness markers BEFORE the defaults land: configure_locale_tz only
+# autodetects when the operator did NOT set these (an explicit env value
+# always wins over detection; the literals below are the last-resort fallback).
+TIMEZONE_EXPLICIT="${TIMEZONE:+1}"
+LOCALE_EXPLICIT="${LOCALE:+1}"
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
 # Hardware clock (RTC) interpretation. No default: the user must choose, via
