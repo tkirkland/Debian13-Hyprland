@@ -51,6 +51,7 @@ assert_contains "${shot_txt}" 'wl-copy --type image/png' \
 # Recording: timestamped .mkv, software codec default (portable), NVENC opt-in.
 assert_contains "${rec_txt}" 'Screen Recordings' \
   "linux-screen-record saves under Videos/Screen Recordings"
+# shellcheck disable=SC2016  # the needle is a literal source-code snippet
 assert_contains "${rec_txt}" 'screen_recording_$timestamp.mkv' \
   "linux-screen-record writes a crash-safe .mkv"
 assert_contains "${rec_txt}" 'SCREEN_RECORD_CODEC:-libx264' \

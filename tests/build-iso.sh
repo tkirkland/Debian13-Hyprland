@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=tests/test-helpers.sh
 source "${HERE}/test-helpers.sh"
 
 # Sourcing the orchestrator must be inert: main is guarded by the
 # BASH_SOURCE==0 check, so no debootstrap/chroot/xorriso runs here.
+# shellcheck source=tools/build-iso.sh
 source "${HERE}/../tools/build-iso.sh"
 set +e   # the orchestrator enables `set -e`; tests do their own rc capture
 
@@ -19,8 +21,8 @@ assert_contains "${summary}" "buildroot"        "target is the buildroot"
 # TARGET is forced strictly under the workspace (host-safety invariant).
 assert_eq "${ISO_WORKSPACE}/buildroot" "${TARGET}" "TARGET confined under workspace"
 # The sandbox guard accepts this resolved config.
-assert_build_sandbox "${ISO_WORKSPACE}" "${TARGET}" \
-  && echo "  ok: resolved sandbox passes assert_build_sandbox" \
+{ assert_build_sandbox "${ISO_WORKSPACE}" "${TARGET}" \
+  && echo "  ok: resolved sandbox passes assert_build_sandbox"; } \
   || { echo "  FAIL: resolved sandbox rejected" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 
 echo "test: no-args dry-run needs no root, mutates nothing, exits 0"
@@ -48,6 +50,7 @@ wroot="$(mktemp -d)"
 printf '[submodule "assets/wallpapers"]\n' >"${wroot}/.gitmodules"
 mkdir -p "${wroot}/assets/wallpapers"
 gitlog="${wroot}/git.log"; : >"${gitlog}"
+# shellcheck disable=SC2317  # called indirectly by ensure_wallpapers_checked_out
 git() { printf '%s\n' "$*" >>"${gitlog}"; }
 ensure_wallpapers_checked_out "${wroot}"          # empty submodule -> must check out
 assert_contains "$(<"${gitlog}")" "submodule update --init --depth 1 -- assets/wallpapers" \

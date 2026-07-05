@@ -40,6 +40,7 @@ else
 fi
 
 # 3. Hash is order-independent (reordering must not invalidate the pool).
+# shellcheck disable=SC2016  # fake body must stay literal until run
 h4="$(run 'TARGET_BASE_PACKAGES=($(printf "%s\n" "${TARGET_BASE_PACKAGES[@]}" | tac)); cache_pkgset_hash')"
 assert_eq "${h1}" "${h4}" "cache_pkgset_hash is order-independent"
 
@@ -51,9 +52,11 @@ fresh_state() {
 }
 assert_eq "stale" "$(fresh_state '')" \
   "missing stamp reads as stale (auto-recovers pre-stamp caches)"
+# shellcheck disable=SC2016  # fake body must stay literal until run
 assert_eq "fresh" \
   "$(fresh_state 'cache_pkgset_hash > "${CACHE_DIR}/.pkgset.sha256";')" \
   "stamp matching the current package set reads as fresh"
+# shellcheck disable=SC2016  # fake body must stay literal until run
 assert_eq "stale" \
   "$(fresh_state 'echo deadbeef > "${CACHE_DIR}/.pkgset.sha256";')" \
   "stamp not matching the current package set reads as stale"

@@ -2,7 +2,9 @@
 # tests/deb-package.sh — unit tests for scripts/lib-deb-package.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=tests/test-helpers.sh
 source "${HERE}/test-helpers.sh"
+# shellcheck source=scripts/lib-deb-package.sh
 source "${HERE}/../scripts/lib-deb-package.sh"
 
 assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0)" "tag_to_debver strips v, adds -1"
@@ -22,9 +24,9 @@ rm -rf "${tmp}"
 tmp="$(mktemp -d)"
 : >"${tmp}/swww_0.11.0-1_amd64.deb"
 assert_fails "no rebuild when upstream == cached" deb_needs_rebuild "${tmp}" swww 0.11.0-1
-deb_needs_rebuild "${tmp}" swww 0.12.0-1 && echo "  ok: rebuild when upstream newer" \
+{ deb_needs_rebuild "${tmp}" swww 0.12.0-1 && echo "  ok: rebuild when upstream newer"; } \
   || { echo "  FAIL: should rebuild when newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
-deb_needs_rebuild "${tmp}" newpkg 1.0.0-1 && echo "  ok: rebuild when absent" \
+{ deb_needs_rebuild "${tmp}" newpkg 1.0.0-1 && echo "  ok: rebuild when absent"; } \
   || { echo "  FAIL: should rebuild when absent" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 rm -rf "${tmp}"
 
@@ -58,7 +60,7 @@ if command -v dpkg-deb >/dev/null; then
   printf '#!/bin/sh\n' >"${dest}/usr/local/bin/swww"; chmod +x "${dest}/usr/local/bin/swww"
   out="$(package_to_deb "${dest}" swww 0.11.0-1 amd64 "libc6" "${pool}")"
   assert_eq "${pool}/swww_0.11.0-1_amd64.deb" "${out}" "package_to_deb returns deb path"
-  [[ -f "${pool}/swww_0.11.0-1_amd64.deb" ]] && echo "  ok: deb created" \
+  { [[ -f "${pool}/swww_0.11.0-1_amd64.deb" ]] && echo "  ok: deb created"; } \
     || { echo "  FAIL: deb not created" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
   assert_eq "swww" "$(dpkg-deb -f "${pool}/swww_0.11.0-1_amd64.deb" Package)" "deb Package field"
   rm -rf "${tmp}"
@@ -76,6 +78,7 @@ if command -v dpkg-deb >/dev/null; then
   assert_eq "libfoo0 (= 1.0.0)" "$(dpkg-deb -f "${out}" Provides)" "package_to_deb emits VERSIONED Provides"
   assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Conflicts)" "package_to_deb threads Conflicts from map"
   assert_eq "libfoo0" "$(dpkg-deb -f "${out}" Replaces)" "package_to_deb threads Replaces from map"
+  # shellcheck disable=SC2034  # consumed by the sourced package_to_deb
   HYPR_DEB_PROVIDES=() HYPR_DEB_CONFLICTS=() HYPR_DEB_REPLACES=()
   rm -rf "${tmp}"
 else
@@ -85,18 +88,22 @@ fi
 if command -v dpkg-deb >/dev/null; then
   gtmp="$(mktemp -d)"; gpool="${gtmp}/pool"; mkdir -p "${gpool}"
   : >"${gpool}/foo_1.2.0-1_amd64.deb"
+  # shellcheck disable=SC2034  # consumed by the sourced build_component_to_deb
   declare -gA HYPR_REPO_URL=([foo]="https://example/foo") HYPR_TAG_PATTERN=() HYPR_DEB_DEPENDS=([foo]="libc6") HYPR_RESOLVED_TAG=()
+  # shellcheck disable=SC2034  # consumed by the sourced build_component_to_deb
   ARCH=amd64
+  # shellcheck disable=SC2317  # called indirectly by build_component_to_deb
   resolve_latest_release_tag() { echo "v1.2.0"; }     # upstream == cached -> skip
   stage_source() { :; }
+  # shellcheck disable=SC2317  # called indirectly by build_component_to_deb
   build_one() { echo called >>"${gtmp}/calls"; }
   build_component_to_deb foo "${gpool}" >/dev/null 2>&1
-  [[ ! -f "${gtmp}/calls" ]] && echo "  ok: gate skips build when upstream not newer" \
+  { [[ ! -f "${gtmp}/calls" ]] && echo "  ok: gate skips build when upstream not newer"; } \
     || { echo "  FAIL: built despite not newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
   resolve_latest_release_tag() { echo "v1.3.0"; }      # upstream newer -> build
   build_one() { mkdir -p "${HYPR_DESTDIR}/usr/bin"; : >"${HYPR_DESTDIR}/usr/bin/foo"; }
   build_component_to_deb foo "${gpool}" >/dev/null 2>&1
-  [[ -f "${gpool}/foo_1.3.0-1_amd64.deb" ]] && echo "  ok: gate builds+packages when newer" \
+  { [[ -f "${gpool}/foo_1.3.0-1_amd64.deb" ]] && echo "  ok: gate builds+packages when newer"; } \
     || { echo "  FAIL: no new deb when upstream newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
   rm -rf "${gtmp}"
 else

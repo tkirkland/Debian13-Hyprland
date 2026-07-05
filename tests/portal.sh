@@ -44,8 +44,8 @@ out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[-1]}"')"
 assert_eq "uwsm" "${out}" "HYPR_BUILD_ORDER still ends with uwsm"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_REPO_URL[${XDPH_COMPONENT}]:-}"')"
-[[ -n "${out}" ]] \
-  && echo "  ok: HYPR_REPO_URL[\${XDPH_COMPONENT}] is set (${out})" \
+{ [[ -n "${out}" ]] \
+  && echo "  ok: HYPR_REPO_URL[\${XDPH_COMPONENT}] is set (${out})"; } \
   || { echo "  FAIL: HYPR_REPO_URL[\${XDPH_COMPONENT}] is empty" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
 
 # --- xdph runtime Depends: conservative, shlibdeps-derived --------------------
