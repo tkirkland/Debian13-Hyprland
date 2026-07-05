@@ -190,6 +190,9 @@ step_cache() {
   # into the pool so the target installs it offline by name. Own reuse guard, so
   # it runs even on the cache_repo_exists resume path.
   cache_populate_chezmoi
+  # brave-browser: same out-of-archive pattern (Brave's apt repo, own reuse
+  # guard); also harvests the archive keyring for the target's sources entry.
+  cache_populate_brave
   cache_index_repo
 }
 
@@ -371,6 +374,13 @@ step_depsim() {
   if compgen -G "${POOL}/${XDPH_COMPONENT}_*.deb" >/dev/null; then
     xdph_sim="${XDPH_COMPONENT}"
   fi
+  # Out-of-archive pooled debs (chezmoi, brave-browser) are installed by name at
+  # install time, so their closures must prove out offline too. Guarded like
+  # xdph so a resumed pre-brave cache doesn't abort on an unknown package name
+  # (chezmoi was never simulated before — pre-existing gap, closed here).
+  local extra_sim=""
+  compgen -G "${POOL}/chezmoi_*.deb" >/dev/null && extra_sim+=" chezmoi"
+  compgen -G "${POOL}/brave-browser_*.deb" >/dev/null && extra_sim+=" brave-browser"
   # Bootstrap the throwaway base DIRECTLY from the offline pool — ZERO network.
   # step_reindex (step 5) already wrote ${CACHE_DIR}/repo/dists/${SUITE}/{Release,
   # main/binary-${ARCH}/Packages}, and the base debs were pooled at step 1, so the
@@ -396,7 +406,7 @@ step_depsim() {
     set -e
     apt-get update -o APT::Get::List-Cleanup=0 >/dev/null
     DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y \
-      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]} ${xdph_sim}
+      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_ORDER[*]} ${xdph_sim} ${extra_sim}
   ")" && rc=0 || rc=$?
   # Unmount + remove the throwaway simroot now. The bind is also trap-tracked;
   # teardown_chroot_binds re-checks mountpoint, so this is not a double-unmount.
@@ -513,6 +523,34 @@ step_stage_fonts() {
   harvest_lythmono_fonts "${dest}"
 }
 
+# 6d) Stage the walker launcher stack (walker + elephant + providers) INSIDE
+#     the offline store so iso-assemble grafts it onto the ISO at
+#     ${CACHE_REPO_DIR}/${WALKER_STORE_SUBDIR}. stage_walker_launcher
+#     (scripts/60-hyprland.sh) installs from there on an OFFLINE install — NO
+#     GitHub fetch. Same lazy-source pattern as step_stage_fonts.
+step_stage_walker() {
+  local dest="${CACHE_DIR}/repo/${WALKER_STORE_SUBDIR}" p=""
+  # Reuse only if the binaries AND every configured provider .so are present —
+  # a store staged before ELEPHANT_PROVIDERS grew must be re-harvested, or the
+  # ISO silently ships without the new providers (dead walker prefixes on the
+  # installed system; hit live 2026-07-04 after websearch/runner/windows).
+  local complete=1
+  [[ -x "${dest}/walker" && -x "${dest}/elephant" ]] || complete=0
+  for p in "${ELEPHANT_PROVIDERS[@]}"; do
+    [[ -f "${dest}/${p}.so" ]] || { complete=0; break; }
+  done
+  if [[ "${complete}" -eq 1 ]]; then
+    info "[build] reusing staged walker launcher stack (${dest})"
+    return 0
+  fi
+  if ! declare -f harvest_walker_launcher >/dev/null 2>&1; then
+    # shellcheck disable=SC1091  # validated repo-relative path
+    source "${REPO_ROOT}/scripts/40-system.sh"
+  fi
+  info "[build] staging walker launcher stack into the offline store (${dest})"
+  harvest_walker_launcher "${dest}"
+}
+
 # restore_build_ownership
 # The build runs as root (sudo), so everything it writes under the workspace and
 # the output ISO is left root-owned — stranding the operator and re-tripping the
@@ -535,6 +573,7 @@ run_heavy_build() {
   step_depsim               # 6
   step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
   step_stage_fonts          # 6c: ship LythMono TTFs inside the offline store
+  step_stage_walker         # 6d: ship walker+elephant inside the offline store
   step_assemble             # 7
   kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
   teardown_chroot_binds     # 9 (also via trap)
@@ -542,16 +581,18 @@ run_heavy_build() {
 }
 
 main() {
-  local confirm=0
+  local confirm=0 clear_cache=0
   while (($#)); do
     case "$1" in
       --confirm) confirm=1 ;;
+      --clear-cache) clear_cache=1 ;;
       -h | --help)
         plan_summary
         printf '\nRun with --confirm to execute the build (root required).\n'
+        printf 'Add --clear-cache to wipe %s first (full re-download/rebuild).\n' "${CACHE_DIR}"
         return 0
         ;;
-      *) fatal "unknown argument: $1 (use --confirm to build, or no args for a dry-run plan)" ;;
+      *) fatal "unknown argument: $1 (use --confirm to build, --clear-cache to wipe the cache first, or no args for a dry-run plan)" ;;
     esac
     shift
   done
@@ -560,6 +601,7 @@ main() {
   # sandbox check, no mutation — this path is what the unit test exercises.
   if ((confirm == 0)); then
     info "DRY-RUN (no --confirm): printing plan, mutating nothing."
+    ((clear_cache)) && info "(--clear-cache noted: ${CACHE_DIR} would be removed first)"
     plan_summary
     return 0
   fi
@@ -572,6 +614,14 @@ main() {
   # escape the buildroot before any mutating step runs.
   assert_stage_under_target "${TARGET}" "${BUILD_STAGE_REL}" \
     || fatal "unsafe BUILD_STAGE_REL (escapes buildroot): ${BUILD_STAGE_REL}"
+
+  # --clear-cache: wipe BEFORE any mounts exist (never rm -rf CACHE_DIR once
+  # the buildroot binds are live — see teardown_chroot_binds). Sandbox assert
+  # above already proved the workspace path is safe.
+  if ((clear_cache)); then
+    info "[build] --clear-cache: removing ${CACHE_DIR}"
+    rm -rf "${CACHE_DIR}"
+  fi
 
   # Mounts must never leak, even on failure; and the root build must not leave
   # root-owned droppings in the operator's workspace/output (which strand the

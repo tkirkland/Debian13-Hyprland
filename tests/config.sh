@@ -22,7 +22,7 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle hyprlauncher swww hyprdim uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle swww hyprdim uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
 
 # hyprdim (external-display gamma brightness daemon, issue #66) builds from
@@ -175,14 +175,14 @@ assert_contains "${out}" "lsb-release" \
 
 source lib/00-config.sh
 assert_eq "amd64" "${ARCH}" "ARCH is amd64"
-[[ -n "${HYPR_DEB_DEPENDS[swww]+x}" ]] && echo "  ok: swww Depends declared" \
+{ [[ -n "${HYPR_DEB_DEPENDS[swww]+x}" ]] && echo "  ok: swww Depends declared"; } \
   || { echo "  FAIL: HYPR_DEB_DEPENDS[swww] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 
 # Source-compiled wayland/xkbcommon own /usr with Debian's soname paths, so they
 # must Provides/Conflicts/Replaces the Debian library packages.
-[[ -n "${HYPR_DEB_PROVIDES[wayland]+x}" ]] && echo "  ok: wayland Provides declared" \
+{ [[ -n "${HYPR_DEB_PROVIDES[wayland]+x}" ]] && echo "  ok: wayland Provides declared"; } \
   || { echo "  FAIL: HYPR_DEB_PROVIDES[wayland] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
-[[ -n "${HYPR_DEB_CONFLICTS[xkbcommon]+x}" ]] && echo "  ok: xkbcommon Conflicts declared" \
+{ [[ -n "${HYPR_DEB_CONFLICTS[xkbcommon]+x}" ]] && echo "  ok: xkbcommon Conflicts declared"; } \
   || { echo "  FAIL: HYPR_DEB_CONFLICTS[xkbcommon] missing" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
 
 # --- NVIDIA driver: both flavors from the NVIDIA CUDA repo (Phase 5) ----------

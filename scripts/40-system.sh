@@ -30,9 +30,42 @@ write_mdadm_conf() {
   } >"${TARGET}/etc/mdadm/mdadm.conf"
 }
 
+# Best-effort autodetection with the config defaults as fallback. Timezone
+# comes from GeoIP (needs network — the offline default install fails the
+# 3s curl fast and keeps the fallback); locale from the live session's LANG.
+# An explicit TIMEZONE=/LOCALE= env override always wins and skips detection
+# entirely (TIMEZONE_EXPLICIT/LOCALE_EXPLICIT, lib/00-config.sh). Candidates
+# are validated against the TARGET's zoneinfo/locale.gen so a garbage GeoIP
+# answer or exotic live LANG can never produce a broken target config.
+autodetect_locale_tz() {
+  local tz="" lang=""
+  if [[ -z "${TIMEZONE_EXPLICIT}" ]]; then
+    tz="$(curl -fsS --max-time 3 https://ipapi.co/timezone 2>/dev/null ||
+      curl -fsS --max-time 3 'http://ip-api.com/line/?fields=timezone' 2>/dev/null ||
+      true)"
+    if [[ "${tz}" == */* && -e "${TARGET}/usr/share/zoneinfo/${tz}" ]]; then
+      TIMEZONE="${tz}"
+      info "Timezone autodetected via GeoIP: ${TIMEZONE}"
+    else
+      info "Timezone autodetect unavailable; using fallback ${TIMEZONE}."
+    fi
+  fi
+  if [[ -z "${LOCALE_EXPLICIT}" ]]; then
+    lang="${LANG:-}"
+    if [[ -n "${lang}" && "${lang}" != C* && "${lang}" != POSIX* ]] &&
+      grep -Eq "^#? *${lang}[[:space:]]" "${TARGET}/etc/locale.gen" 2>/dev/null; then
+      LOCALE="${lang}"
+      info "Locale autodetected from live session LANG: ${LOCALE}"
+    else
+      info "Locale autodetect unavailable; using fallback ${LOCALE}."
+    fi
+  fi
+}
+
 # Requires the locales package (/etc/locale.gen, locale-gen), so this must
 # run after install_base_packages — a minimal debootstrap does not ship it.
 configure_locale_tz() {
+  autodetect_locale_tz
   in_target "
     set -e
     test -f /etc/locale.gen ||
@@ -464,6 +497,36 @@ install_chezmoi() {
   "
 }
 
+# Brave (default browser, SUPER+B): installs by NAME from the on-ISO store like
+# chezmoi (deb + keyring harvested at build by cache_populate_brave), then
+# stages Brave's archive keyring and a deb822 sources entry so the INSTALLED
+# system tracks Brave's apt repo for updates — the pooled deb only seeds the
+# first install. Keyring missing from the store = non-fatal warn (older ISO):
+# the browser still installs; only self-updating is lost until wired by hand.
+install_brave() {
+  info "Installing brave-browser from the offline store..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y brave-browser
+  "
+  local keyring_src="${CACHE_REPO_DIR}/${BRAVE_KEYRING_NAME}"
+  if [[ ! -f "${keyring_src}" ]]; then
+    warn "Brave archive keyring absent from the offline store (${keyring_src});"
+    warn "brave-browser installed but will NOT receive updates until its apt repo is added."
+    return 0
+  fi
+  install -m644 "${keyring_src}" "${TARGET}/usr/share/keyrings/${BRAVE_KEYRING_NAME}"
+  cat >"${TARGET}/etc/apt/sources.list.d/brave-browser-release.sources" <<EOF
+Types: deb
+URIs: ${BRAVE_APT_BASE_URL}
+Suites: stable
+Components: main
+Architectures: amd64 arm64
+Signed-By: /usr/share/keyrings/${BRAVE_KEYRING_NAME}
+EOF
+}
+
 # Build-time harvester (the build host is online): download every LythMono
 # variant zip and EXTRACT its TTFs into DEST, so the ISO ships the fonts in the
 # offline store (DEST = ${CACHE_DIR}/repo/${LYTHMONO_STORE_SUBDIR}, grafted to
@@ -484,6 +547,44 @@ harvest_lythmono_fonts() {
       "${LYTHMONO_REPO_URL}/releases/download/${tag}/${v}.zip" ||
       { rm -rf "${tmp}"; fatal "Failed to harvest LythMono variant ${v} (${tag})."; }
     unzip -o -j -q "${tmp}/${v}.zip" '*.ttf' -d "${dest}"
+  done
+  rm -rf "${tmp}"
+}
+
+# Build-time harvester for the walker launcher stack (the build host is
+# online): download the walker prebuilt release binary plus the elephant
+# backend and its provider plugins into DEST, so the ISO ships them in the
+# offline store (DEST = ${CACHE_DIR}/repo/${WALKER_STORE_SUBDIR}, grafted to
+# ${CACHE_REPO_DIR}/${WALKER_STORE_SUBDIR} on the ISO). stage_walker_launcher
+# (60-hyprland.sh) installs them from there at install time — NO network.
+# WALKER_VERSION/ELEPHANT_VERSION pin the releases; empty resolves the latest
+# tag (build-time only). Pairs with build-iso's step_stage_walker.
+harvest_walker_launcher() {
+  local dest="${1:?dest dir}" wtag="${WALKER_VERSION:-}" etag="${ELEPHANT_VERSION:-}"
+  local tmp="" p=""
+  [[ -n "${wtag}" ]] || wtag="$(resolve_latest_release_tag "${WALKER_REPO_URL}")"
+  [[ -n "${etag}" ]] || etag="$(resolve_latest_release_tag "${ELEPHANT_REPO_URL}")"
+  info "Harvesting walker ${wtag} + elephant ${etag} into ${dest}..."
+  install -d "${dest}"
+  tmp="$(mktemp -d)"
+  curl -fsSL --retry 3 -o "${tmp}/walker.tgz" \
+    "${WALKER_REPO_URL}/releases/download/${wtag}/walker-${wtag}-x86_64-unknown-linux-gnu.tar.gz" ||
+    { rm -rf "${tmp}"; fatal "Failed to harvest walker ${wtag}."; }
+  tar -xzf "${tmp}/walker.tgz" -C "${dest}" walker ||
+    { rm -rf "${tmp}"; fatal "walker ${wtag} tarball lacks the walker binary."; }
+  curl -fsSL --retry 3 -o "${tmp}/elephant.tgz" \
+    "${ELEPHANT_REPO_URL}/releases/download/${etag}/elephant-linux-amd64.tar.gz" ||
+    { rm -rf "${tmp}"; fatal "Failed to harvest elephant ${etag}."; }
+  { tar -xzf "${tmp}/elephant.tgz" -C "${tmp}" &&
+    install -m755 "${tmp}/elephant-linux-amd64" "${dest}/elephant"; } ||
+    { rm -rf "${tmp}"; fatal "elephant ${etag} tarball lacks the daemon binary."; }
+  for p in "${ELEPHANT_PROVIDERS[@]}"; do
+    curl -fsSL --retry 3 -o "${tmp}/${p}.tgz" \
+      "${ELEPHANT_REPO_URL}/releases/download/${etag}/${p}-linux-amd64.tar.gz" ||
+      { rm -rf "${tmp}"; fatal "Failed to harvest elephant provider ${p} (${etag})."; }
+    { tar -xzf "${tmp}/${p}.tgz" -C "${tmp}" &&
+      install -m644 "${tmp}/${p}-linux-amd64.so" "${dest}/${p}.so"; } ||
+      { rm -rf "${tmp}"; fatal "elephant provider ${p} tarball lacks its plugin."; }
   done
   rm -rf "${tmp}"
 }
@@ -658,6 +759,7 @@ phase_system() {
   install_nvidia_driver
   install_addon_artifacts
   install_chezmoi
+  install_brave
   install_lythmono_fonts
   configure_locale_tz
   configure_time_sync

@@ -87,6 +87,11 @@ TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
+# Explicitness markers BEFORE the defaults land: configure_locale_tz only
+# autodetects when the operator did NOT set these (an explicit env value
+# always wins over detection; the literals below are the last-resort fallback).
+TIMEZONE_EXPLICIT="${TIMEZONE:+1}"
+LOCALE_EXPLICIT="${LOCALE:+1}"
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
 # Hardware clock (RTC) interpretation. No default: the user must choose, via
@@ -286,7 +291,6 @@ HYPR_BUILD_ORDER=(
   hyprland-guiutils
   hyprlock
   hypridle
-  hyprlauncher
   swww
   hyprdim
   uwsm
@@ -316,8 +320,6 @@ declare -A HYPR_REPO_URL=(
   # hyprlock (screen lock, PAM) + hypridle (idle manager) — issues #71/#72.
   ["hyprlock"]="${HYPR_GIT_BASE}/hyprlock"
   ["hypridle"]="${HYPR_GIT_BASE}/hypridle"
-  # hyprlauncher: the hyprtoolkit-based application launcher (default SUPER+R).
-  ["hyprlauncher"]="${HYPR_GIT_BASE}/hyprlauncher"
   # swww: animated wallpaper daemon (cargo build via build_custom_swww).
   ["swww"]="https://github.com/LGFae/swww"
   # hyprdim: per-display gamma brightness daemon for external outputs
@@ -379,12 +381,22 @@ declare -A HYPR_TAG_PATTERN=(
 declare -A HYPR_MESON_ARGS=(
   ["wayland"]="-Ddocumentation=false -Dtests=false"
   ["xkbcommon"]="-Denable-docs=false"
+  # uwsm's client scripts are default-DISABLED meson features; elephant hard-
+  # depends on uwsm-app for every app launch (silent dead launcher without it —
+  # see docs/2026-07-04-build-completeness-audit.md, finding 1).
+  ["uwsm"]="-Duwsm-app=enabled -Duuctl=enabled"
 )
-# Extra CMake options per cmake-built component (consumed by build_one). Empty
-# by default: xdph's Qt6 share-picker builds automatically when Qt6 is present
-# (no enable flag), so no xdph entry is needed unless a mandatory-off default is
-# ever found in the staged CMakeLists — then add ["xdg-desktop-portal-hyprland"]=...
-declare -gA HYPR_CMAKE_ARGS=()
+# Extra CMake options per cmake-built component (consumed by build_one).
+# xdph: SYSTEMD_SERVICES is the mandatory-off default this comment used to
+# warn about. Default-OFF upstream, it omits the systemd user unit — but the
+# unconditionally-installed D-Bus service file declares SystemdService=, and on
+# a systemd user bus that activation path has NO Exec fallback. Without the
+# unit, xdph never activates and the broker silently falls back to wlr (the
+# share-picker never appears, no error anywhere). See
+# docs/2026-07-04-build-completeness-audit.md finding 2 and #57.
+declare -gA HYPR_CMAKE_ARGS=(
+  ["xdg-desktop-portal-hyprland"]="-DSYSTEMD_SERVICES=ON"
+)
 
 # Compiler for the source-built stack. Trixie's default GCC 14 libstdc++
 # lacks C++23 container-ranges members (std::vector::append_range) that
@@ -571,6 +583,17 @@ ZFS_TAG_PATTERN='^zfs-[0-9]+\.[0-9]+\.[0-9]+$'
 # latest release tag at BUILD time only (the build host is online).
 CHEZMOI_REPO_URL="${CHEZMOI_REPO_URL:-https://github.com/twpayne/chezmoi}"
 CHEZMOI_VERSION="${CHEZMOI_VERSION:-}"
+# Brave (the distro's default browser; SUPER+B in the installer keybinds) is not
+# in Debian; same offline pattern as chezmoi: the latest .deb is HARVESTED from
+# Brave's apt repo into the pool at BUILD time (cache_populate_brave) together
+# with the archive keyring, apt-installed by name OFFLINE at install time
+# (install_brave), which also stages the keyring + a deb822 .sources entry so
+# INSTALLED systems track Brave's repo for updates. step_runtime_closure pools
+# the deb's dependency closure like any other pooled deb. BRAVE_VERSION pins the
+# harvested release; empty harvests the repo's current stable at BUILD time.
+BRAVE_APT_BASE_URL="${BRAVE_APT_BASE_URL:-https://brave-browser-apt-release.s3.brave.com}"
+BRAVE_KEYRING_NAME="brave-browser-archive-keyring.gpg"
+BRAVE_VERSION="${BRAVE_VERSION:-}"
 # LythMono font: GitHub-only (one zip of TTFs per variant). The TTFs are
 # HARVESTED at BUILD time (harvest_lythmono_fonts) and EXTRACTED into the offline
 # store under LYTHMONO_STORE_SUBDIR, which iso-assemble grafts onto the ISO at
@@ -592,6 +615,32 @@ LYTHMONO_VARIANTS=(
   LythMonoTermRound LythMonoTermRoundNerdFont
   LythMonoTermSquare LythMonoTermSquareNerdFont
 )
+# walker launcher (replaces the hyprtoolkit hyprlauncher: no pointer input and
+# an exclusive keyboard grab, plus hyprtoolkit's GL-only renderer segfaults on
+# GBM-less virtual GPUs — hyprwm/aquamarine#110 class). walker + its elephant
+# backend and providers are GitHub-only PREBUILT release binaries, HARVESTED
+# into the offline store at BUILD time (harvest_walker_launcher) under
+# WALKER_STORE_SUBDIR and installed from there OFFLINE (stage_walker_launcher,
+# 60-hyprland.sh) — never fetched at install time. Versions pin the releases
+# deterministically; empty resolves the latest tag at BUILD time only.
+WALKER_REPO_URL="${WALKER_REPO_URL:-https://github.com/abenz1267/walker}"
+WALKER_VERSION="${WALKER_VERSION:-}"
+ELEPHANT_REPO_URL="${ELEPHANT_REPO_URL:-https://github.com/abenz1267/elephant}"
+ELEPHANT_VERSION="${ELEPHANT_VERSION:-}"
+WALKER_STORE_SUBDIR="${WALKER_STORE_SUBDIR:-walker}"
+# Elephant data providers shipped (the .so set proven on the reference machine).
+# websearch/runner/windows are bound in walker's embedded defaults (@ > $) —
+# omitting them leaves dead prefixes (audit findings 6 + risk item).
+ELEPHANT_PROVIDERS=(
+  desktopapplications calc clipboard files symbols providerlist menus
+  websearch runner windows
+)
+# walker runtime deps (prebuilt binary links against these; everything else in
+# its closure is already pooled via the base set's GTK/Poppler dependents).
+# qalc + imagemagick: elephant's calc and clipboard providers probe for them at
+# startup and silently self-disable when absent (audit findings 4/5).
+WALKER_RUNTIME_PACKAGES=(libgtk4-layer-shell0 libpoppler-glib8 qalc imagemagick)
+
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
@@ -697,6 +746,7 @@ TARGET_BASE_PACKAGES=(
   "${PORTAL_PACKAGES[@]}"
   "${POLKIT_PACKAGES[@]}"
   "${FILEMANAGER_PACKAGES[@]}"
+  "${WALKER_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 

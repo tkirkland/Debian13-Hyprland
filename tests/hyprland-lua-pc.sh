@@ -5,8 +5,9 @@
 # unsandboxed host path under /var.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=tests/test-helpers.sh
 source "${HERE}/test-helpers.sh"
-cd "${HERE}/.."
+cd "${HERE}/.." || exit 1
 
 ws="$(mktemp -d)"
 trap 'rm -rf "${ws}"' EXIT
