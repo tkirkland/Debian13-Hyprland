@@ -103,6 +103,24 @@ phase_verify() {
     "${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal/hyprland-portals.conf"
   vcheck "dark-mode gschema override staged" test -f \
     "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  # Dark theming defaults (#51/#76): packages, gschema keys, theme dirs, uwsm env.
+  vcheck "theming packages installed (gnome-themes-extra/qt6-gtk-platformtheme/papirus/adwaita)" \
+    in_target "dpkg -s gnome-themes-extra && dpkg -s qt6-gtk-platformtheme &&
+      dpkg -s papirus-icon-theme && dpkg -s adwaita-icon-theme"
+  vcheck "gschema override selects adw-gtk3-dark GTK theme" \
+    grep -q "gtk-theme='adw-gtk3-dark'" \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "gschema override selects Papirus-Dark icons" \
+    grep -q "icon-theme='Papirus-Dark'" \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "gschema override pins the Adwaita cursor" \
+    grep -q "cursor-theme='Adwaita'" \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "adw-gtk3-dark theme installed" test -d \
+    "${TARGET}/usr/share/themes/adw-gtk3-dark"
+  vcheck "uwsm env routes Qt through the gtk3 platform theme" \
+    grep -q "QT_QPA_PLATFORMTHEME" \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env"
   vcheck "lxpolkit installed" in_target "command -v lxpolkit"
   vcheck "lxpolkit autostart present" test -f \
     "${TARGET}/etc/xdg/autostart/lxpolkit.desktop"
