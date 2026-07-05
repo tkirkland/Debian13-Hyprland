@@ -232,4 +232,55 @@ else
   echo "  ok: no -f on an absent pool"
 fi
 
+# --- standalone-run teardown: export the pool, keep the service guard ---------
+# teardown_target_tree runs after every successful standalone --phase run; it
+# must export the pool (or the installed system's next boot dies in the
+# initramfs on a hostid mismatch) but must NOT remove policy-rc.d (only the
+# real cleanup phase hands the disk over).
+run_teardown() { # $1 = function to call
+  bash -c '
+    set -euo pipefail
+    calls="'"${tmp}"'/td-calls"
+    : >"${calls}"
+    info() { :; }
+    warn() { :; }
+    teardown_target_iso_repo() { echo "iso_repo_teardown" >>"${calls}"; }
+    kill_target_processes() { :; }
+    teardown_chroot_binds() { :; }
+    release_target_propagation() { echo "release_bind" >>"${calls}"; }
+    report_disk_holders() { :; }
+    mountpoint() { return 0; }
+    umount() { :; }
+    rm() { echo "rm $*" >>"${calls}"; }
+    zfs() { :; }
+    zpool() {
+      [[ "$1" == export ]] && echo "zpool export $2" >>"${calls}"
+      return 0
+    }
+    source scripts/99-cleanup.sh
+    TARGET=/target
+    ESP_MOUNT=/boot/efi
+    POOL_NAME=TESTPOOL
+    DISK1=/dev/null DISK2=/dev/null DISK3=/dev/null
+    '"$1"'
+    cat "${calls}"
+  ' 2>&1
+}
+
+echo "test: standalone teardown exports the pool but keeps the service guard"
+td1="$(run_teardown teardown_target_tree)"
+assert_contains "${td1}" "zpool export TESTPOOL" "teardown exports the pool"
+assert_contains "${td1}" "iso_repo_teardown" "teardown unwires the iso repo"
+assert_contains "${td1}" "release_bind" "teardown releases the self-bind"
+if printf '%s\n' "${td1}" | grep -q "policy-rc.d"; then
+  echo "  FAIL: teardown_target_tree removed the service guard" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: service guard untouched by the standalone teardown"
+fi
+
+td2="$(run_teardown phase_cleanup)"
+assert_contains "${td2}" "policy-rc.d" "phase_cleanup removes the service guard"
+assert_contains "${td2}" "zpool export TESTPOOL" "phase_cleanup still exports the pool"
+
 finish_test

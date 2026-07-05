@@ -94,10 +94,12 @@ rc=0
 "${prcd}" || rc=$?
 assert_eq "101" "${rc}" "policy-rc.d forbids service starts (exit 101)"
 
+# phase_cleanup delegates the tree/pool teardown to teardown_target_tree
+# (shared with the standalone --phase success path), so inspect both bodies.
 cleanup_body="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh
   source scripts/99-cleanup.sh
-  declare -f phase_cleanup')"
+  declare -f phase_cleanup teardown_target_tree')"
 assert_contains "${cleanup_body}" "policy-rc.d" \
   "cleanup removes the chroot service guard"
 assert_contains "${cleanup_body}" \

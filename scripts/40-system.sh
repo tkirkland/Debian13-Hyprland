@@ -796,6 +796,11 @@ EOF
 }
 
 phase_system() {
+  # Standalone offline --phase=system runs arrive with no store wired into
+  # the target (bootstrap's wiring is torn down at the end of every
+  # standalone run); mount-gated no-op on full runs. Same pairing as
+  # install_grub/install_sdboot.
+  wire_offline_repo
   write_identity
   write_fstab
   write_mdadm_conf
@@ -816,4 +821,5 @@ phase_system() {
   configure_audio_quirks
   configure_ddcci
   configure_zfs_boot_support
+  unwire_offline_repo
 }

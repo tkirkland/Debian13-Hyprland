@@ -159,6 +159,18 @@ main() {
     activity_start "Phase: ${RUN_PHASE}"
     "phase_${RUN_PHASE//-/_}"
     activity_success
+    # A standalone run must hand the disks back bootable: a pool left
+    # imported stays stamped with the live env's hostid and the installed
+    # system's next boot drops to the initramfs shell (issue #50). Same
+    # teardown as the cleanup phase minus the service guard (mid-install
+    # resumes still need it); a later phase re-imports via
+    # ensure_target_ready.
+    case "${RUN_PHASE}" in
+      storage | bootstrap | system | boot | hyprland | verify)
+        info "Releasing the target (unmount + pool export)..."
+        teardown_target_tree
+        ;;
+    esac
     return 0
   fi
 
