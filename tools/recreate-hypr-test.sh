@@ -25,6 +25,28 @@ OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd
 OVMF_VARS_TEMPLATE=/usr/share/OVMF/OVMF_VARS_4M.fd
 NVRAM=$POOL/hypr-test_VARS.fd
 
+# Quick media toggle — no recreate. --eject pulls the ISO out of the DVD so a
+# reboot lands on the installed disk instead of relaunching the installer;
+# --insert seats it back for the next install run.
+case "${1:-}" in
+  --eject | --insert)
+    flags=(--config)
+    [ "$(sudo virsh -c "$URI" domstate "$VM" 2>/dev/null)" = "running" ] && flags+=(--live)
+    if [ "$1" = "--eject" ]; then
+      sudo virsh -c "$URI" change-media "$VM" sda --eject "${flags[@]}"
+    else
+      [ -f "$ISO" ] || { echo "ISO not found: $ISO"; exit 1; }
+      sudo virsh -c "$URI" change-media "$VM" sda "$ISO" --insert "${flags[@]}"
+    fi
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "usage: ${0##*/} [--eject|--insert]  (no args = full recreate)"
+    exit 1
+    ;;
+esac
+
 echo ">> Recreating '$VM': wiping 3 disks, rebuilding blank, booting from ISO."
 
 # 1. Force the VM off if it's running (ignore error if already stopped).
