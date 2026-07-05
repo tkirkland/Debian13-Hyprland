@@ -726,6 +726,7 @@ phase_system() {
   install_nvidia_driver
   install_addon_artifacts
   install_chezmoi
+  install_brave
   install_lythmono_fonts
   configure_locale_tz
   configure_time_sync
