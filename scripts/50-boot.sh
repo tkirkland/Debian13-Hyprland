@@ -81,23 +81,56 @@ esp_partuuid_regex() {
   printf '%s' "${re}"
 }
 
+# NVRAM label per loader — the single source for entry creation, retirement,
+# and BootOrder enforcement. "debian" and "Linux Boot Manager" deliberately
+# match the stock GRUB/systemd-boot labels; the ESP filter in
+# nvram_nums_for_label keeps a foreign OS's same-label entries safe.
+declare -A LOADER_LABELS=(
+  [zbm]="ZFSBootMenu"
+  [grub]="debian"
+  [systemd-boot]="Linux Boot Manager"
+)
+
+# PARTUUIDs of every partition currently present on the machine, as a
+# lowercase ERE alternation. Empty when blkid cannot enumerate them.
+all_partuuid_regex() {
+  blkid -s PARTUUID -o value 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' | paste -sd'|'
+}
+
 # Print the Boot numbers whose label matches $1 exactly AND whose device path
 # is on this install's ESP, one per line. Exact-label match: the label is
 # everything between "BootXXXX* " and the tab-separated device path. The ESP
 # filter keeps a co-installed foreign OS's entry (stock GRUB is also labeled
 # "debian", stock systemd-boot "Linux Boot Manager") off another disk safe.
-nvram_nums_for_label() { # $1=exact label
-  local uuids=""
+# When the ESP PARTUUIDs cannot be read, FAIL CLOSED: matching by label alone
+# would hand a foreign OS's entry to the delete paths.
+# $2=1 additionally matches DANGLING entries — same label but a GPT PARTUUID
+# that no longer exists on any disk (our own entry from before a repartition;
+# label-scoped, so only labels we manage are ever considered). Delete paths
+# want these gone; BootOrder must never be rebuilt around them.
+nvram_nums_for_label() { # $1=exact label  [$2=1: include dangling entries]
+  local uuids="" all="" dangling="${2:-0}"
   uuids="$(esp_partuuid_regex)"
   if [[ -z "${uuids}" ]]; then
-    warn "Cannot identify the ESP partitions; matching NVRAM entries by label only."
-    uuids="."
+    warn "Cannot identify the ESP partitions; leaving NVRAM entries for '$1' alone."
+    return 0
   fi
-  efibootmgr | awk -F'\t' -v lbl="$1" -v uuids="${uuids}" '
-    $1 ~ /^Boot[0-9A-F]{4}[* ] / && tolower($2) ~ uuids {
+  ((dangling)) && all="$(all_partuuid_regex)"
+  # No partition listing -> cannot prove anything dangling; fail closed.
+  [[ -z "${all}" ]] && dangling=0
+  efibootmgr | awk -F'\t' -v lbl="$1" -v uuids="${uuids}" \
+    -v all="${all}" -v dangling="${dangling}" '
+    $1 ~ /^Boot[0-9A-F]{4}[* ] / {
       entry = $1; num = substr(entry, 5, 4)
       sub(/^Boot[0-9A-F]{4}[* ] /, "", entry)
-      if (entry == lbl) print num
+      if (entry != lbl) next
+      dev = tolower($2)
+      if (dev ~ uuids) { print num; next }
+      if (dangling && match(dev, /gpt,[0-9a-f-]+/)) {
+        pu = substr(dev, RSTART + 4, RLENGTH - 4)
+        if (index("|" all "|", "|" pu "|") == 0) print num
+      }
     }'
 }
 
@@ -106,7 +139,7 @@ delete_nvram_entries() { # $1=exact label
   while read -r bootnum; do
     efibootmgr -b "${bootnum}" -B >/dev/null ||
       warn "Could not delete stale NVRAM entry Boot${bootnum} ($1)"
-  done < <(nvram_nums_for_label "$1")
+  done < <(nvram_nums_for_label "$1" 1)
 }
 
 create_nvram_entry() { # $1=label $2=loader-path (backslash form)
@@ -246,7 +279,7 @@ install_zbm() {
     "${ROOT_DATASET}"
   install_shim zbm
   sign_loader "${ESP_MOUNT}/EFI/zbm/zfsbootmenu.efi" zbm
-  create_nvram_entry "ZFSBootMenu" '\EFI\zbm\shimx64.efi'
+  create_nvram_entry "${LOADER_LABELS[zbm]}" '\EFI\zbm\shimx64.efi'
 }
 
 # --- Offline package wiring ----------------------------------------------------
@@ -374,7 +407,7 @@ install_grub() {
   write_esp_sync_hook
   run_esp_sync
   write_grub_cfg
-  create_nvram_entry "debian" '\EFI\debian\shimx64.efi'
+  create_nvram_entry "${LOADER_LABELS[grub]}" '\EFI\debian\shimx64.efi'
 }
 
 # --- systemd-boot --------------------------------------------------------------
@@ -427,7 +460,7 @@ install_sdboot() {
   sign_loader "${sd_src}" systemd
   # --no-variables skips bootctl's NVRAM write (unreliable on a RAID1 ESP);
   # create the entry ourselves on both member disks.
-  create_nvram_entry "Linux Boot Manager" '\EFI\systemd\shimx64.efi'
+  create_nvram_entry "${LOADER_LABELS[systemd-boot]}" '\EFI\systemd\shimx64.efi'
 }
 
 # After a bootloader switch (--phase=boot with a different --bootloader) the
@@ -437,7 +470,7 @@ install_sdboot() {
 # they are the recovery path if the new loader fails to boot.
 retire_other_loaders() { # $1=label of the just-installed loader
   local label=""
-  for label in "ZFSBootMenu" "debian" "Linux Boot Manager"; do
+  for label in "${LOADER_LABELS[@]}"; do
     [[ "${label}" == "$1" ]] || delete_nvram_entries "${label}"
   done
 }
@@ -470,20 +503,12 @@ phase_boot() {
   local label=""
   detect_kernel
   case "${BOOTLOADER}" in
-    zbm)
-      install_zbm
-      label="ZFSBootMenu"
-      ;;
-    grub)
-      install_grub
-      label="debian"
-      ;;
-    systemd-boot)
-      install_sdboot
-      label="Linux Boot Manager"
-      ;;
+    zbm) install_zbm ;;
+    grub) install_grub ;;
+    systemd-boot) install_sdboot ;;
     *) fatal "BOOTLOADER not set (preflight should have ensured this)." ;;
   esac
+  label="${LOADER_LABELS[${BOOTLOADER}]}"
   retire_other_loaders "${label}"
   ensure_boot_order_head "${label}"
   stage_mok_enrollment

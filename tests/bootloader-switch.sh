@@ -161,6 +161,47 @@ else
   echo "  ok: retire keeps the foreign debian entry (other disk)"
 fi
 
+# Unreadable ESP (blkid returns nothing): the label-only fallback would
+# delete a foreign OS's identically-labeled entry, so deletion must fail
+# CLOSED — no entry is touched.
+run_efi 'esp_partuuid_regex() { printf ""; }
+retire_other_loaders debian'
+if grep -q -- " -B" "${FAKE_LOG}"; then
+  echo "  FAIL: unreadable ESP must not delete any NVRAM entry" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: unreadable ESP deletes nothing (fail closed)"
+fi
+
+# Re-install after a repartition: the ESP PARTUUID changed (now "cc"), so the
+# previous run's "debian" entry (on "aa", which no longer exists anywhere) is
+# DANGLING and must still be deleted — while the foreign OS's live entry on
+# "bb" survives.
+run_efi 'esp_partuuid_regex() { printf "cc"; }
+all_partuuid_regex() { printf "cc|bb"; }
+delete_nvram_entries debian'
+out="$(cat "${FAKE_LOG}")"
+assert_contains "${out}" "efibootmgr -b 0002 -B" \
+  "dangling: deletes our stale entry from before the repartition"
+if [[ "${out}" == *"-b 0005 -B"* ]]; then
+  echo "  FAIL: dangling cleanup must not delete a live foreign entry" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: dangling cleanup keeps the live foreign entry"
+fi
+
+# BootOrder must never be rebuilt around a dangling entry: with no live entry
+# of ours, ensure_boot_order_head warns and leaves BootOrder alone.
+run_efi 'esp_partuuid_regex() { printf "cc"; }
+all_partuuid_regex() { printf "cc|bb"; }
+ensure_boot_order_head debian'
+if grep -q -- " -o " "${FAKE_LOG}"; then
+  echo "  FAIL: BootOrder must not be rewritten around dangling entries" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: boot order untouched when our only entries are dangling"
+fi
+
 # BootOrder heads with ZBM (0001) after a switch to grub (0002): the new
 # loader's entries must be moved to the front, the rest kept in order.
 run_efi 'ensure_boot_order_head debian'
