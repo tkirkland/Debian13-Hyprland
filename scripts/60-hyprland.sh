@@ -1855,7 +1855,13 @@ phase_hyprland() {
   # not stage — so it is skipped here. configure_session still runs (it writes the
   # user config, reading the example from the just-installed hyprland deb).
   if ((NETWORK_AVAILABLE == 0)); then
+    # Standalone offline --phase=hyprland arrives with no store wired into
+    # the target (bootstrap's wiring is torn down at the end of every
+    # standalone run); mount-gated no-op on full runs. Same pairing as
+    # phase_system/install_grub/install_sdboot.
+    wire_offline_repo
     install_prebuilt_stack
+    unwire_offline_repo
     configure_session
     return 0
   fi

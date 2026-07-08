@@ -29,14 +29,21 @@ ISO_TEMP_SOURCE_REL="etc/apt/sources.list.d/hypr-iso-temp.sources"
 # and they nest correctly.
 #
 # Because the self-bind makes ${TARGET} a mountpoint before any ZFS mount, the
-# dataset-mount guards below test FSTYPE==zfs (is the ROOT dataset mounted?),
-# NOT bare `mountpoint -q` (which the self-bind would satisfy spuriously and so
-# wrongly skip the dataset mount). release_target_propagation removes the
-# self-bind at cleanup and on the failure path.
+# dataset-mount guards below ask ZFS itself whether the ROOT dataset is
+# mounted, NOT bare `mountpoint -q` (which the self-bind would satisfy
+# spuriously) and NOT findmnt FSTYPE (with the self-bind under the dataset,
+# findmnt returns BOTH stacked mounts — multi-line — so the ==zfs test failed
+# on every second maintenance run in one live session, issue #50).
+# release_target_propagation removes the self-bind at cleanup and on the
+# failure path.
+root_dataset_mounted() {
+  [[ "$(zfs get -H -o value mounted "${ROOT_DATASET}" 2>/dev/null)" == yes ]]
+}
+
 isolate_target_propagation() {
   # Root dataset already mounted -> isolation happened on its original mount; a
   # late make-private cannot retract copies, so this is correctly a no-op.
-  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  root_dataset_mounted && return 0
   # ${TARGET} must exist before the self-bind: ensure_target_ready imports the
   # pool with -N (no mount) and never mkdir's it (the dataset mount used to
   # create it), so create it here to be self-sufficient regardless of caller.
@@ -51,7 +58,7 @@ isolate_target_propagation() {
 # zfs-unmounted and the pool exported. No-op unless only the bare self-bind
 # remains: it never unmounts a live ZFS ${TARGET}.
 release_target_propagation() {
-  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  root_dataset_mounted && return 0
   mountpoint -q "${TARGET}" 2>/dev/null || return 0
   umount "${TARGET}" 2>/dev/null || umount -l "${TARGET}" 2>/dev/null ||
     warn "Could not remove ${TARGET} propagation self-bind."
@@ -72,7 +79,7 @@ mount_target_tree() {
   # run under set -e), so every mount is guarded. zfs mount -a is
   # natively idempotent. Isolate propagation BEFORE the root dataset mounts.
   isolate_target_propagation
-  if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then
+  if ! root_dataset_mounted; then
     zfs mount "${ROOT_DATASET}"
   fi
   zfs mount -a
@@ -90,10 +97,22 @@ ensure_target_ready() {
   if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
     # -N: never automount on import — canmount=on children mounting before
     # the noauto root dataset would be shadowed by the root overlay-mount.
-    zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null || return 0
+    if ! zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null; then
+      # Pool nowhere to be found -> fresh install before storage; a no-op.
+      zpool import 2>/dev/null | grep -qE "^\s*pool: ${POOL_NAME}\$" || return 0
+      # The pool exists but refused a plain import. Routine on maintenance
+      # runs (issue #50): a root pool is never exported at shutdown, so once
+      # the installed system has booted, the live env's hostid no longer
+      # matches and import demands -f. The disks are this machine's own
+      # (preflight validated them), so force it; failing silently here used
+      # to surface as a misleading "No kernel found in ${TARGET}/boot".
+      info "Pool ${POOL_NAME} was last active on another hostid; importing with -f."
+      zpool import -f -N -R "${TARGET}" "${POOL_NAME}" ||
+        fatal "Pool ${POOL_NAME} exists but cannot be imported (see error above)."
+    fi
   fi
   isolate_target_propagation
-  if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then
+  if ! root_dataset_mounted; then
     zfs mount "${ROOT_DATASET}"
     zfs mount -a
   fi
