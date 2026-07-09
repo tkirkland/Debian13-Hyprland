@@ -53,6 +53,14 @@ validate_identity_settings() {
     fatal "Invalid LOCALE '${LOCALE}'."
   [[ "${TARGET_HOSTNAME}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ||
     fatal "Invalid TARGET_HOSTNAME '${TARGET_HOSTNAME}'."
+  [[ "${XKB_LAYOUT}" =~ ^[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*$ ]] ||
+    fatal "Invalid XKB_LAYOUT '${XKB_LAYOUT}'."
+  [[ "${XKB_VARIANT}" =~ ^[A-Za-z0-9_,:-]*$ ]] ||
+    fatal "Invalid XKB_VARIANT '${XKB_VARIANT}'."
+  [[ "${XKB_MODEL}" =~ ^[a-zA-Z0-9_-]+$ ]] ||
+    fatal "Invalid XKB_MODEL '${XKB_MODEL}'."
+  [[ "${XKB_OPTIONS}" =~ ^[A-Za-z0-9_:,-]*$ ]] ||
+    fatal "Invalid XKB_OPTIONS '${XKB_OPTIONS}'."
 }
 
 detect_virt() {

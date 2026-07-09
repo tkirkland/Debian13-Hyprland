@@ -146,6 +146,27 @@ phase_verify() {
   vcheck "user hyprland.lua exists" \
     test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.lua"
 
+  # Keyboard layout (console + greeter + Hyprland). Dynamic read-back like
+  # greeter_bin above, so standalone --phase=verify runs check the target's
+  # actual configuration, not this shell's re-sourced default.
+  vcheck "keyboard config written" \
+    grep -q '^XKBLAYOUT="[a-z]' "${TARGET}/etc/default/keyboard"
+  vcheck "keyboard-configuration installed" \
+    in_target "dpkg -s keyboard-configuration >/dev/null"
+  kb="$(sed -n 's/^XKBLAYOUT="\?\([^"]*\)"\?$/\1/p' \
+    "${TARGET}/etc/default/keyboard" 2>/dev/null || true)"
+  vcheck "greeter XKB env staged (${kb:-none})" \
+    grep -q "^XKB_DEFAULT_LAYOUT=${kb}$" "${TARGET}/etc/environment"
+  # Only when a module carries kb_layout at all: a kb_layout-less upstream
+  # example is legal (libxkbcommon falls back to the XKB_DEFAULT_* env), so
+  # its absence must not fail a plain-us install.
+  if grep -rqE 'kb_layout[[:space:]]*=' \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/hypr" 2>/dev/null; then
+    vcheck "hyprland kb_layout matches console (${kb:-none})" \
+      grep -rq "kb_layout.*\"${kb}\"" \
+      "${TARGET}/home/${TARGET_USERNAME}/.config/hypr"
+  fi
+
   # NVIDIA (issue #4): only when a GPU was detected and a driver chosen.
   # Both flavors install offline from /hypr-repo now (Phase 5), so this is
   # checked regardless of network. nvidia-driver (the shared userspace) is
