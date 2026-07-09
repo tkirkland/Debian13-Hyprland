@@ -47,7 +47,23 @@ local mainMod = "SUPER"
 ------------------
 hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))
 hl.bind(mainMod .. " + C", hl.dsp.window.close())
+
+---------------
+---- INPUT ----
+---------------
+hl.input({
+    kb_layout = "us",
+    kb_variant = "",
+    kb_options = "",
+})
 EOF
+
+# Keyboard layout: the generated config must carry the layout the system
+# phase wrote to the target's /etc/default/keyboard (pins the upstream
+# kb_layout assignment format the installer's sed patch targets).
+mkdir -p "${TARGET}/etc/default"
+printf 'XKBMODEL="pc105"\nXKBLAYOUT="de"\nXKBVARIANT="nodeadkeys"\nXKBOPTIONS=""\n' \
+  >"${TARGET}/etc/default/keyboard"
 
 configure_session
 
@@ -162,6 +178,39 @@ if [[ -e "${legacy_config}" ]]; then
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
   echo "  ok: legacy hyprland.conf is not generated"
+fi
+
+# Keyboard layout: the input module's kb_layout/kb_variant assignments are
+# repointed at the target's /etc/default/keyboard values, and the greeter
+# reads XKB_DEFAULT_* from /etc/environment via pam_env (a non-us user must
+# be able to type their password at tuigreet).
+if [[ -f "${hypr_dir}/input.lua" ]]; then
+  input_txt="$(<"${hypr_dir}/input.lua")"
+  assert_contains "${input_txt}" 'kb_layout = "de"' \
+    "kb_layout repointed at the configured layout"
+  assert_contains "${input_txt}" 'kb_variant = "nodeadkeys"' \
+    "kb_variant repointed at the configured variant"
+else
+  echo "  FAIL: input.lua module missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+env_file="${TARGET}/etc/environment"
+if [[ -f "${env_file}" ]]; then
+  assert_contains "$(<"${env_file}")" "XKB_DEFAULT_LAYOUT=de" \
+    "greeter XKB layout staged in /etc/environment"
+  assert_contains "$(<"${env_file}")" "XKB_DEFAULT_VARIANT=nodeadkeys" \
+    "greeter XKB variant staged in /etc/environment"
+else
+  echo "  FAIL: /etc/environment not staged" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+# Resume safety: a second run must not duplicate the XKB_DEFAULT_ lines.
+configure_session
+if [[ "$(grep -c '^XKB_DEFAULT_LAYOUT=' "${env_file}")" == "1" ]]; then
+  echo "  ok: re-run keeps a single XKB_DEFAULT_LAYOUT line (resume-safe)"
+else
+  echo "  FAIL: re-run duplicated XKB_DEFAULT_ lines in /etc/environment" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
 # Quiet VT handoff (issue #12): the session must launch through the

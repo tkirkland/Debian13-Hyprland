@@ -94,6 +94,17 @@ TIMEZONE_EXPLICIT="${TIMEZONE:+1}"
 LOCALE_EXPLICIT="${LOCALE:+1}"
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
+# XKB keyboard layout, same pattern (configure_keymap autodetects only the
+# members the operator did NOT set; --keymap sets the markers itself since
+# parse_args runs after these :+1 captures). XKB_MODEL has no marker: it is
+# never autodetected worth overriding — pc105 fits everything we target.
+XKB_LAYOUT_EXPLICIT="${XKB_LAYOUT:+1}"
+XKB_VARIANT_EXPLICIT="${XKB_VARIANT:+1}"
+XKB_OPTIONS_EXPLICIT="${XKB_OPTIONS:+1}"
+XKB_LAYOUT="${XKB_LAYOUT:-us}"
+XKB_VARIANT="${XKB_VARIANT:-}"
+XKB_MODEL="${XKB_MODEL:-pc105}"
+XKB_OPTIONS="${XKB_OPTIONS:-}"
 # Hardware clock (RTC) interpretation. No default: the user must choose, via
 # --rtc=<utc|local> or the interactive prompt (require_rtc_choice). Neither is
 # assumed — an unset value is an error before the system phase runs.
@@ -758,7 +769,7 @@ TARGET_BASE_PACKAGES=(
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
   systemd-timesyncd
-  console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
+  console-setup keyboard-configuration ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
   grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin sway-notification-center

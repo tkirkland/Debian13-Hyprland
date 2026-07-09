@@ -35,6 +35,13 @@ Options:
                         with Windows (which assumes a local-time RTC)
   --jobs=<n>            Cap build parallelism (default: one per CPU);
                         lower it if compiles exhaust RAM
+  --keymap=<layout[:variant]>
+                        XKB keyboard layout for the installed system (console,
+                        greeter, and Hyprland), e.g. --keymap=de or
+                        --keymap=de:nodeadkeys. Also settable via the
+                        XKB_LAYOUT / XKB_VARIANT / XKB_MODEL / XKB_OPTIONS
+                        env vars. Omitted: autodetected from the live
+                        session's /etc/default/keyboard, falling back to us
   --nvidia=<open|proprietary|none>
                         NVIDIA driver flavor when a GPU is detected — both
                         come from NVIDIA's CUDA repo and install offline from
@@ -101,6 +108,22 @@ parse_args() {
         HYPR_BUILD_JOBS="${arg#*=}"
         [[ "${HYPR_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] ||
           fatal "--jobs expects a positive integer, got '${HYPR_BUILD_JOBS}'"
+        ;;
+      --keymap=*)
+        XKB_LAYOUT="${arg#*=}"
+        XKB_VARIANT="${XKB_LAYOUT#*:}"
+        [[ "${XKB_VARIANT}" == "${XKB_LAYOUT}" ]] && XKB_VARIANT=""
+        XKB_LAYOUT="${XKB_LAYOUT%%:*}"
+        # 00-config.sh's :+1 captures already ran, so a CLI choice must mark
+        # itself explicit or autodetect would overwrite it.
+        [[ "${XKB_LAYOUT}" =~ ^[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*$ ]] ||
+          fatal "Invalid --keymap layout '${XKB_LAYOUT}' (e.g. us, de, us,de)"
+        XKB_LAYOUT_EXPLICIT=1
+        if [[ -n "${XKB_VARIANT}" ]]; then
+          [[ "${XKB_VARIANT}" =~ ^[A-Za-z0-9_,:-]*$ ]] ||
+            fatal "Invalid --keymap variant '${XKB_VARIANT}'"
+          XKB_VARIANT_EXPLICIT=1
+        fi
         ;;
       --nvidia=*)
         NVIDIA_DRIVER="${arg#*=}"

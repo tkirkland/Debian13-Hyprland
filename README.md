@@ -256,6 +256,12 @@ Common flags (see `--help` for the full list):
                                        (e.g. 610.43.02-1); pinned installs are
                                        apt-mark held
 --jobs=<n>                             cap build parallelism
+--keymap=<layout[:variant]>            XKB keyboard layout for the installed
+                                       system — console, greeter, and Hyprland
+                                       (e.g. de or de:nodeadkeys; default:
+                                       autodetected from the live session's
+                                       /etc/default/keyboard, falling back
+                                       to us)
 --mirror=<url>                         Debian mirror (default deb.debian.org)
 --ntp="<servers>"                      space-separated NTP servers for the
                                        installed system's systemd-timesyncd
@@ -271,9 +277,13 @@ Common flags (see `--help` for the full list):
 
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
-`TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
+`TIMEZONE`, `LOCALE`, `XKB_LAYOUT`, `XKB_VARIANT`, `XKB_MODEL`,
+`XKB_OPTIONS`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
 `HYPRDIM_REPO_URL` (source for the hyprdim brightness daemon), and
-more — see `lib/00-config.sh`.
+more — see `lib/00-config.sh`. Like `TIMEZONE`/`LOCALE`, an explicit
+`XKB_*` value always wins over autodetection; unset members are detected
+from the live session and validated against the target's xkb rules before
+they can replace the `us` fallback.
 
 The installed system has time synchronization enabled by default: `systemd-timesyncd`
 is installed and enabled in the target, so the clock stays disciplined after

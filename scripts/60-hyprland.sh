@@ -399,6 +399,18 @@ purge_build_deps() {
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
 }
 
+# Read one XKB value from the target's /etc/default/keyboard (written by
+# phase_system's configure_keymap), falling back to $2. Standalone
+# --phase=hyprland runs then honor what the system phase wrote instead of
+# this shell's re-sourced config default. set-u-safe: callers may run in
+# contexts (tests) that never sourced lib/00-config.sh.
+target_xkb_value() {
+  local key="$1" fallback="${2:-}" val=""
+  val="$(sed -n "s/^${key}=\"\?\([^\"]*\)\"\?$/\1/p" \
+    "${TARGET}/etc/default/keyboard" 2>/dev/null)"
+  printf '%s\n' "${val:-${fallback}}"
+}
+
 # The user's starter config is Hyprland's own example/hyprland.lua at the
 # resolved tag — full upstream keybind set, rules, docs — SPLIT into one
 # module per upstream section header (---- MONITORS ----, ----
@@ -505,6 +517,31 @@ write_hypr_lua_config() {
       -e 's/(rounding_power[[:space:]]*=[[:space:]]*)2,/\13,/' \
       "${menu_mod}"
   done
+  # Keyboard layout: repoint the upstream example's kb_layout/kb_variant/
+  # kb_options at the configured layout (from the target's
+  # /etc/default/keyboard, written by configure_keymap). The values are
+  # preflight-validated charsets (no /, &, or \), so the sed is safe. A
+  # kb_layout-less upstream example is tolerated: libxkbcommon then falls
+  # back to XKB_DEFAULT_* from /etc/environment (configure_session), so
+  # warn only when the layout would visibly be wrong (non-us).
+  local kb_layout="" kb_variant="" kb_options="" kb_patched=0
+  kb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  kb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  kb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    if grep -qE 'kb_layout[[:space:]]*=' "${menu_mod}"; then
+      sed -i -E \
+        -e 's/(kb_layout[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_layout}"'"/' \
+        -e 's/(kb_variant[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_variant}"'"/' \
+        -e 's/(kb_options[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_options}"'"/' \
+        "${menu_mod}"
+      kb_patched=1
+    fi
+  done
+  if ((!kb_patched)) && [[ "${kb_layout}" != "us" ]]; then
+    warn "Upstream example carries no kb_layout assignment; Hyprland will" \
+      "rely on XKB_DEFAULT_* from /etc/environment for layout '${kb_layout}'."
+  fi
   for slug in "${modules[@]}"; do
     printf 'require("%s")\n' "${slug}" >>"${entry}"
   done
@@ -1179,6 +1216,29 @@ EOF
 
 configure_session() {
   info "Configuring greetd + uwsm session..."
+  # Greeter keyboard layout: greetd spawns its greeter with a PAM-built env
+  # (no session config of its own); pam_env reads /etc/environment, and
+  # cage/wlroots/libxkbcommon honor XKB_DEFAULT_*. Without this a non-us
+  # user cannot type their password at tuigreet. Values come from the
+  # target's /etc/default/keyboard (configure_keymap) so standalone
+  # --phase=hyprland runs stay consistent. Resume-safe: only the
+  # XKB_DEFAULT_ lines are ever rewritten; operator content is untouched.
+  local xkb_layout="" xkb_variant="" xkb_options=""
+  xkb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  xkb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  xkb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  mkdir -p "${TARGET}/etc"
+  touch "${TARGET}/etc/environment"
+  sed -i '/^XKB_DEFAULT_/d' "${TARGET}/etc/environment"
+  {
+    printf 'XKB_DEFAULT_LAYOUT=%s\n' "${xkb_layout}"
+    if [[ -n "${xkb_variant}" ]]; then
+      printf 'XKB_DEFAULT_VARIANT=%s\n' "${xkb_variant}"
+    fi
+    if [[ -n "${xkb_options}" ]]; then
+      printf 'XKB_DEFAULT_OPTIONS=%s\n' "${xkb_options}"
+    fi
+  } >>"${TARGET}/etc/environment"
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
   # Hyprland startup chatter paints over the console during the greeter →
   # desktop handoff (issue #12). Both session paths route through this

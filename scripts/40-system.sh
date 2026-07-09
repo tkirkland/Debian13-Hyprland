@@ -93,6 +93,88 @@ configure_locale_tz() {
   esac
 }
 
+# Best-effort keyboard autodetection, mirroring autodetect_locale_tz: only
+# members the operator did NOT set (per-member *_EXPLICIT markers) are
+# replaced. Source is the live session's /etc/default/keyboard — present on
+# stock Debian live media and reflecting the operator's live-boot choice;
+# localectl would need a running systemd-localed, which a TTY/chroot lacks.
+# Candidates are validated against the TARGET's xkb rules (evdev.lst, from
+# xkb-data in TARGET_BASE_PACKAGES) so a garbage live config can never
+# produce a broken target, AND re-checked against the preflight regexes:
+# autodetect runs after validate_identity_settings, and these values are
+# host-interpolated into a root chroot command string — this re-validation
+# is the injection guard.
+autodetect_keymap() {
+  [[ -z "${XKB_LAYOUT_EXPLICIT}" ]] || return 0
+  local src="${XKB_DETECT_SRC:-/etc/default/keyboard}" rules_lst=""
+  rules_lst="${TARGET}/usr/share/X11/xkb/rules/evdev.lst"
+  local layout="" variant="" options="" comp="" comps=() ok=1
+  layout="$(sed -n 's/^XKBLAYOUT="\?\([^"]*\)"\?$/\1/p' "${src}" 2>/dev/null)"
+  variant="$(sed -n 's/^XKBVARIANT="\?\([^"]*\)"\?$/\1/p' "${src}" 2>/dev/null)"
+  options="$(sed -n 's/^XKBOPTIONS="\?\([^"]*\)"\?$/\1/p' "${src}" 2>/dev/null)"
+  if [[ -z "${layout}" || ! -f "${rules_lst}" ]] ||
+    ! [[ "${layout}" =~ ^[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*$ ]]; then
+    info "Keyboard autodetect unavailable; using fallback ${XKB_LAYOUT}."
+    return 0
+  fi
+  # Every comma component must exist in the target's '! layout' section.
+  IFS=',' read -ra comps <<<"${layout}"
+  for comp in "${comps[@]}"; do
+    awk '/^! layout/{f=1;next}/^!/{f=0}f{print $1}' "${rules_lst}" |
+      grep -qx "${comp}" || ok=0
+  done
+  if ((!ok)); then
+    info "Keyboard autodetect unavailable; using fallback ${XKB_LAYOUT}."
+    return 0
+  fi
+  XKB_LAYOUT="${layout}"
+  # Variant/options only replace members the operator left unset. Variants
+  # are validated against the first layout component only (variants are
+  # per-layout; exotic comma-aligned variant lists are dropped, not guessed).
+  if [[ -z "${XKB_VARIANT_EXPLICIT}" ]]; then
+    XKB_VARIANT=""
+    if [[ -n "${variant}" && "${variant}" =~ ^[A-Za-z0-9_-]+$ ]] &&
+      awk '/^! variant/{f=1;next}/^!/{f=0}f{print $1, $2}' "${rules_lst}" |
+      grep -q "^${variant} ${layout%%,*}:"; then
+      XKB_VARIANT="${variant}"
+    fi
+  fi
+  if [[ -z "${XKB_OPTIONS_EXPLICIT}" ]]; then
+    XKB_OPTIONS=""
+    [[ "${options}" =~ ^[A-Za-z0-9_:,-]+$ ]] && XKB_OPTIONS="${options}"
+  fi
+  info "Keyboard layout autodetected from live ${src}:" \
+    "${XKB_LAYOUT}${XKB_VARIANT:+ (${XKB_VARIANT})}"
+}
+
+# Writes the Debian-idiomatic keyboard config and lets the packages consume
+# it. Needs keyboard-configuration/console-setup and xkb-data installed, so
+# it must run after install_base_packages (same constraint as locale).
+configure_keymap() {
+  autodetect_keymap
+  cat >"${TARGET}/etc/default/keyboard" <<EOF
+# Managed by hypr-deb (installer.sh). Consult keyboard(5).
+XKBMODEL="${XKB_MODEL}"
+XKBLAYOUT="${XKB_LAYOUT}"
+XKBVARIANT="${XKB_VARIANT}"
+XKBOPTIONS="${XKB_OPTIONS}"
+BACKSPACE="guess"
+EOF
+  # dpkg-reconfigure syncs the debconf DB from the file (upgrades keep the
+  # choice instead of reverting to us) and console-setup's postinst runs
+  # setupcon --save-only, prebuilding /etc/console-setup/cached_* which
+  # keyboard-setup.service applies at early boot — the VT has the layout
+  # from the first console. Chroot-safe: --save-only only writes files.
+  in_target "
+    set -e
+    dpkg -s keyboard-configuration >/dev/null 2>&1 ||
+      { echo 'keyboard-configuration package missing' >&2; exit 1; }
+    export DEBIAN_FRONTEND=noninteractive
+    dpkg-reconfigure -f noninteractive keyboard-configuration console-setup
+  "
+  info "Keyboard layout: ${XKB_LAYOUT}${XKB_VARIANT:+ (${XKB_VARIANT})}"
+}
+
 # systemd-timesyncd (in TARGET_BASE_PACKAGES) keeps the installed system's
 # clock disciplined after boot — without an NTP client nothing corrects drift.
 # Debian's preset enables it on install, but enable it explicitly here for the
@@ -813,6 +895,7 @@ phase_system() {
   install_lythmono_fonts
   install_adw_gtk3_theme
   configure_locale_tz
+  configure_keymap
   configure_time_sync
   neuter_ssh_vsock_generator
   create_user
