@@ -533,7 +533,7 @@ hl.on("hyprland.start", function()
   -- First login only: set an initial wallpaper (swww has no cache yet). After
   -- this, swww-daemon restores the cached selection on every later login.
   hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/local/bin/swww-cycle && touch "$m"; }']])
-  hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
+  hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/bin/hyprland-welcome && touch "$marker"; }']])
   -- Walker launcher backend (elephant) + walker in service mode so the bare
   -- SUPER tap opens instantly. Prebuilt binaries in /usr/local/bin ship
   -- neither a systemd user unit nor an XDG autostart entry — the

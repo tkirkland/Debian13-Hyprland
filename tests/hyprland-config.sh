@@ -120,11 +120,11 @@ fi
 # marker lands only when the app exits cleanly — app first, && touch after).
 if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
   deb="$(<"${hypr_dir}/hypr-deb.lua")"
-  assert_contains "${deb}" "/usr/local/bin/hyprland-welcome" \
+  assert_contains "${deb}" "/usr/bin/hyprland-welcome" \
     "welcome app launched by absolute path"
   # shellcheck disable=SC2016  # literal needle; $marker expands at login
   assert_contains "${deb}" \
-    '/usr/local/bin/hyprland-welcome && touch "$marker"' \
+    '/usr/bin/hyprland-welcome && touch "$marker"' \
     "marker touched only after the app is acknowledged"
   # The exec must run on the hyprland.start event — a bare top-level
   # hl.exec_cmd fires at config-parse time, before the compositor is up,
