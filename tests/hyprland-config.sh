@@ -138,7 +138,7 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
     "swww-daemon autostarts on session start"
   assert_contains "${deb}" "loginctl lock-session" \
     "SUPER+L locks the session (hyprlock via hypridle)"
-  assert_contains "${deb}" "/usr/local/bin/swww-cycle" \
+  assert_contains "${deb}" "/usr/bin/swww-cycle" \
     "SUPER+SHIFT+W cycles wallpapers"
   assert_contains "${deb}" 'hl.bind("Print", hl.dsp.exec_cmd("linux-screenshot region"))' \
     "Print captures a region via linux-screenshot"
@@ -166,7 +166,7 @@ fi
 
 # Quiet VT handoff (issue #12): the session must launch through the
 # journal-routing wrapper so uwsm/Hyprland chatter never paints VT1.
-wrapper="${TARGET}/usr/local/bin/hypr-session"
+wrapper="${TARGET}/usr/bin/hypr-session"
 if [[ -x "${wrapper}" ]]; then
   echo "  ok: hypr-session wrapper staged executable"
   assert_contains "$(<"${wrapper}")" "systemd-cat" \
@@ -192,16 +192,17 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
-assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
+assert_contains "${greetd_cfg}" '/usr/bin/hypr-session' \
   "greetd session command uses the wrapper"
 
-# hyprdim.service (issue #66): the unit FILE is installer glue and stays under
-# /usr/local, but its ExecStart points at the COMPILED binary, which Phase 2
-# moved to /usr (shipped as a .deb). It must therefore exec /usr/bin/hyprdim,
-# never the pre-move /usr/local/bin/hyprdim.
-dim_unit="${TARGET}/usr/local/lib/systemd/user/hyprdim.service"
+# hyprdim.service (issue #66): the unit FILE is installer glue, now placed
+# unpackaged at /usr/lib/systemd/user next to the packaged units. Its
+# ExecStart points at the COMPILED binary, which Phase 2 moved to /usr
+# (shipped as a .deb) — it must exec /usr/bin/hyprdim, never the pre-move
+# /usr/local/bin/hyprdim.
+dim_unit="${TARGET}/usr/lib/systemd/user/hyprdim.service"
 if [[ -f "${dim_unit}" ]]; then
-  echo "  ok: hyprdim.service unit staged under /usr/local (installer glue)"
+  echo "  ok: hyprdim.service unit staged at /usr/lib/systemd/user (installer glue)"
   dim_txt="$(<"${dim_unit}")"
   assert_contains "${dim_txt}" "ExecStart=/usr/bin/hyprdim" \
     "hyprdim.service execs the compiled binary at its /usr prefix"
@@ -216,15 +217,22 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
-# Hand-written glue scripts stay in /usr/local (NOT owned by any .deb): the
-# compiled-binary /usr migration must not have dragged these along.
-for glue in usr/local/bin/swww-cycle usr/local/bin/drm-reprobe \
-  usr/local/bin/brightness-sync usr/local/bin/hypr-session; do
+# Hand-written glue scripts now live in /usr/bin alongside the compiled
+# stack (still NOT owned by any .deb): the glue migration must stage them
+# there, and nothing may still write the pre-move /usr/local copies.
+for glue in usr/bin/swww-cycle usr/bin/drm-reprobe \
+  usr/bin/brightness-sync usr/bin/hypr-session; do
   if [[ -f "${TARGET}/${glue}" ]]; then
-    echo "  ok: glue script ${glue##*/} staged under /usr/local"
+    echo "  ok: glue script ${glue##*/} staged under /usr/bin"
   else
-    echo "  FAIL: glue script ${glue} missing from /usr/local" >&2
+    echo "  FAIL: glue script ${glue} missing from /usr/bin" >&2
     TEST_FAILURES=$((TEST_FAILURES + 1))
+  fi
+  if [[ -e "${TARGET}/usr/local/${glue#usr/}" ]]; then
+    echo "  FAIL: stale pre-move copy at usr/local/${glue#usr/}" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: no stale pre-move copy of ${glue##*/} under /usr/local"
   fi
 done
 
@@ -301,7 +309,7 @@ if [[ -f "${greeter_entry}" ]]; then
   entry_txt="$(<"${greeter_entry}")"
   assert_contains "${entry_txt}" 'Name=Hyprland' \
     "curated session is named Hyprland"
-  assert_contains "${entry_txt}" 'Exec=/usr/local/bin/hypr-session' \
+  assert_contains "${entry_txt}" 'Exec=/usr/bin/hypr-session' \
     "curated session launches the silent wrapper"
   # The bypassing upstream names must NOT be reintroduced here.
   if [[ "${entry_txt}" == *"uwsm start"* ]]; then

@@ -8,7 +8,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 # Extract the brightness-sync the installer stages from its literal heredoc, so
-# this tests exactly what lands at /usr/local/bin/brightness-sync (not a copy
+# this tests exactly what lands at /usr/bin/brightness-sync (not a copy
 # that could drift from the installer).
 BS="${tmp}/brightness-sync"
 awk "/<<'BRIGHTNESS_SYNC'\$/{f=1;next} /^BRIGHTNESS_SYNC\$/{f=0} f" \

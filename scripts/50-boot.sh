@@ -25,9 +25,9 @@ kernel_cmdline() {
 
 # Sync the newest kernel+initrd from ZFS /boot to the ESP (grub/sd-boot).
 write_esp_sync_hook() {
-  mkdir -p "${TARGET}/usr/local/sbin" \
+  mkdir -p "${TARGET}/usr/sbin" \
     "${TARGET}/etc/kernel/postinst.d" "${TARGET}/etc/initramfs/post-update.d"
-  cat >"${TARGET}/usr/local/sbin/hypr-deb-sync-esp" <<'EOF'
+  cat >"${TARGET}/usr/sbin/hypr-deb-sync-esp" <<'EOF'
 #!/usr/bin/env bash
 # Copy the newest kernel + initrd from /boot (ZFS) to the ESP so FAT-bound
 # bootloaders (grub, systemd-boot) can read them. Installed by installer.sh.
@@ -53,20 +53,20 @@ if [[ -f "${sd_src}" && -f "${sd_dst}" && "${sd_src}" -nt "${sd_dst}" ]]; then
 fi
 sync
 EOF
-  chmod +x "${TARGET}/usr/local/sbin/hypr-deb-sync-esp"
+  chmod +x "${TARGET}/usr/sbin/hypr-deb-sync-esp"
   local hook=""
   for hook in "${TARGET}/etc/kernel/postinst.d/zz-hypr-deb-esp" \
     "${TARGET}/etc/initramfs/post-update.d/zz-hypr-deb-esp"; do
     cat >"${hook}" <<'EOF'
 #!/bin/sh
-exec /usr/local/sbin/hypr-deb-sync-esp
+exec /usr/sbin/hypr-deb-sync-esp
 EOF
     chmod +x "${hook}"
   done
 }
 
 run_esp_sync() {
-  in_target "/usr/local/sbin/hypr-deb-sync-esp"
+  in_target "/usr/sbin/hypr-deb-sync-esp"
 }
 
 # PARTUUIDs of this install's ESP member partitions (partition 1 on DISK1 and

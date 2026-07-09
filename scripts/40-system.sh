@@ -629,9 +629,9 @@ install_lythmono_fonts() {
     return 0
   fi
   info "Installing LythMono fonts from the offline store (${src})..."
-  install -d "${TARGET}/usr/local/share/fonts/LythMono"
-  cp "${src}"/*.ttf "${TARGET}/usr/local/share/fonts/LythMono/"
-  in_target "fc-cache -f /usr/local/share/fonts/LythMono"
+  install -d "${TARGET}/usr/share/fonts/LythMono"
+  cp "${src}"/*.ttf "${TARGET}/usr/share/fonts/LythMono/"
+  in_target "fc-cache -f /usr/share/fonts/LythMono"
 }
 
 # adw-gtk3 is not packaged in Debian. Its theme dirs are harvested into the
