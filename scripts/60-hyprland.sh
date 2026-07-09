@@ -1399,6 +1399,9 @@ EOF
   # hyprland.start hook runs it as ${TARGET_USERNAME} via sudo (user is in the
   # sudo group, and Debian's /etc/sudoers @includedir's /etc/sudoers.d).
   install -d -m 755 "${TARGET}/etc/sudoers.d"
+  # rm first: a resumed run must rewrite this file, but the previous pass
+  # left it 0440 and `cat >` onto a read-only file fails for non-root.
+  rm -f "${TARGET}/etc/sudoers.d/drm-reprobe"
   cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
 # Managed by installer.sh: let the desktop user force a DRM connector re-probe
 # at Hyprland start, recovering an external display the greeter disabled.
