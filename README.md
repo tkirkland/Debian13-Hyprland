@@ -439,7 +439,7 @@ the hyprwm stack; its runtime dependencies (python3, python3-xdg,
 whiptail, dbus-user-session) come from Debian.
 
 greetd launches a single Hyprland session through a wrapper at
-`/usr/local/bin/hypr-session` (`uwsm start -- hyprland.desktop`). The
+`/usr/bin/hypr-session` (`uwsm start -- hyprland.desktop`). The
 wrapper keeps the greeter→desktop handoff quiet (issue #12): it runs uwsm
 under `systemd-cat` with `UWSM_SILENT_START=2`, so startup chatter lands in
 the journal (`journalctl -t hypr-session`) instead of painting over VT1.
@@ -470,7 +470,7 @@ as the `assets/wallpapers` submodule, installed to
 **External-display brightness** (issue #66): the `XF86MonBrightness` keys, the
 idle dim, and the lock screen all drive one logical brightness level across
 *every* connected display via the `brightness-sync` wrapper
-(`/usr/local/bin/brightness-sync`). Where a real hardware backlight exists it is
+(`/usr/bin/brightness-sync`). Where a real hardware backlight exists it is
 set directly with `brightnessctl` — the internal panel, and external monitors
 exposed as `/sys/class/backlight` nodes by the `ddcci-dkms` driver over DDC/CI
 (`ddcutil`/`i2c-tools` provide the DDC/CI tooling; the `ddcci` and `i2c-dev`
@@ -502,8 +502,12 @@ Source policy:
   path), or in the target chroot / on first boot for a networked install. The
   build uses GCC 15 from a pinned sid source where required. Compiled stack
   artifacts install to `/usr` (the packaged `.debs` lay down `/usr/bin`,
-  `/usr/lib`); the hand-written glue scripts stay under `/usr/local`. Build
-  trees under `/var/tmp` are deleted after packaging.
+  `/usr/lib`); the hand-written glue (scripts, the hyprdim user unit, the
+  firstboot machinery) also lives under `/usr` but stays unpackaged — dpkg
+  silently overwrites unowned files if a package ever ships the same path
+  and deletes them on that package's purge, an accepted risk for these
+  bespoke, namespaced names. Build trees under `/var/tmp` are deleted after
+  packaging.
 - The **offline-from-ISO install compiles nothing** — it `apt-get install`s
   the stack debs (already built at ISO creation) by name from the on-ISO repo.
 - **OpenZFS comes from upstream, not trixie**: the latest release is built as

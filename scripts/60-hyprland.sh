@@ -344,18 +344,22 @@ purge_build_deps() {
   fi
   info "Pinning runtime libraries of built binaries..."
   # Phase 2 moved the COMPILED stack to /usr (CMAKE_INSTALL_PREFIX=/usr,
-  # meson --prefix=/usr), so the built binaries and their libs now live in
-  # /usr/bin and /usr/lib, not /usr/local. Scan every installed binary, not
-  # just Hyprland: the protocol code generators hyprwayland-scanner and
-  # hyprwire-scanner link libpugixml.so.1 (package libpugixml1v5), whose
-  # only -dev provider (libpugixml-dev) is a purged build dep. Pinning
-  # solely off Hyprland + libs leaves those scanners' runtime libs
-  # unprotected, so the purge strips libpugixml1v5 and they break for every
-  # later source build (hyprlock/hypridle/swww add-ons).
+  # meson --prefix=/usr), and the hand-written glue now lives there too, so
+  # everything of ours is under /usr/bin and /usr/lib. Scan every installed
+  # binary, not just Hyprland: the protocol code generators
+  # hyprwayland-scanner and hyprwire-scanner link libpugixml.so.1 (package
+  # libpugixml1v5), whose only -dev provider (libpugixml-dev) is a purged
+  # build dep. Pinning solely off Hyprland + libs leaves those scanners'
+  # runtime libs unprotected, so the purge strips libpugixml1v5 and they
+  # break for every later source build (hyprlock/hypridle/swww add-ons).
   # Pinning the runtime-lib packages of all /usr binaries is harmless to the
   # purge goal — build deps are -dev/toolchain packages that no binary links
-  # against, so ldd never lists them. ldd on a non-ELF entry (the hand-written
-  # glue scripts kept in /usr/local) just warns to stderr (suppressed).
+  # against, so ldd never lists them. ldd on a non-ELF entry (the glue
+  # scripts in /usr/bin) just warns to suppressed stderr, the grep extracts
+  # only resolved .so paths, and this in_target runs set -e WITHOUT pipefail,
+  # so ldd's nonzero exit on those entries is masked by the pipeline. The
+  # walker/elephant Go binaries now get scanned too, harmlessly re-pinning
+  # libc-class packages that are already protected.
   in_target "
     set -e
     ldd /usr/bin/* /usr/lib/lib*.so* 2>/dev/null |
@@ -386,6 +390,10 @@ purge_build_deps() {
       apt-get autoremove --purge -y
     "
   fi
+  # This gate now also covers the migrated glue: shell scripts are non-ELF
+  # (ldd only warns to suppressed stderr), but the walker/elephant binaries
+  # are real ELF entries — a genuinely missing runtime lib of theirs now
+  # fails the install here instead of being silently ignored (intended).
   in_target "! ldd /usr/bin/* 2>/dev/null | grep -q 'not found'" ||
     fatal "Purge removed libraries a /usr/bin binary needs (ldd reports 'not found')."
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
@@ -518,9 +526,9 @@ hl.on("hyprland.start", function()
   -- Hyprland skips it at start. Forcing a sysfs re-probe makes the kernel
   -- re-detect the sink and the compositor applies the monitor config live.
   -- Needs root (sysfs status write) -> fixed-command NOPASSWD helper, staged by
-  -- the installer at /usr/local/bin/drm-reprobe. Fired first so the external
+  -- the installer at /usr/bin/drm-reprobe. Fired first so the external
   -- comes up as early as possible.
-  hl.exec_cmd("sudo /usr/local/bin/drm-reprobe")
+  hl.exec_cmd("sudo /usr/bin/drm-reprobe")
   -- Finalize the UWSM session: activates graphical-session.target, imports
   -- the session environment, and runs XDG autostart. Without this the
   -- session is launched by uwsm but never actually managed by it. Harmless
@@ -532,10 +540,10 @@ hl.on("hyprland.start", function()
   hl.exec_cmd("swww-daemon")
   -- First login only: set an initial wallpaper (swww has no cache yet). After
   -- this, swww-daemon restores the cached selection on every later login.
-  hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/local/bin/swww-cycle && touch "$m"; }']])
-  hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
+  hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/bin/swww-cycle && touch "$m"; }']])
+  hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/bin/hyprland-welcome && touch "$marker"; }']])
   -- Walker launcher backend (elephant) + walker in service mode so the bare
-  -- SUPER tap opens instantly. Prebuilt binaries in /usr/local/bin ship
+  -- SUPER tap opens instantly. Prebuilt binaries in /usr/bin ship
   -- neither a systemd user unit nor an XDG autostart entry — the
   -- reserved-hook case, like swww above.
   hl.exec_cmd([[sh -c 'pgrep -x elephant >/dev/null || elephant']])
@@ -549,7 +557,7 @@ end)
 hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
 -- Cycle wallpapers (swww): a different random image per output (secondary
 -- action, triple chord).
-hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
+hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/bin/swww-cycle"))
 -- Brightness keys drive brightness-sync: every connected display as one level —
 -- real backlight where present (brightnessctl, internal panel and ddcci-exposed
 -- externals) else gamma via hyprdim. locked+repeating so they work on the lock
@@ -557,7 +565,7 @@ hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
 hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightness-sync up"),   { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightness-sync down"), { locked = true, repeating = true })
 -- Screenshots + screen recording (epic #67, item 1): the staged helper scripts
--- linux-screenshot / linux-screen-record (in /usr/local/bin). They save
+-- linux-screenshot / linux-screen-record (in /usr/bin). They save
 -- timestamped files (~/Pictures/Screenshots, ~/Videos/Screen Recordings), copy
 -- to the clipboard, and hold an atomic lock so repeated presses don't stack
 -- selectors. Conventional Print cluster; the user's dotfiles override these.
@@ -735,8 +743,8 @@ stage_wallpapers() {
     (cd "${src}" && tar -cf - --exclude=.git .) | (cd "${dest}" && tar -xf -)
   fi
   # Wallpaper cycle helper: a different random image per connected output.
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/swww-cycle" <<'EOF'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/swww-cycle" <<'EOF'
 #!/usr/bin/env bash
 # swww-cycle (installer.sh): assign a different random wallpaper to each
 # connected output from the system wallpaper set. Bound to SUPER+SHIFT+W and
@@ -760,7 +768,7 @@ for out in "${outputs[@]}"; do
   i=$(( i + 1 ))
 done
 EOF
-  chmod +x "${TARGET}/usr/local/bin/swww-cycle"
+  chmod +x "${TARGET}/usr/bin/swww-cycle"
 }
 
 # Stage the screenshot/recording capture helpers (epic #67, item 1; verified on
@@ -772,8 +780,8 @@ EOF
 # SCREEN_RECORD_CODEC. Notifications need a daemon (swaync, #67 item 2); the
 # capture still saves the file without one.
 stage_capture_helpers() {
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/linux-screenshot" <<'EOF'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/linux-screenshot" <<'EOF'
 #!/bin/sh
 set -eu
 
@@ -850,9 +858,9 @@ fi
 wl-copy --type image/png < "$output"
 notify-send "Screenshot saved" "$output"
 EOF
-  chmod +x "${TARGET}/usr/local/bin/linux-screenshot"
+  chmod +x "${TARGET}/usr/bin/linux-screenshot"
 
-  cat >"${TARGET}/usr/local/bin/linux-screen-record" <<'EOF'
+  cat >"${TARGET}/usr/bin/linux-screen-record" <<'EOF'
 #!/bin/sh
 set -eu
 
@@ -950,14 +958,14 @@ cleanup_selection
 trap - EXIT HUP INT TERM
 notify-send "Screen recording started" "Region capture with $label. Press the same shortcut to stop."
 EOF
-  chmod +x "${TARGET}/usr/local/bin/linux-screen-record"
+  chmod +x "${TARGET}/usr/bin/linux-screen-record"
   # Default the record codec to NVENC when an NVIDIA driver was selected at
   # install time (h264_nvenc needs the driver, not just a card present), else
   # keep the portable software libx264. SCREEN_RECORD_CODEC still overrides
   # either default at runtime.
   if nvidia_install_requested; then
     sed -i 's/SCREEN_RECORD_CODEC:-libx264/SCREEN_RECORD_CODEC:-h264_nvenc/' \
-      "${TARGET}/usr/local/bin/linux-screen-record"
+      "${TARGET}/usr/bin/linux-screen-record"
   fi
 }
 
@@ -1089,7 +1097,7 @@ stage_kitty_config() {
 
 # Install the walker launcher stack from the offline store (harvested at BUILD
 # time by harvest_walker_launcher / build-iso step_stage_walker — NO network
-# here). Binaries land in /usr/local/bin; the elephant provider plugins are
+# here). Binaries land in /usr/bin; the elephant provider plugins are
 # staged into the user's config (~/.config/elephant/providers is where the
 # daemon discovers them — proven on the reference machine), owned by the later
 # chown -R like the other staged user configs. Runtime libs
@@ -1102,8 +1110,8 @@ stage_walker_launcher() {
     return 0
   fi
   info "Installing walker + elephant from the offline store (${src})..."
-  install -m755 "${src}/walker" "${TARGET}/usr/local/bin/walker"
-  install -m755 "${src}/elephant" "${TARGET}/usr/local/bin/elephant"
+  install -m755 "${src}/walker" "${TARGET}/usr/bin/walker"
+  install -m755 "${src}/elephant" "${TARGET}/usr/bin/elephant"
   install -d "${prov_dir}"
   for p in "${ELEPHANT_PROVIDERS[@]}"; do
     [[ -f "${src}/${p}.so" ]] || { warn "elephant provider ${p}.so missing from store"; continue; }
@@ -1177,20 +1185,20 @@ configure_session() {
   # wrapper: systemd-cat keeps the output in the journal (read it with
   # `journalctl -t hypr-session`) instead of the VT, and
   # UWSM_SILENT_START=2 suppresses uwsm's own startup text.
-  mkdir -p "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/hypr-session" <<'EOF'
+  mkdir -p "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/hypr-session" <<'EOF'
 #!/usr/bin/env bash
 # Staged by installer.sh: greetd session entry. Session output goes to
 # the journal (journalctl -t hypr-session), never to the VT.
 UWSM_SILENT_START=2 exec /usr/bin/systemd-cat -t hypr-session \
   /usr/bin/uwsm start -- hyprland.desktop
 EOF
-  chmod +x "${TARGET}/usr/local/bin/hypr-session"
+  chmod +x "${TARGET}/usr/bin/hypr-session"
   mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
   local session_command="" session_user=""
   if ((HYPR_AUTOLOGIN)); then
     # No greeter: greetd starts the session directly as the target user.
-    session_command="/usr/local/bin/hypr-session"
+    session_command="/usr/bin/hypr-session"
     session_user="${TARGET_USERNAME}"
   else
     # Debian ships the greetd daemon WITHOUT any greeter binary (agreety
@@ -1282,7 +1290,7 @@ EOF
 [Desktop Entry]
 Name=Hyprland
 Comment=Hyprland (uwsm-managed, silenced)
-Exec=/usr/local/bin/hypr-session
+Exec=/usr/bin/hypr-session
 Type=Application
 DesktopNames=Hyprland
 EOF
@@ -1310,8 +1318,8 @@ EOF
   # live. Proven on the live box: a single `echo detect` recovered the LG
   # ultrawide on DP-3 in ~2s with no restart. The status write needs root, so
   # ship a fixed-command NOPASSWD helper.
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/drm-reprobe" <<'EOF'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/drm-reprobe" <<'EOF'
 #!/usr/bin/env bash
 # Staged by installer.sh: force a DRM hot-plug re-probe of external connectors
 # the greeter left HPD-dark, so Hyprland re-detects them at login. eDP (the
@@ -1326,7 +1334,7 @@ for path in /sys/class/drm/card*-*/status; do
   fi
 done
 EOF
-  chmod 755 "${TARGET}/usr/local/bin/drm-reprobe"
+  chmod 755 "${TARGET}/usr/bin/drm-reprobe"
   # NOPASSWD for the single fixed command (no args) -> minimal privilege; the
   # hyprland.start hook runs it as ${TARGET_USERNAME} via sudo (user is in the
   # sudo group, and Debian's /etc/sudoers @includedir's /etc/sudoers.d).
@@ -1334,7 +1342,7 @@ EOF
   cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
 # Managed by installer.sh: let the desktop user force a DRM connector re-probe
 # at Hyprland start, recovering an external display the greeter disabled.
-${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/local/bin/drm-reprobe
+${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/bin/drm-reprobe
 EOF
   chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
   # hyprlock PAM service (issue #71): authenticate the lock screen against the
@@ -1357,8 +1365,8 @@ EOF
   # hyprdim daemon (D-Bus dev.hyprdim). The brightness keys, hypridle's idle
   # dim/restore, and the lock_cmd all route through it. Staged like drm-reprobe
   # (literal heredoc + chmod). The hyprdim binary is built by build_custom_hyprdim.
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/brightness-sync" <<'BRIGHTNESS_SYNC'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/brightness-sync" <<'BRIGHTNESS_SYNC'
 #!/bin/sh
 # brightness-sync — ONE logical brightness level (0-100) across every connected
 # display. The level is PERSISTED and applied ABSOLUTELY, so all displays stay
@@ -1591,15 +1599,15 @@ case "$cmd" in
     *) echo "usage: brightness-sync {up|down|set <pct>|dim|restore|reconcile|lock|externals-off|externals-on|internal-off|internal-on}" >&2; exit 2 ;;
 esac
 BRIGHTNESS_SYNC
-  chmod 755 "${TARGET}/usr/local/bin/brightness-sync"
+  chmod 755 "${TARGET}/usr/bin/brightness-sync"
   # hyprdim user unit. The ExecStart points at the compiled binary in /usr/bin
   # (upstream's unit uses %h/.local/bin/hyprdim). Resident, supervised,
   # respawning; brightness-sync re-asserts external gamma after a restart. Enabled
   # for the user the same way hypridle is: a plain symlink into
   # graphical-session.target.wants (works even when the stack builds at first boot —
   # the link dangles until the unit lands and resolves at session start).
-  mkdir -p "${TARGET}/usr/local/lib/systemd/user"
-  cat >"${TARGET}/usr/local/lib/systemd/user/hyprdim.service" <<'HYPRDIM_SERVICE'
+  mkdir -p "${TARGET}/usr/lib/systemd/user"
+  cat >"${TARGET}/usr/lib/systemd/user/hyprdim.service" <<'HYPRDIM_SERVICE'
 [Unit]
 Description=hyprdim — per-display gamma brightness daemon (external outputs)
 # Locally-built daemon (binary hyprdim, D-Bus dev.hyprdim). Source, upstream
@@ -1624,11 +1632,12 @@ HYPRDIM_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
   # hypridle is part of the source-compiled stack, now shipped as a .deb with
   # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
-  # hand-written hyprdim.service below stays in /usr/local (installer glue,
-  # not owned by any .deb).
+  # hand-written hyprdim.service above is installer glue placed unpackaged at
+  # the same /usr/lib/systemd/user path, next to the packaged units (dpkg
+  # does not own it; see the glue-placement note in README).
   ln -sf /usr/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
-  ln -sf /usr/local/lib/systemd/user/hyprdim.service \
+  ln -sf /usr/lib/systemd/user/hyprdim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
   write_hypr_lua_config
   stage_wallpapers
@@ -1670,16 +1679,16 @@ stage_firstboot_runner() {
   # The enable runs UNCONDITIONALLY (it is idempotent): a resumed run that
   # died between writing the files and enabling the unit must still enable
   # it, so only the file-writing is skipped when the runner exists.
-  if [[ ! -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot" ]]; then
-    mkdir -p "${TARGET}/usr/local/sbin" \
-      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d" \
+  if [[ ! -x "${TARGET}/usr/sbin/hypr-deb-firstboot" ]]; then
+    mkdir -p "${TARGET}/usr/sbin" \
+      "${TARGET}/usr/lib/hypr-deb/firstboot.d" \
       "${TARGET}/etc/systemd/system"
-    cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<'EOF'
+    cat >"${TARGET}/usr/sbin/hypr-deb-firstboot" <<'EOF'
 #!/usr/bin/env bash
 # Hypr-Deb firstboot job runner (staged by installer.sh). Runs every
-# /usr/local/lib/hypr-deb/firstboot.d/*.sh in lexical order.
+# /usr/lib/hypr-deb/firstboot.d/*.sh in lexical order.
 set -uo pipefail
-dir=/usr/local/lib/hypr-deb/firstboot.d
+dir=/usr/lib/hypr-deb/firstboot.d
 shopt -s nullglob
 for job in "${dir}"/*.sh; do
   echo "hypr-deb-firstboot: running ${job##*/}" >&2
@@ -1700,17 +1709,17 @@ if [[ -f /run/hypr-deb-reboot-required ]]; then
   systemctl reboot
 fi
 EOF
-    chmod +x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+    chmod +x "${TARGET}/usr/sbin/hypr-deb-firstboot"
 
     cat >"${TARGET}/etc/systemd/system/hypr-deb-firstboot.service" <<'EOF'
 [Unit]
 Description=Hypr-Deb first-boot jobs
 Before=greetd.service
-ConditionPathExists=/usr/local/sbin/hypr-deb-firstboot
+ConditionPathExists=/usr/sbin/hypr-deb-firstboot
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/hypr-deb-firstboot
+ExecStart=/usr/sbin/hypr-deb-firstboot
 StandardOutput=journal+console
 RemainAfterExit=yes
 TimeoutStartSec=0
@@ -1725,7 +1734,7 @@ EOF
 stage_firstboot() {
   info "Staging first-boot build..."
   local name=""
-  mkdir -p "${TARGET}${HYPR_SRC_DIR}" "${TARGET}/usr/local/lib/hypr-deb"
+  mkdir -p "${TARGET}${HYPR_SRC_DIR}" "${TARGET}/usr/lib/hypr-deb"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     stage_source "${name}"
   done
@@ -1743,16 +1752,16 @@ stage_firstboot() {
   done
 
   cp lib/00-config.sh lib/01-log.sh scripts/60-hyprland.sh \
-    "${TARGET}/usr/local/lib/hypr-deb/"
+    "${TARGET}/usr/lib/hypr-deb/"
 
   stage_firstboot_runner
-  cat >"${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh" <<EOF
+  cat >"${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh" <<EOF
 #!/usr/bin/env bash
 # Firstboot job: one-shot Hyprland build (staged by installer.sh).
 set -euo pipefail
-source /usr/local/lib/hypr-deb/00-config.sh
-source /usr/local/lib/hypr-deb/01-log.sh
-source /usr/local/lib/hypr-deb/60-hyprland.sh
+source /usr/lib/hypr-deb/00-config.sh
+source /usr/lib/hypr-deb/01-log.sh
+source /usr/lib/hypr-deb/60-hyprland.sh
 TARGET=""           # build on the running system
 NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
 CACHE_DIR="${HYPR_SRC_DIR}"
@@ -1766,7 +1775,7 @@ test -x /usr/bin/Hyprland
 purge_build_deps
 info "First-boot Hyprland build complete."
 EOF
-  chmod +x "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
+  chmod +x "${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
 }
 
 # OFFLINE (default when the on-ISO store is present): install the ENTIRE custom

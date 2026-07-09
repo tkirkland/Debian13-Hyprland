@@ -41,9 +41,9 @@ phase_verify() {
     vcheck "firstboot unit enabled" in_target \
       "systemctl is-enabled hypr-deb-firstboot.service"
     vcheck "firstboot runner staged" \
-      test -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+      test -x "${TARGET}/usr/sbin/hypr-deb-firstboot"
     vcheck "hyprland firstboot job staged" test -x \
-      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
+      "${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
     vcheck "sources staged" \
       test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
     vcheck "toolchain staged for firstboot" in_target "command -v cmake"
@@ -69,9 +69,9 @@ phase_verify() {
   # Screenshot/recording capture helpers + deps (epic #67, item 1). Staged
   # unconditionally by configure_session, so verified on both install paths.
   vcheck "screenshot helper staged" test -x \
-    "${TARGET}/usr/local/bin/linux-screenshot"
+    "${TARGET}/usr/bin/linux-screenshot"
   vcheck "screen-record helper staged" test -x \
-    "${TARGET}/usr/local/bin/linux-screen-record"
+    "${TARGET}/usr/bin/linux-screen-record"
   vcheck "screenshot deps present (grim/slurp/jq)" in_target \
     "command -v grim && command -v slurp && command -v jq"
   vcheck "recording deps present (wf-recorder/notify-send/pactl)" in_target \
@@ -138,8 +138,8 @@ phase_verify() {
   vcheck "session launcher at /usr/bin/uwsm" \
     test -x "${TARGET}/usr/bin/uwsm"
   # The quiet-VT wrapper both session modes launch through (issue #12).
-  vcheck "session wrapper at /usr/local/bin/hypr-session" \
-    test -x "${TARGET}/usr/local/bin/hypr-session"
+  vcheck "session wrapper at /usr/bin/hypr-session" \
+    test -x "${TARGET}/usr/bin/hypr-session"
   # shellcheck disable=SC2016  # the $() must expand inside the chroot, not here
   vcheck "getty@tty1 masked (no VT1 contention with greetd)" in_target \
     '[[ "$(systemctl is-enabled getty@tty1.service 2>/dev/null || true)" == masked ]]'

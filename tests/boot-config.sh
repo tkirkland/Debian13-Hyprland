@@ -86,7 +86,7 @@ assert_contains "${out}" "initrd /EFI/debian/initrd.img" "sd-boot: initrd"
 assert_contains "${out}" "root=ZFS=PRECISION/ROOT/debian13" "sd-boot: ZFS root"
 
 gen_cfg write_esp_sync_hook
-out="$(cat "${tmp}/target/usr/local/sbin/hypr-deb-sync-esp")"
+out="$(cat "${tmp}/target/usr/sbin/hypr-deb-sync-esp")"
 assert_contains "${out}" "vmlinuz" "hook copies kernel"
 assert_contains "${out}" "initrd.img" "hook copies initrd"
 assert_contains "${out}" "systemd-bootx64.efi.signed" \
