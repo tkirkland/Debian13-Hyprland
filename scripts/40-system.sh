@@ -327,12 +327,18 @@ install_base_packages() {
 # them.
 install_zfs_offline() {
   info "Installing upstream OpenZFS from the offline store (replaces Debian's zfs-*)..."
-  local kpin=""
-  kpin="$(cat "${CACHE_REPO_DIR}/KERNEL_PINNED" 2>/dev/null)" || true
-  [[ -n "${kpin}" ]] ||
-    fatal "Offline store carries no KERNEL_PINNED (${CACHE_REPO_DIR}) —" \
+  # The target boots the kernel the pool's linux-image-amd64 resolves to —
+  # KERNEL_TARGET, written by build-iso step_pin_kernel. That is often NEWER
+  # than KERNEL_PINNED (the live kernel): security-suite kernels move between
+  # point releases. Installing the pinned kmod here would leave the boot
+  # kernel without zfs (and drag a second linux-image into the target via the
+  # kmod deb's Depends). Install the TARGET kernel's kmod deb.
+  local ktarget=""
+  ktarget="$(cat "${CACHE_REPO_DIR}/KERNEL_TARGET" 2>/dev/null)" || true
+  [[ -n "${ktarget}" ]] ||
+    fatal "Offline store carries no KERNEL_TARGET (${CACHE_REPO_DIR}) —" \
       "rebuild the ISO (tools/build-iso.sh writes it)."
-  local -a pkgs=("openzfs-zfs-modules-${kpin}") p=""
+  local -a pkgs=("openzfs-zfs-modules-${ktarget}") p=""
   for p in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
     [[ "${p}" == "openzfs-zfs-dkms" ]] || pkgs+=("${p}")
   done
@@ -355,16 +361,16 @@ install_zfs_offline() {
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
     apt-mark manual ${pkgs[*]} >/dev/null
-    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${kpin}' | grep '\\.ko\$' || true)\"
+    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${ktarget}' | grep '\\.ko\$' || true)\"
     [[ -n \"\${kos}\" ]] ||
-      { echo 'openzfs-zfs-modules-${kpin} installed no .ko files' >&2; exit 1; }
+      { echo 'openzfs-zfs-modules-${ktarget} installed no .ko files' >&2; exit 1; }
     sf=\"\$(ls /usr/lib/linux-kbuild-*/scripts/sign-file 2>/dev/null | head -n1)\"
     [[ -x \"\${sf}\" ]] ||
       { echo 'sign-file not found under /usr/lib/linux-kbuild-*/scripts' >&2; exit 1; }
     for ko in \${kos}; do
       \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
     done
-    depmod '${kpin}'
+    depmod '${ktarget}'
   "
   stage_zfs_dkms_firstboot
   in_target "zfs version" || true
@@ -490,19 +496,37 @@ install_zfs_from_source() {
         { echo \"required package not built: \${p}\" >&2; exit 1; }
     done"
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
-    # Also build the prebuilt kernel-module deb for the pinned kernel
-    # (issue #110). Pooled only — the throwaway buildroot never installs it.
+    # Also build the prebuilt kernel-module debs (issue #110): one for the
+    # PINNED live kernel (the squashfs bake / live preflight consume it) and,
+    # when the pool's linux-image-amd64 resolves newer (security suite moved
+    # past the stock ISO), one for the TARGET kernel the installed system
+    # boots (install_zfs_offline consumes that one). Pooled only — the
+    # throwaway buildroot never installs them.
     # KVERS/KSRC/KOBJ must be passed EXPLICITLY: upstream debian/rules
     # defaults KVERS to the build host's 'uname -r', and its module build
     # re-runs ./configure with --with-linux=$(KSRC) --with-linux-obj=$(KOBJ),
     # clobbering cfg_flags' pin. KSRC/KOBJ carry the same common/arch header
     # split as cfg_flags above (see that comment for why).
-    # The ls assertion is the hard guard — a wrong-kernel build produces a
-    # differently-named deb and dies here.
-    zfs_script+="
-    make -j\"${jobs}\" native-deb-kmod KVERS='${KERNEL_PINNED}' KSRC='${ksrc_common}' KOBJ='/usr/src/linux-headers-${KERNEL_PINNED}'
-    ls /var/tmp/openzfs-zfs-modules-${KERNEL_PINNED}_*.deb >/dev/null 2>&1 ||
-      { echo 'required package not built: openzfs-zfs-modules-${KERNEL_PINNED}' >&2; exit 1; }"
+    # Two hard guards per build: the ls (a wrong-kernel build produces a
+    # differently-named deb) and a vermagic check on the packaged .ko (a
+    # back-to-back rebuild that failed to reconfigure would package stale
+    # objects under the right name).
+    [[ -n "${KERNEL_TARGET:-}" ]] ||
+      fatal "ZFS_DEB_POOL set but KERNEL_TARGET unset (step_pin_kernel must run first)."
+    local kv="" kmod_kvers=("${KERNEL_PINNED}")
+    [[ "${KERNEL_TARGET}" != "${KERNEL_PINNED}" ]] && kmod_kvers+=("${KERNEL_TARGET}")
+    for kv in "${kmod_kvers[@]}"; do
+      zfs_script+="
+    make -j\"${jobs}\" native-deb-kmod KVERS='${kv}' KSRC='/usr/src/linux-headers-${kv%-*}-common' KOBJ='/usr/src/linux-headers-${kv}'
+    ls /var/tmp/openzfs-zfs-modules-${kv}_*.deb >/dev/null 2>&1 ||
+      { echo 'required package not built: openzfs-zfs-modules-${kv}' >&2; exit 1; }
+    rm -rf /var/tmp/kmodchk
+    dpkg-deb -x /var/tmp/openzfs-zfs-modules-${kv}_*.deb /var/tmp/kmodchk
+    kmod_vm=\"\$(modinfo -F vermagic \"\$(find /var/tmp/kmodchk -name 'zfs.ko*' | head -n1)\" | awk '{print \$1}')\"
+    [[ \"\${kmod_vm}\" == '${kv}' ]] ||
+      { echo \"kmod deb for ${kv} packages vermagic \${kmod_vm}\" >&2; exit 1; }
+    rm -rf /var/tmp/kmodchk"
+    done
   fi
   if [[ -z "${ZFS_DEB_POOL:-}" ]]; then
     zfs_script+="

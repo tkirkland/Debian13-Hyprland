@@ -58,6 +58,7 @@ fi
 # shellcheck disable=SC2317  # stubs invoked indirectly by install_zfs_from_source
 fatal() { echo "FATAL: $*" >&2; exit 1; }
 KPIN="6.12.38+deb13-amd64"
+KTGT="6.12.44+deb13-amd64"
 ztarget="$(mktemp -d)"; mkdir -p "${ztarget}/var/tmp"
 zpool_dir="$(mktemp -d)"
 TARGET="${ztarget}"
@@ -70,16 +71,19 @@ in_target() {
   printf '%s\n' "$*" >>"${CAPTURE}"
   touch "${TARGET}/var/tmp/openzfs-zfsutils_2.3.0-1_amd64.deb" \
     "${TARGET}/var/tmp/openzfs-zfs-modules-${KPIN}_2.3.0-1_amd64.deb" \
+    "${TARGET}/var/tmp/openzfs-zfs-modules-${KTGT}_2.3.0-1_amd64.deb" \
     "${TARGET}/var/tmp/openzfs-zfs-test_2.3.0-1_amd64.deb" \
     "${TARGET}/var/tmp/openzfs-pam-zfs-key_2.3.0-1_amd64.deb"
 }
-KERNEL_PINNED="${KPIN}" ZFS_DEB_POOL="${zpool_dir}" install_zfs_from_source
+KERNEL_PINNED="${KPIN}" KERNEL_TARGET="${KTGT}" ZFS_DEB_POOL="${zpool_dir}" \
+  install_zfs_from_source
 zcap="$(cat "${CAPTURE}")"
 assert_contains "${zcap}" "native-deb-kmod" "pool path builds the kmod deb"
 # Debian split headers: configure src must be the -common dir (linux/objtool.h
 # lives there — arch-dir src silently drops HAVE_STACK_FRAME_NON_STANDARD_ASM
 # and the icp .S assembly dies on a duplicate macro), obj the arch dir.
 KPIN_COMMON="${KPIN%-*}-common"
+KTGT_COMMON="${KTGT%-*}-common"
 assert_contains "${zcap}" "--with-linux=/usr/src/linux-headers-${KPIN_COMMON}" \
   "kmod build configures src against the PINNED kernel's COMMON headers"
 assert_contains "${zcap}" "--with-linux-obj=/usr/src/linux-headers-${KPIN}" \
@@ -91,10 +95,18 @@ assert_contains "${zcap}" "openzfs-zfs-modules-${KPIN}" \
 # overriding the cfg_flags pin — all three must ride the make invocation.
 assert_contains "${zcap}" "native-deb-kmod KVERS='${KPIN}' KSRC='/usr/src/linux-headers-${KPIN_COMMON}' KOBJ='/usr/src/linux-headers-${KPIN}'" \
   "kmod make passes KVERS + KSRC(common) + KOBJ(arch) so the deb targets the PINNED kernel"
-if [[ -e "${zpool_dir}/openzfs-zfs-modules-${KPIN}_2.3.0-1_amd64.deb" ]]; then
-  echo "  ok: kmod deb copied into the pool (filter admits zfs-modules)"
+# Kernel skew (security suite past the stock ISO): a SECOND kmod deb must be
+# built for the TARGET kernel the pool metapackage resolves to — that is the
+# kernel the installed system boots.
+assert_contains "${zcap}" "native-deb-kmod KVERS='${KTGT}' KSRC='/usr/src/linux-headers-${KTGT_COMMON}' KOBJ='/usr/src/linux-headers-${KTGT}'" \
+  "skewed pool also builds the kmod deb for the TARGET kernel"
+assert_contains "${zcap}" "modinfo -F vermagic" \
+  "each kmod deb's packaged .ko is vermagic-checked against its KVERS"
+if [[ -e "${zpool_dir}/openzfs-zfs-modules-${KPIN}_2.3.0-1_amd64.deb" &&
+  -e "${zpool_dir}/openzfs-zfs-modules-${KTGT}_2.3.0-1_amd64.deb" ]]; then
+  echo "  ok: both kmod debs copied into the pool (filter admits zfs-modules)"
 else
-  echo "  FAIL: kmod deb not pooled (filter still excludes zfs-modules)" >&2
+  echo "  FAIL: kmod deb(s) not pooled (filter still excludes zfs-modules)" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 if [[ -e "${zpool_dir}/openzfs-zfs-test_2.3.0-1_amd64.deb" ||
@@ -103,6 +115,22 @@ if [[ -e "${zpool_dir}/openzfs-zfs-test_2.3.0-1_amd64.deb" ||
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
   echo "  ok: test/pam debs still filtered out of the pool"
+fi
+rm -rf "${ztarget}" "${zpool_dir}"; rm -f "${CAPTURE}"
+
+# No skew (target kernel == pin): exactly ONE kmod build, not a duplicate.
+CAPTURE="$(mktemp)"
+ztarget="$(mktemp -d)"; mkdir -p "${ztarget}/var/tmp"
+zpool_dir="$(mktemp -d)"
+TARGET="${ztarget}"
+KERNEL_PINNED="${KPIN}" KERNEL_TARGET="${KPIN}" ZFS_DEB_POOL="${zpool_dir}" \
+  install_zfs_from_source
+n="$(grep -c "native-deb-kmod" "${CAPTURE}")"
+if [[ "${n}" == "1" ]]; then
+  echo "  ok: pin == target dedupes to a single kmod build"
+else
+  echo "  FAIL: pin == target ran ${n} kmod builds (want 1)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 rm -rf "${ztarget}" "${zpool_dir}"; rm -f "${CAPTURE}"
 
@@ -117,6 +145,17 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
+# ...and without KERNEL_TARGET (pin set) equally fatal.
+rc=0
+(TARGET="$(mktemp -d)" ZFS_DEB_POOL="$(mktemp -d)" KERNEL_PINNED="${KPIN}" \
+  install_zfs_from_source) >/dev/null 2>&1 || rc=$?
+if ((rc != 0)); then
+  echo "  ok: ZFS_DEB_POOL without KERNEL_TARGET is fatal"
+else
+  echo "  FAIL: pool build ran without a target kernel" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
 # --- install_zfs_offline: prebuilt kmod in, dkms deferred to firstboot --------
 # shellcheck disable=SC2034  # consumed by the sourced install_zfs_offline
 ZFS_UPSTREAM_PACKAGES=(openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed)
@@ -125,6 +164,7 @@ MOK_CRT="/var/lib/dkms/mok.pub"
 store="$(mktemp -d)"
 mkdir -p "${store}/pool"
 echo "${KPIN}" >"${store}/KERNEL_PINNED"
+echo "${KTGT}" >"${store}/KERNEL_TARGET"
 : >"${store}/pool/openzfs-zfs-dkms_2.3.0-1_amd64.deb"
 CACHE_REPO_DIR="${store}"
 otarget="$(mktemp -d)"
@@ -138,8 +178,17 @@ in_target() { printf '%s\n' "$*" >>"${CAPTURE}"; }
 stage_firstboot_runner() { mkdir -p "${TARGET}/usr/lib/hypr-deb/firstboot.d"; }
 install_zfs_offline
 ocap="$(cat "${CAPTURE}")"
-assert_contains "${ocap}" "openzfs-zfs-modules-${KPIN}" \
-  "offline install pulls the PREBUILT kmod deb for the pinned kernel"
+# The installed system boots the pool metapackage's kernel (KERNEL_TARGET),
+# not the live pin — installing the pinned kmod would leave the boot kernel
+# without zfs and drag a second linux-image in via the kmod deb's Depends.
+assert_contains "${ocap}" "openzfs-zfs-modules-${KTGT}" \
+  "offline install pulls the PREBUILT kmod deb for the TARGET kernel"
+if [[ "${ocap}" == *"openzfs-zfs-modules-${KPIN}"* ]]; then
+  echo "  FAIL: offline install pulled the PINNED kernel's kmod (boot kernel is the target's)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: pinned kernel's kmod stays out of the target (live-only)"
+fi
 # The firstboot dkms job runs after the wired store is gone: its deb's
 # Depends that nothing else installs must land in THIS transaction.
 assert_contains "${ocap}" "file lsb-release libc6-dev" \
@@ -162,7 +211,7 @@ if [[ "${ocap}" == *kmodsign* ]]; then
 else
   echo "  ok: no kmodsign call (binary absent on Debian)"
 fi
-assert_contains "${ocap}" "depmod '${KPIN}'" "depmod runs for the pinned kernel"
+assert_contains "${ocap}" "depmod '${KTGT}'" "depmod runs for the target kernel"
 # Signing/depmod ride the SAME in_target script as the install, so they finish
 # before install_zfs_offline returns — i.e. before configure_zfs_boot_support's
 # update-initramfs later in phase_system.
@@ -197,6 +246,7 @@ rm -rf "${otarget}" "${store}"; rm -f "${CAPTURE}"
 # on the left of ||, so an in-shell subshell cannot reproduce the death.
 pstore="$(mktemp -d)"; mkdir -p "${pstore}/pool"
 echo "${KPIN}" >"${pstore}/KERNEL_PINNED"
+echo "${KTGT}" >"${pstore}/KERNEL_TARGET"
 out="$(CACHE_REPO_DIR="${pstore}" TARGET="$(mktemp -d)" HERE="${HERE}" bash -c '
   set -euo pipefail
   source "${HERE}/../scripts/40-system.sh"
@@ -212,15 +262,15 @@ rm -rf "${pstore}"
 assert_contains "${out}" "openzfs-zfs-dkms deb not in the offline pool" \
   "empty pool dies at the named fatal, not silently at the compgen assignment"
 
-# A store without KERNEL_PINNED is broken -> fatal (no silent dkms fallback).
+# A store without KERNEL_TARGET is broken -> fatal (no silent dkms fallback).
 badstore="$(mktemp -d)"; mkdir -p "${badstore}/pool"
 rc=0
 (CACHE_REPO_DIR="${badstore}" TARGET="$(mktemp -d)" install_zfs_offline) \
   >/dev/null 2>&1 || rc=$?
 if ((rc != 0)); then
-  echo "  ok: offline install without KERNEL_PINNED is fatal"
+  echo "  ok: offline install without KERNEL_TARGET is fatal"
 else
-  echo "  FAIL: offline install proceeded without a kernel pin" >&2
+  echo "  FAIL: offline install proceeded without a target kernel" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 rm -rf "${badstore}"
