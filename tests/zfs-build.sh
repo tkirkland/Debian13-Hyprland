@@ -76,15 +76,21 @@ in_target() {
 KERNEL_PINNED="${KPIN}" ZFS_DEB_POOL="${zpool_dir}" install_zfs_from_source
 zcap="$(cat "${CAPTURE}")"
 assert_contains "${zcap}" "native-deb-kmod" "pool path builds the kmod deb"
-assert_contains "${zcap}" "--with-linux=/usr/src/linux-headers-${KPIN}" \
-  "kmod build configures against the PINNED kernel's headers"
+# Debian split headers: configure src must be the -common dir (linux/objtool.h
+# lives there — arch-dir src silently drops HAVE_STACK_FRAME_NON_STANDARD_ASM
+# and the icp .S assembly dies on a duplicate macro), obj the arch dir.
+KPIN_COMMON="${KPIN%-*}-common"
+assert_contains "${zcap}" "--with-linux=/usr/src/linux-headers-${KPIN_COMMON}" \
+  "kmod build configures src against the PINNED kernel's COMMON headers"
+assert_contains "${zcap}" "--with-linux-obj=/usr/src/linux-headers-${KPIN}" \
+  "kmod build configures obj against the PINNED kernel's arch headers"
 assert_contains "${zcap}" "openzfs-zfs-modules-${KPIN}" \
   "pool path asserts the pinned kmod deb was produced"
 # Upstream debian/rules defaults KVERS to the BUILD HOST's uname -r and its
-# module build re-configures with --with-linux=$(KSRC), overriding the
-# cfg_flags pin — both must ride the make invocation explicitly.
-assert_contains "${zcap}" "native-deb-kmod KVERS='${KPIN}' KSRC='/usr/src/linux-headers-${KPIN}'" \
-  "kmod make passes KVERS + KSRC so the deb targets the PINNED kernel, not uname -r"
+# module build re-configures with --with-linux=$(KSRC) --with-linux-obj=$(KOBJ),
+# overriding the cfg_flags pin — all three must ride the make invocation.
+assert_contains "${zcap}" "native-deb-kmod KVERS='${KPIN}' KSRC='/usr/src/linux-headers-${KPIN_COMMON}' KOBJ='/usr/src/linux-headers-${KPIN}'" \
+  "kmod make passes KVERS + KSRC(common) + KOBJ(arch) so the deb targets the PINNED kernel"
 if [[ -e "${zpool_dir}/openzfs-zfs-modules-${KPIN}_2.3.0-1_amd64.deb" ]]; then
   echo "  ok: kmod deb copied into the pool (filter admits zfs-modules)"
 else

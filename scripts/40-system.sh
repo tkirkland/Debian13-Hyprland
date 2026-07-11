@@ -431,11 +431,21 @@ install_zfs_from_source() {
   # kmod deb is built for exactly the live/target kernel — never whatever
   # configure's uname-r-based default would find in the buildroot. Empty on
   # the install path, keeping that script byte-identical.
-  local cfg_flags=""
+  #
+  # Debian SPLITS headers: generic files (incl. linux/objtool.h) live in
+  # linux-headers-<ver>-common, arch/config files in linux-headers-<ver>-<arch>.
+  # configure must get src=common + obj=arch (what the /lib/modules/<ver>/
+  # {source,build} symlinks encode). Passing the arch dir as --with-linux makes
+  # zfs's objtool asm-macro check grep a nonexistent $LINUX/include/linux/
+  # objtool.h, silently unset HAVE_STACK_FRAME_NON_STANDARD_ASM, and define a
+  # duplicate .macro that breaks every icp .S assembly.
+  local cfg_flags="" ksrc_common=""
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
     [[ -n "${KERNEL_PINNED:-}" ]] ||
       fatal "ZFS_DEB_POOL set but KERNEL_PINNED unset (step_pin_kernel must run first)."
-    cfg_flags=" --with-linux=/usr/src/linux-headers-${KERNEL_PINNED}"
+    ksrc_common="/usr/src/linux-headers-${KERNEL_PINNED%-*}-common"
+    cfg_flags=" --with-linux=${ksrc_common}"
+    cfg_flags+=" --with-linux-obj=/usr/src/linux-headers-${KERNEL_PINNED}"
   fi
   # Tags include dev-cycle markers (zfs-X.Y.99) that outrank real releases
   # in a version sort; the GitHub API names the actual latest release.
@@ -482,13 +492,15 @@ install_zfs_from_source() {
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
     # Also build the prebuilt kernel-module deb for the pinned kernel
     # (issue #110). Pooled only — the throwaway buildroot never installs it.
-    # KVERS/KSRC must be passed EXPLICITLY: upstream debian/rules defaults
-    # KVERS to the build host's 'uname -r', and its module build re-runs
-    # ./configure with --with-linux=$(KSRC), clobbering cfg_flags' pin.
+    # KVERS/KSRC/KOBJ must be passed EXPLICITLY: upstream debian/rules
+    # defaults KVERS to the build host's 'uname -r', and its module build
+    # re-runs ./configure with --with-linux=$(KSRC) --with-linux-obj=$(KOBJ),
+    # clobbering cfg_flags' pin. KSRC/KOBJ carry the same common/arch header
+    # split as cfg_flags above (see that comment for why).
     # The ls assertion is the hard guard — a wrong-kernel build produces a
     # differently-named deb and dies here.
     zfs_script+="
-    make -j\"${jobs}\" native-deb-kmod KVERS='${KERNEL_PINNED}' KSRC='/usr/src/linux-headers-${KERNEL_PINNED}'
+    make -j\"${jobs}\" native-deb-kmod KVERS='${KERNEL_PINNED}' KSRC='${ksrc_common}' KOBJ='/usr/src/linux-headers-${KERNEL_PINNED}'
     ls /var/tmp/openzfs-zfs-modules-${KERNEL_PINNED}_*.deb >/dev/null 2>&1 ||
       { echo 'required package not built: openzfs-zfs-modules-${KERNEL_PINNED}' >&2; exit 1; }"
   fi
