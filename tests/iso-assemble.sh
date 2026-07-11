@@ -110,8 +110,8 @@ assert_contains "${with_ssh}" "apt-get install -y --no-install-recommends git op
   "installs the requested live extras"
 assert_contains "${with_ssh}" "Dir::Etc::SourceList=/etc/apt/sources.list.d/zz-live-extras-build.list" \
   "live-extras apt uses an explicit online source list, not the build-absent live medium"
-assert_contains "${with_ssh}" "deb http://deb.debian.org/debian trixie main" \
-  "live-extras installs from the online Debian mirror at build time"
+assert_contains "${with_ssh}" "deb http://deb.debian.org/debian trixie main contrib" \
+  "live-extras source includes contrib (zfs-dkms/zfsutils-linux live there, not main)"
 if [[ "${with_ssh}" != *"/run/live/medium"* ]]; then
   echo "  ok: live-extras install does not reference the build-absent live medium"
 else

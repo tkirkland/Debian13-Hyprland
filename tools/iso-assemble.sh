@@ -42,7 +42,9 @@ LIVE_EXTRA_PACKAGES="${LIVE_EXTRA_PACKAGES:-git openssh-client openssh-server}"
 # root's own sources point at the install medium (file:/run/live/medium/...),
 # which does NOT exist at build time — so we install from this mirror instead
 # (the build host is online; this provisions the LIVE env, not the offline target).
-LIVE_EXTRA_APT_SOURCE="${LIVE_EXTRA_APT_SOURCE:-deb http://deb.debian.org/debian trixie main}"
+# contrib is REQUIRED: the zfs bake installs zfs-dkms/zfsutils-linux, which
+# Debian ships in contrib, not main.
+LIVE_EXTRA_APT_SOURCE="${LIVE_EXTRA_APT_SOURCE:-deb http://deb.debian.org/debian trixie main contrib}"
 # Unattended autoinstall launcher dropped in the live user's home as a REAL
 # generated script (NOT a symlink — a symlink cannot carry flags). It runs the
 # embedded installer fully hands-off via `sudo env ...`. The password is embedded
