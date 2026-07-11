@@ -316,8 +316,18 @@ detect_live_environment() {
 }
 
 bootstrap_live_tools() {
-  local missing=() pkg="" need_zfs_build=0 running_kernel=""
+  local missing=() pkg="" need_zfs_build=0 running_kernel="" kernel_pin=""
   running_kernel="$(uname -r)"
+  # KERNEL_PINNED (written by build-iso step_pin_kernel) names the kernel the
+  # store's prebuilt zfs artifacts were built for. A mismatch is loud but NOT
+  # fatal: the module baked into the live squashfs keeps this session working;
+  # only the offline zfs fallback below is degraded.
+  if cache_repo_exists && [[ -f "${CACHE_REPO_DIR}/KERNEL_PINNED" ]]; then
+    kernel_pin="$(<"${CACHE_REPO_DIR}/KERNEL_PINNED")"
+    [[ "${kernel_pin}" == "${running_kernel}" ]] ||
+      warn "This medium was built for kernel ${kernel_pin} but" \
+        "${running_kernel} is running — the offline zfs path may be degraded."
+  fi
   local -A pkg_probe=(
     [debootstrap]=debootstrap [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
     [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool [apt-utils]=apt-ftparchive
@@ -328,11 +338,20 @@ bootstrap_live_tools() {
     command -v "${pkg_probe[${pkg}]}" >/dev/null 2>&1 || missing+=("${pkg}")
   done
   # zfs-dkms has no binary probe of its own: a loadable module for the
-  # RUNNING kernel is the requirement. Headers must match the running
-  # kernel, not the archive's newest (see LIVE_KERNEL_HEADERS).
+  # RUNNING kernel is the requirement (normally short-circuited: our ISOs
+  # bake the module into the live squashfs at build time). Headers must match
+  # the running kernel, not the archive's newest (see LIVE_KERNEL_HEADERS).
   if ! modinfo zfs >/dev/null 2>&1; then
     need_zfs_build=1
-    missing+=(zfs-dkms "${LIVE_KERNEL_HEADERS}")
+    # Offline store whose pin matches the running kernel: install the PREBUILT
+    # upstream kmod deb from the pool — no compile. Any other case (no store,
+    # pin mismatch, online) keeps the dkms path.
+    if [[ -n "${kernel_pin}" && "${kernel_pin}" == "${running_kernel}" ]] &&
+      ! ((NETWORK_AVAILABLE)); then
+      missing+=("openzfs-zfs-modules-${running_kernel}")
+    else
+      missing+=(zfs-dkms "${LIVE_KERNEL_HEADERS}")
+    fi
   fi
   ((${#missing[@]} == 0)) && {
     info "All live tools present."
