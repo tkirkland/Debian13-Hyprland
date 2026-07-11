@@ -361,9 +361,13 @@ booted target installs entirely from the on-ISO package store at
   online `apt update`s work. The store is **not** copied into the target.
 - **ZFS compiles nowhere on this path**: the live squashfs ships a zfs module
   prebaked for its own kernel (dkms ran once at ISO build), and the target
-  installs the prebuilt `openzfs-zfs-modules-<kver>` deb from the pool. All
-  prebuilt ZFS artifacts target ONE kernel, recorded in the store's
-  `KERNEL_PINNED` and enforced at build time (live kernel == pool kernel).
+  installs the prebuilt `openzfs-zfs-modules-<kver>` deb from the pool. Two
+  kernels are recorded in the store: `KERNEL_PINNED` (the stock ISO's live
+  kernel, asserted present in the pool at build time) and `KERNEL_TARGET`
+  (the kernel the pool's `linux-image-amd64` metapackage resolves to — often
+  newer, since trixie-security kernels move between point releases). A
+  prebuilt kmod deb is built for each (one build when they match); the live
+  session uses the pinned one, the installed system the target one.
 
 Freshness/version checking is a **build-time** concern: `deb_needs_rebuild`
 recompiles a component at ISO-creation only when its release tag is newer than

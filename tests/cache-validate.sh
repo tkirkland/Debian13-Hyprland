@@ -53,9 +53,12 @@ for z in openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed
   seed_pkg "${z}"
 done
 # Prebuilt-kmod contract (issue #110): offline also requires the store's
-# KERNEL_PINNED file and the prebuilt openzfs-zfs-modules-<kver> deb indexed.
+# KERNEL_PINNED + KERNEL_TARGET files and a prebuilt openzfs-zfs-modules-<kver>
+# deb indexed for EACH named kernel (live pin and pool-metapackage target).
 seed_pkg "openzfs-zfs-modules-6.12.38+deb13-amd64"
+seed_pkg "openzfs-zfs-modules-6.12.44+deb13-amd64"
 echo "6.12.38+deb13-amd64" >"${tmp}/repo/KERNEL_PINNED"
+echo "6.12.44+deb13-amd64" >"${tmp}/repo/KERNEL_TARGET"
 out="$(run_validate)"
 assert_contains "${out}" "Cache repo valid" "complete repo passes (offline contract)"
 
@@ -64,6 +67,20 @@ mv "${tmp}/repo/KERNEL_PINNED" "${tmp}/repo/KERNEL_PINNED.gone"
 out="$(run_validate 2>&1 || true)"
 assert_contains "${out}" "KERNEL_PINNED missing" "offline requires the store's kernel pin"
 mv "${tmp}/repo/KERNEL_PINNED.gone" "${tmp}/repo/KERNEL_PINNED"
+
+# Offline, KERNEL_TARGET removed -> fails naming it.
+mv "${tmp}/repo/KERNEL_TARGET" "${tmp}/repo/KERNEL_TARGET.gone"
+out="$(run_validate 2>&1 || true)"
+assert_contains "${out}" "KERNEL_TARGET missing" "offline requires the store's target kernel"
+mv "${tmp}/repo/KERNEL_TARGET.gone" "${tmp}/repo/KERNEL_TARGET"
+
+# Offline, the TARGET kernel's kmod deb dropped from the index -> fails naming
+# that specific kernel (a pin-only store from before the skew fix is rejected).
+sed -i '/openzfs-zfs-modules-6.12.44/,+2d' "${pkgindex}"
+out="$(run_validate 2>&1 || true)"
+assert_contains "${out}" "openzfs-zfs-modules-6.12.44+deb13-amd64 deb missing" \
+  "offline requires a prebuilt kmod deb for the TARGET kernel, not just the pin"
+seed_pkg "openzfs-zfs-modules-6.12.44+deb13-amd64"
 
 # Gating: the upstream OpenZFS assertion fires ONLY offline. With the openzfs
 # debs removed from the index, the OFFLINE validate must fail naming them, but
@@ -83,8 +100,17 @@ out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
   NETWORK_AVAILABLE=0; cache_validate' 2>&1 || true)"
 assert_contains "${out}" "upstream OpenZFS deb missing" "offline requires upstream OpenZFS debs"
-assert_contains "${out}" "openzfs-zfs-modules deb missing" \
-  "offline requires the prebuilt kmod deb indexed"
+# With the kernel files present but no kmod debs indexed, BOTH named kernels
+# must be flagged (the per-kver check needs the store's kernel names to run).
+echo "6.12.38+deb13-amd64" >"${zfsless}/KERNEL_PINNED"
+echo "6.12.44+deb13-amd64" >"${zfsless}/KERNEL_TARGET"
+out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
+  NETWORK_AVAILABLE=0; cache_validate' 2>&1 || true)"
+assert_contains "${out}" "openzfs-zfs-modules-6.12.38+deb13-amd64 deb missing" \
+  "offline requires the prebuilt kmod deb for the pinned kernel indexed"
+assert_contains "${out}" "openzfs-zfs-modules-6.12.44+deb13-amd64 deb missing" \
+  "offline requires the prebuilt kmod deb for the target kernel indexed"
 out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
   NETWORK_AVAILABLE=1; cache_validate' 2>&1 || true)"

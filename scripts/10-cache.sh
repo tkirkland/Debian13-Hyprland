@@ -320,13 +320,22 @@ cache_validate() {
         grep -qx "Package: ${want}" "${pkg_index}" ||
           problems+=("upstream OpenZFS deb missing from pool index: ${want}")
       done
-      # Prebuilt-kmod contract (issue #110): the store must name the kernel it
-      # was built for (KERNEL_PINNED, written by build-iso step_pin_kernel) and
-      # carry the prebuilt module deb install_zfs_offline consumes.
+      # Prebuilt-kmod contract (issue #110): the store must name both kernels
+      # it was built for — KERNEL_PINNED (the live kernel, consumed by the
+      # preflight prebuilt branch) and KERNEL_TARGET (the pool metapackage's
+      # kernel, consumed by install_zfs_offline; often newer than the pin) —
+      # and carry a prebuilt module deb for each (equal when no skew).
       [[ -f "${CACHE_REPO_DIR}/KERNEL_PINNED" ]] ||
         problems+=("KERNEL_PINNED missing from store: ${CACHE_REPO_DIR}/KERNEL_PINNED")
-      grep -q "^Package: openzfs-zfs-modules-" "${pkg_index}" ||
-        problems+=("prebuilt openzfs-zfs-modules deb missing from pool index")
+      [[ -f "${CACHE_REPO_DIR}/KERNEL_TARGET" ]] ||
+        problems+=("KERNEL_TARGET missing from store: ${CACHE_REPO_DIR}/KERNEL_TARGET")
+      local zkver=""
+      for zkver in "$(cat "${CACHE_REPO_DIR}/KERNEL_PINNED" 2>/dev/null)" \
+        "$(cat "${CACHE_REPO_DIR}/KERNEL_TARGET" 2>/dev/null)"; do
+        [[ -n "${zkver}" ]] || continue
+        grep -qx "Package: openzfs-zfs-modules-${zkver}" "${pkg_index}" ||
+          problems+=("prebuilt openzfs-zfs-modules-${zkver} deb missing from pool index")
+      done
     fi
   fi
 

@@ -93,14 +93,17 @@ echo "test: probe_stock_kernel_version reads the live kernel from the stock ISO"
   echo "  ok: failed vmlinuz extraction is a probe failure"
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
-echo "test: step_pin_kernel enforces live kernel == pool kernel and stores the pin"
+echo "test: step_pin_kernel enforces live kernel == pool kernel and stores pin + target"
 # shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_pin_kernel
 (
   ISO_WORKSPACE="$(mktemp -d)"; CACHE_DIR="${ISO_WORKSPACE}/cache"
-  POOL="${CACHE_DIR}/repo/pool"; STOCK_ISO=/stock.iso
+  POOL="${CACHE_DIR}/repo/pool"; STOCK_ISO=/stock.iso; ARCH=amd64
   mkdir -p "${POOL}"
   xorriso() { : >"${@: -1}"; }
   file() { printf 'bzImage, version 6.12.38+deb13-amd64 (x) #1 SMP\n'; }
+  # The pooled linux-image-amd64 metapackage resolves the TARGET kernel via
+  # its Depends — security-suite skew means it can outrun the live pin.
+  dpkg-deb() { echo "linux-image-6.12.44+deb13-amd64 (= 6.12.44-1)"; }
   info() { :; }
   rc=0
   # Pool carries a DIFFERENT kernel image -> fatal (stale stock ISO).
@@ -111,14 +114,32 @@ echo "test: step_pin_kernel enforces live kernel == pool kernel and stores the p
   else
     echo "  FAIL: mismatched pool kernel accepted" >&2
   fi
-  # Matching image present -> pin exported to the store, one line.
+  # Pin image present but no metapackage -> fatal (target unresolvable).
   : >"${POOL}/linux-image-6.12.38+deb13-amd64_6.12.38-1_amd64.deb"
-  step_pin_kernel >/dev/null 2>&1 || { echo "  FAIL: step_pin_kernel failed on a matching pool" >&2; exit 1; }
+  if (step_pin_kernel) >/dev/null 2>&1; then
+    echo "  FAIL: missing linux-image-amd64 metapackage accepted" >&2; rc=1
+  else
+    echo "  ok: pool without the linux-image-amd64 metapackage is fatal"
+  fi
+  # Metapackage resolves to a kernel whose image deb is NOT pooled -> fatal.
+  : >"${POOL}/linux-image-amd64_6.12.44-1_amd64.deb"
+  if (step_pin_kernel) >/dev/null 2>&1; then
+    echo "  FAIL: metapackage kernel absent from pool accepted" >&2; rc=1
+  else
+    echo "  ok: metapackage kernel missing its pooled image deb is fatal"
+  fi
+  # Complete pool -> pin AND target written to the store.
+  : >"${POOL}/linux-image-6.12.44+deb13-amd64_6.12.44-1_amd64.deb"
+  step_pin_kernel >/dev/null 2>&1 || { echo "  FAIL: step_pin_kernel failed on a complete pool" >&2; exit 1; }
   got="$(cat "${CACHE_DIR}/repo/KERNEL_PINNED")"
+  gott="$(cat "${CACHE_DIR}/repo/KERNEL_TARGET")"
   rm -rf "${ISO_WORKSPACE}"
   [[ "${got}" == "6.12.38+deb13-amd64" ]] || {
     echo "  FAIL: KERNEL_PINNED store file holds '${got}'" >&2; exit 1; }
   echo "  ok: pin written to the store as KERNEL_PINNED"
+  [[ "${gott}" == "6.12.44+deb13-amd64" ]] || {
+    echo "  FAIL: KERNEL_TARGET store file holds '${gott}'" >&2; exit 1; }
+  echo "  ok: metapackage kernel written to the store as KERNEL_TARGET"
   exit "${rc}"
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
@@ -176,11 +197,12 @@ echo "test: step_runtime_closure skips deps already in the pool"
   exit "${rc}"
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
-echo "test: step_zfs resume guard rebuilds a stale pool missing the pinned kmod deb (issue #110)"
+echo "test: step_zfs resume guard rebuilds a stale pool missing either kmod deb (issue #110)"
 # shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_zfs
 (
   POOL="$(mktemp -d)"
   KERNEL_PINNED="6.12.38+deb13-amd64"
+  KERNEL_TARGET="6.12.44+deb13-amd64"
   calls="$(mktemp)"
   # Predefining install_zfs_from_source skips step_zfs's lazy source of
   # 40-system.sh; the stub just records that the rebuild path was taken.
@@ -189,16 +211,18 @@ echo "test: step_zfs resume guard rebuilds a stale pool missing the pinned kmod 
   in_target() { :; }
   info() { :; }
   : >"${POOL}/openzfs-zfs-dkms_2.3.0-1_all.deb"
-  step_zfs   # dkms deb pooled but NO kmod deb for the pin -> must rebuild
+  step_zfs   # dkms deb pooled but NO kmod debs -> must rebuild
   : >"${POOL}/openzfs-zfs-modules-${KERNEL_PINNED}_2.3.0-1_amd64.deb"
-  step_zfs   # complete pool -> resume skip, no second build
+  step_zfs   # pin kmod only, TARGET kmod missing (pre-skew-fix pool) -> rebuild
+  : >"${POOL}/openzfs-zfs-modules-${KERNEL_TARGET}_2.3.0-1_amd64.deb"
+  step_zfs   # complete pool -> resume skip, no third build
   n="$(wc -l <"${calls}")"
   rm -rf "${POOL}"; rm -f "${calls}"
-  if [[ "${n}" == "1" ]]; then
-    echo "  ok: stale pool (no pinned kmod deb) rebuilds once; complete pool skips"
+  if [[ "${n}" == "2" ]]; then
+    echo "  ok: pool missing any kmod deb rebuilds; complete pool skips"
     exit 0
   fi
-  echo "  FAIL: install_zfs_from_source ran ${n}x (want 1: rebuild stale, skip complete)" >&2
+  echo "  FAIL: install_zfs_from_source ran ${n}x (want 2: rebuild stale twice, skip complete)" >&2
   exit 1
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 

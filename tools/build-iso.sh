@@ -233,6 +233,29 @@ step_pin_kernel() {
       "kernel differs from the archive kernel the pool carries; fetch the" \
       "current point-release stock ISO."
   printf '%s\n' "${KERNEL_PINNED}" >"${CACHE_DIR}/repo/KERNEL_PINNED"
+  # The TARGET boots whatever the pool's linux-image-amd64 metapackage
+  # resolves to — trixie-security routinely carries a NEWER kernel than the
+  # stock ISO's live kernel (live images are only respun at point releases),
+  # so the pin alone cannot describe the installed system. Read the pooled
+  # metapackage's Depends, record the resolved version as KERNEL_TARGET, and
+  # let step_zfs build a prebuilt zfs kmod deb for BOTH kernels (deduped when
+  # equal). install_zfs_offline installs the KERNEL_TARGET one.
+  local meta_deb="" dep=""
+  meta_deb="$(compgen -G "${POOL}/linux-image-${ARCH}_*.deb" | head -n1 || true)"
+  [[ -n "${meta_deb}" ]] ||
+    fatal "pool carries no linux-image-${ARCH} metapackage — cannot resolve" \
+      "the target kernel (cache_populate_debs pools the TARGET_BASE closure)."
+  dep="$(dpkg-deb -f "${meta_deb}" Depends |
+    grep -oE "linux-image-[0-9][^, ]*-${ARCH}" | head -n1 || true)"
+  [[ -n "${dep}" ]] ||
+    fatal "cannot parse the target kernel from ${meta_deb##*/} Depends"
+  KERNEL_TARGET="${dep#linux-image-}"
+  export KERNEL_TARGET
+  info "[build] target kernel (pool metapackage): ${KERNEL_TARGET}"
+  compgen -G "${POOL}/linux-image-${KERNEL_TARGET}_*.deb" >/dev/null ||
+    fatal "pool metapackage resolves to linux-image-${KERNEL_TARGET} but the" \
+      "pool does not carry that image deb (closure incomplete)."
+  printf '%s\n' "${KERNEL_TARGET}" >"${CACHE_DIR}/repo/KERNEL_TARGET"
 }
 
 # 3) Build the source stack to pooled .debs, freshness-gated and chroot-correct.
@@ -329,10 +352,12 @@ step_zfs() {
     || fatal "in_target is not chroot-backed after sourcing 40-system.sh; refusing to build on host."
   # Resume support: skip the (slow) OpenZFS source build if its debs are already
   # pooled. rm the openzfs-*.deb from the pool to force a rebuild. The prebuilt
-  # kmod deb for the PINNED kernel must be pooled too (issue #110) — a pool from
-  # before the kmod deb existed, or built for another kernel, is rebuilt.
+  # kmod debs for the PINNED (live) and TARGET (pool metapackage) kernels must
+  # both be pooled too (issue #110) — a pool from before the kmod debs existed,
+  # or built for other kernels, is rebuilt.
   if compgen -G "${POOL}/openzfs-zfs-dkms_*.deb" >/dev/null &&
-    compgen -G "${POOL}/openzfs-zfs-modules-${KERNEL_PINNED}_*.deb" >/dev/null; then
+    compgen -G "${POOL}/openzfs-zfs-modules-${KERNEL_PINNED}_*.deb" >/dev/null &&
+    compgen -G "${POOL}/openzfs-zfs-modules-${KERNEL_TARGET}_*.deb" >/dev/null; then
     info "[build] reusing pooled OpenZFS debs (skip ZFS source build)"
     return 0
   fi
@@ -340,12 +365,13 @@ step_zfs() {
   # module) probes for a kernel build dir at /lib/modules/<ver>/build. The
   # original installer builds ZFS in the target, which already carries
   # linux-headers-amd64 via TARGET_BASE_PACKAGES; the buildroot does not, so
-  # install it here. The metapackage matches linux-image-amd64 in the pool.
+  # install headers here — explicitly for BOTH kmod-build kernels (the pinned
+  # live kernel from the release suite, the target kernel from security).
   info "[build] installing kernel headers for the OpenZFS configure probe"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y linux-headers-amd64
+    apt-get install -y linux-headers-${KERNEL_PINNED} linux-headers-${KERNEL_TARGET}
   "
   info "[build] building OpenZFS into the pool ${POOL}"
   ZFS_DEB_POOL="${POOL}" install_zfs_from_source
