@@ -184,6 +184,18 @@ assert_contains "$(cat "${job}" 2>/dev/null)" \
   "firstboot job installs the staged dkms deb"
 rm -rf "${otarget}" "${store}"; rm -f "${CAPTURE}"
 
+# A pool without the dkms deb must reach the NAMED fatal even under the
+# installer's own errexit/pipefail regime — compgen exits 1 on an empty glob,
+# which unguarded would kill the assignment before the fatal prints.
+pstore="$(mktemp -d)"; mkdir -p "${pstore}/pool"
+echo "${KPIN}" >"${pstore}/KERNEL_PINNED"
+CAPTURE="$(mktemp)"
+out="$( (set -e; CACHE_REPO_DIR="${pstore}" TARGET="$(mktemp -d)" \
+  install_zfs_offline) 2>&1 )" || true
+rm -rf "${pstore}"; rm -f "${CAPTURE}"
+assert_contains "${out}" "openzfs-zfs-dkms deb not in the offline pool" \
+  "empty pool dies at the named fatal, not silently at the compgen assignment"
+
 # A store without KERNEL_PINNED is broken -> fatal (no silent dkms fallback).
 badstore="$(mktemp -d)"; mkdir -p "${badstore}/pool"
 rc=0

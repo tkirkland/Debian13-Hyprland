@@ -382,7 +382,10 @@ install_zfs_offline() {
 # with --build-on-firstboot and self-disables once no jobs remain.
 stage_zfs_dkms_firstboot() {
   local deb=""
-  deb="$(compgen -G "${CACHE_REPO_DIR}/pool/openzfs-zfs-dkms_*.deb" | head -n1)"
+  # compgen exits 1 on an empty glob, which under the installer's pipefail
+  # would kill the assignment itself — || true so the fatal below gets to
+  # name the real problem (same idiom as the kpin read above).
+  deb="$(compgen -G "${CACHE_REPO_DIR}/pool/openzfs-zfs-dkms_*.deb" | head -n1)" || true
   [[ -n "${deb}" ]] ||
     fatal "openzfs-zfs-dkms deb not in the offline pool (${CACHE_REPO_DIR}/pool)."
   mkdir -p "${TARGET}/var/cache/hypr-deb"
