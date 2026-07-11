@@ -133,6 +133,45 @@ else
   echo "  FAIL: chroot payload is not valid shell" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
 
+echo "test: live_extras_chroot_script bakes the zfs module for the live kernel (issue #110)"
+kv="6.12.38+deb13-amd64"
+zfs_bake="$(live_extras_chroot_script "git" "${kv}")"
+assert_contains "${zfs_bake}" "linux-headers-${kv} zfs-dkms zfsutils-linux" \
+  "installs headers + zfs-dkms + zfsutils-linux so dkms compiles ONCE at build"
+assert_contains "${zfs_bake}" "apt-get purge -y --autoremove linux-headers-${kv}" \
+  "purges the headers (+ orphaned toolchain) after the one-time dkms build"
+if [[ "${zfs_bake}" == *"purge"*zfs-dkms* ]]; then
+  echo "  FAIL: purging zfs-dkms would dkms-remove the module it just built" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: zfs-dkms itself is kept installed (purge would remove the module)"
+fi
+assert_contains "${zfs_bake}" "ls /lib/modules/${kv}/updates/dkms/zfs.ko*" \
+  "asserts the dkms-built module survived the purge"
+assert_contains "${zfs_bake}" "depmod ${kv}" "runs depmod for the baked module"
+if bash -n <(printf '%s\n' "${zfs_bake}"); then
+  echo "  ok: zfs-bake chroot payload is valid shell"
+else
+  echo "  FAIL: zfs-bake chroot payload is not valid shell" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# Without a kernel version the payload must not grow any zfs machinery.
+no_kv="$(live_extras_chroot_script "git")"
+if [[ "${no_kv}" != *zfs-dkms* && "${no_kv}" != *depmod* ]]; then
+  echo "  ok: no kver -> no zfs bake in the payload"
+else
+  echo "  FAIL: zfs bake emitted without a kernel version" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+
+echo "test: detect_live_root_kernel expects exactly one kernel in the live root"
+kroot="$(mktemp -d)"
+mkdir -p "${kroot}/lib/modules/${kv}"
+got_kv="$(detect_live_root_kernel "${kroot}")"
+assert_eq "${kv}" "${got_kv}" "single /lib/modules entry echoed"
+mkdir -p "${kroot}/lib/modules/6.13.0-amd64"
+assert_fails "two kernels rejected" detect_live_root_kernel "${kroot}"
+assert_fails "kernel-less root rejected" detect_live_root_kernel "$(mktemp -d)"
+rm -rf "${kroot}"
+
 echo "test: build_write_iso_args replaces the live squashfs and strips d-i"
 iso_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
 assert_contains "${iso_args}" "-map" "maps a file into the ISO"
