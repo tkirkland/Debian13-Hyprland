@@ -134,6 +134,10 @@ install_zfs_offline
 ocap="$(cat "${CAPTURE}")"
 assert_contains "${ocap}" "openzfs-zfs-modules-${KPIN}" \
   "offline install pulls the PREBUILT kmod deb for the pinned kernel"
+# The firstboot dkms job runs after the wired store is gone: its deb's
+# Depends that nothing else installs must land in THIS transaction.
+assert_contains "${ocap}" "file lsb-release libc6-dev" \
+  "firstboot dkms deb's Depends installed at install time (store gone at firstboot)"
 if [[ "${ocap}" == *openzfs-zfs-dkms* ]]; then
   echo "  FAIL: offline install must not install openzfs-zfs-dkms (postinst compiles)" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))

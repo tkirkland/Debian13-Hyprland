@@ -336,6 +336,15 @@ install_zfs_offline() {
   for p in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
     [[ "${p}" == "openzfs-zfs-dkms" ]] || pkgs+=("${p}")
   done
+  # Depends of the firstboot-staged dkms deb (openzfs-zfs-dkms 2.4.3-1:
+  # dkms, file, libc6-dev | libc-dev, lsb-release, python3, debconf) that
+  # nothing else installs in the target — they used to ride the old
+  # install-time dkms transaction, and the wired store is GONE at firstboot,
+  # so they must land NOW for the staged deb to resolve entirely locally
+  # (dkms arrives via ddcci-dkms; python3/debconf are base). Sharing this
+  # transaction also apt-marks them manual below, so the Hyprland build-dep
+  # autoremove cannot reap them before firstboot.
+  pkgs+=(file lsb-release libc6-dev)
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -365,8 +374,10 @@ install_zfs_offline() {
 # but future kernel upgrades still need dkms rebuilds. Stage the pooled
 # openzfs-zfs-dkms deb in the target and register a firstboot job that installs
 # it: the one dkms compile happens in the background of an already-working boot,
-# never on the install path. Its deps (dkms, headers, toolchain) are already in
-# the target for the NVIDIA dkms path, so the job needs no network. Runs on
+# never on the install path. Its deps are already in the target — dkms via
+# ddcci-dkms, headers via linux-headers-amd64, and file/lsb-release/libc6-dev
+# installed by install_zfs_offline's own transaction — so the job needs no
+# network and no store (both are gone at firstboot). Runs on
 # EVERY offline install — stage_firstboot_runner (60-hyprland.sh) is shared
 # with --build-on-firstboot and self-disables once no jobs remain.
 stage_zfs_dkms_firstboot() {
