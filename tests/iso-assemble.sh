@@ -162,6 +162,30 @@ else
   echo "  FAIL: zfs bake emitted without a kernel version" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
 
+echo "test: install_live_extras wires the detected kernel into the payload call (issue #110)"
+# Wiring-level: the payload builder is stubbed to capture its argv, so this
+# fails if install_live_extras ever stops passing the detected kver (which
+# would silently drop the whole zfs bake while every payload test stays green).
+# shellcheck disable=SC2317  # stubs invoked indirectly by install_live_extras
+(
+  root="$(mktemp -d)"
+  mkdir -p "${root}/etc" "${root}/lib/modules/${kv}"
+  cap="$(mktemp)"
+  mount() { :; }
+  umount() { :; }
+  chroot() { :; }
+  info() { :; }
+  live_extras_chroot_script() { printf '%s:%s\n' "$#" "${2:-}" >"${cap}"; echo :; }
+  install_live_extras "${root}"
+  got="$(cat "${cap}")"
+  rm -rf "${root}"; rm -f "${cap}"
+  [[ "${got}" == "2:${kv}" ]] || {
+    echo "  FAIL: payload called with '${got}' (want packages + kver '${kv}')" >&2
+    exit 1
+  }
+  echo "  ok: detected kernel passed as the payload's kver argument"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
 echo "test: detect_live_root_kernel expects exactly one kernel in the live root"
 kroot="$(mktemp -d)"
 mkdir -p "${kroot}/lib/modules/${kv}"

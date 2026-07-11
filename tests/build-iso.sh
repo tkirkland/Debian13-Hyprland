@@ -176,6 +176,32 @@ echo "test: step_runtime_closure skips deps already in the pool"
   exit "${rc}"
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
+echo "test: step_zfs resume guard rebuilds a stale pool missing the pinned kmod deb (issue #110)"
+# shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_zfs
+(
+  POOL="$(mktemp -d)"
+  KERNEL_PINNED="6.12.38+deb13-amd64"
+  calls="$(mktemp)"
+  # Predefining install_zfs_from_source skips step_zfs's lazy source of
+  # 40-system.sh; the stub just records that the rebuild path was taken.
+  install_zfs_from_source() { echo run >>"${calls}"; }
+  assert_chrooted_in_target() { :; }
+  in_target() { :; }
+  info() { :; }
+  : >"${POOL}/openzfs-zfs-dkms_2.3.0-1_all.deb"
+  step_zfs   # dkms deb pooled but NO kmod deb for the pin -> must rebuild
+  : >"${POOL}/openzfs-zfs-modules-${KERNEL_PINNED}_2.3.0-1_amd64.deb"
+  step_zfs   # complete pool -> resume skip, no second build
+  n="$(wc -l <"${calls}")"
+  rm -rf "${POOL}"; rm -f "${calls}"
+  if [[ "${n}" == "1" ]]; then
+    echo "  ok: stale pool (no pinned kmod deb) rebuilds once; complete pool skips"
+    exit 0
+  fi
+  echo "  FAIL: install_zfs_from_source ran ${n}x (want 1: rebuild stale, skip complete)" >&2
+  exit 1
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
 echo "test: restore_build_ownership hands the workspace back to the sudo user (not left root-owned)"
 # shellcheck disable=SC2317  # chown stub invoked indirectly by restore_build_ownership
 (
