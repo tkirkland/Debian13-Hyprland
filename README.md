@@ -548,7 +548,8 @@ Source policy:
   a prebuilt kernel-module deb for the pinned live/target kernel (the store's
   `KERNEL_PINNED`; the build fails if the stock ISO's kernel and the pool's
   diverge) — come from the on-ISO repo: the modules install prebuilt and are
-  kmodsign-ed at install time, and `openzfs-zfs-dkms` arrives dormant via a
+  MOK-signed (via linux-kbuild's `sign-file`, exactly as dkms would) at
+  install time, and `openzfs-zfs-dkms` arrives dormant via a
   first-boot job so future kernel upgrades still get dkms rebuilds. A
   networked install builds everything in the chroot instead. The pool itself
   is created by the live session's 2.3.x, so its feature set stays

@@ -135,16 +135,26 @@ if [[ "${ocap}" == *openzfs-zfs-dkms* ]]; then
 else
   echo "  ok: openzfs-zfs-dkms kept out of the offline install transaction"
 fi
-assert_contains "${ocap}" "kmodsign sha512 '${MOK_KEY}' '${MOK_CRT}'" \
+assert_contains "${ocap}" "sha512 '${MOK_KEY}' '${MOK_CRT}'" \
   "prebuilt modules are MOK-signed in the target"
+assert_contains "${ocap}" "/usr/lib/linux-kbuild-*/scripts/sign-file" \
+  "signing uses linux-kbuild's sign-file (dkms's own tool)"
+# kmodsign is Ubuntu-only (their sbsigntool addition) — it does not exist on
+# Debian, so the script must never call it.
+if [[ "${ocap}" == *kmodsign* ]]; then
+  echo "  FAIL: kmodsign does not exist on Debian; sign with sign-file" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no kmodsign call (binary absent on Debian)"
+fi
 assert_contains "${ocap}" "depmod '${KPIN}'" "depmod runs for the pinned kernel"
 # Signing/depmod ride the SAME in_target script as the install, so they finish
 # before install_zfs_offline returns — i.e. before configure_zfs_boot_support's
 # update-initramfs later in phase_system.
-if [[ "${ocap%%zfs version*}" == *kmodsign* ]]; then
+if [[ "${ocap%%zfs version*}" == *sign-file* ]]; then
   echo "  ok: signing completes before the closing smoke test (pre-initramfs)"
 else
-  echo "  FAIL: kmodsign not ordered before the zfs-version smoke test" >&2
+  echo "  FAIL: sign-file not ordered before the zfs-version smoke test" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 if [[ -e "${otarget}/var/cache/hypr-deb/openzfs-zfs-dkms_2.3.0-1_amd64.deb" ]]; then

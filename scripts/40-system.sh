@@ -309,10 +309,17 @@ install_base_packages() {
 # assertion). openzfs-zfs-dkms is deliberately NOT installed here — its postinst
 # would compile immediately (linux-headers-amd64 is present for the NVIDIA dkms
 # path); it arrives dormant at firstboot instead (stage_zfs_dkms_firstboot).
-# The prebuilt modules are MOK-signed in place exactly as dkms would have
-# (ensure_mok_key ran earlier; kmodsign ships in sbsigntool, in the base set),
-# and depmod'd — BOTH must complete before configure_zfs_boot_support's
-# update-initramfs so the initramfs carries signed, resolvable modules.
+# The prebuilt modules are MOK-signed in place exactly as dkms would have —
+# with the kernel's sign-file from linux-kbuild (ensure_mok_key ran earlier;
+# linux-headers-amd64 in the base set guarantees a linux-kbuild-* is present;
+# Debian has NO kmodsign — that is Ubuntu's sbsigntool addition, and Debian's
+# dkms itself signs via linux-kbuild's sign-file) — and depmod'd — BOTH must
+# complete before configure_zfs_boot_support's update-initramfs so the
+# initramfs carries signed, resolvable modules. The kmod deb ships its
+# modules as UNCOMPRESSED .ko (upstream's dh_binary-modules recipe never
+# compresses them; dh_compress touches docs only) — the .ko grep and
+# sign-file both assume that, and a compressed-module future fails loudly
+# at the no-.ko check below.
 # Mirrors the source path's install tail: keep the pam module out (the build
 # filter never pools it, but purge defensively if a prior attempt pulled it,
 # then regenerate the PAM stack from clean profiles), and apt-mark the
@@ -342,8 +349,11 @@ install_zfs_offline() {
     kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${kpin}' | grep '\\.ko\$' || true)\"
     [[ -n \"\${kos}\" ]] ||
       { echo 'openzfs-zfs-modules-${kpin} installed no .ko files' >&2; exit 1; }
+    sf=\"\$(ls /usr/lib/linux-kbuild-*/scripts/sign-file 2>/dev/null | head -n1)\"
+    [[ -x \"\${sf}\" ]] ||
+      { echo 'sign-file not found under /usr/lib/linux-kbuild-*/scripts' >&2; exit 1; }
     for ko in \${kos}; do
-      kmodsign sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
+      \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
     done
     depmod '${kpin}'
   "
