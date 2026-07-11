@@ -196,6 +196,45 @@ step_cache() {
   cache_index_repo
 }
 
+# probe_stock_kernel_version STOCK_ISO WORKDIR
+# Echo the stock ISO's live kernel version (e.g. 6.12.38+deb13-amd64), read
+# from /live/vmlinuz via xorriso osirrox (same mechanism iso-assemble.sh's
+# extract_stock_squashfs uses) and file(1)'s "version X" field. Nonzero when
+# the version cannot be determined. Pure seam so tests can stub xorriso/file.
+probe_stock_kernel_version() {
+  local stock="$1" work="$2" ver=""
+  rm -f "${work}/vmlinuz-probe"
+  xorriso -osirrox on -indev "${stock}" \
+    -extract /live/vmlinuz "${work}/vmlinuz-probe" >/dev/null 2>&1 || return 1
+  ver="$(file -b "${work}/vmlinuz-probe" 2>/dev/null |
+    grep -oE 'version [^ ]+' | awk '{print $2}')"
+  rm -f "${work}/vmlinuz-probe"
+  [[ -n "${ver}" ]] || return 1
+  printf '%s\n' "${ver}"
+}
+
+# 2b) Pin the live kernel (issue #110). Every prebuilt ZFS artifact — the
+#     openzfs kmod deb (step_zfs), the module baked into the live squashfs
+#     (iso-assemble) and the target's kernel from the pool — must be built for
+#     ONE kernel: the stock ISO's live kernel. Probe it, assert the pool
+#     carries that exact linux-image (live kernel == pool/target kernel is an
+#     enforced build-time invariant), and write it into the store as
+#     KERNEL_PINNED so it rides at /opt/hypr-deb/repo/KERNEL_PINNED (same
+#     graft as step_stage_zbm's zfsbootmenu.EFI) for install_zfs_offline,
+#     cache_validate and preflight. Exported: step_zfs and iso-assemble.sh
+#     (a separate bash process) both consume it.
+step_pin_kernel() {
+  KERNEL_PINNED="$(probe_stock_kernel_version "${STOCK_ISO}" "${ISO_WORKSPACE}")" ||
+    fatal "cannot determine the stock ISO's live kernel version (${STOCK_ISO})"
+  export KERNEL_PINNED
+  info "[build] live kernel pinned: ${KERNEL_PINNED}"
+  compgen -G "${POOL}/linux-image-${KERNEL_PINNED}_*.deb" >/dev/null ||
+    fatal "pool carries no linux-image-${KERNEL_PINNED} — the stock ISO's" \
+      "kernel differs from the archive kernel the pool carries; fetch the" \
+      "current point-release stock ISO."
+  printf '%s\n' "${KERNEL_PINNED}" >"${CACHE_DIR}/repo/KERNEL_PINNED"
+}
+
 # 3) Build the source stack to pooled .debs, freshness-gated and chroot-correct.
 #    HYPR_DESTDIR is a CHROOT-INTERNAL path; build_one installs to
 #    ${TARGET}${stagerel} via the chroot, and package_to_deb reads that
@@ -289,8 +328,11 @@ step_zfs() {
   assert_chrooted_in_target \
     || fatal "in_target is not chroot-backed after sourcing 40-system.sh; refusing to build on host."
   # Resume support: skip the (slow) OpenZFS source build if its debs are already
-  # pooled. rm the openzfs-*.deb from the pool to force a rebuild.
-  if compgen -G "${POOL}/openzfs-zfs-dkms_*.deb" >/dev/null; then
+  # pooled. rm the openzfs-*.deb from the pool to force a rebuild. The prebuilt
+  # kmod deb for the PINNED kernel must be pooled too (issue #110) — a pool from
+  # before the kmod deb existed, or built for another kernel, is rebuilt.
+  if compgen -G "${POOL}/openzfs-zfs-dkms_*.deb" >/dev/null &&
+    compgen -G "${POOL}/openzfs-zfs-modules-${KERNEL_PINNED}_*.deb" >/dev/null; then
     info "[build] reusing pooled OpenZFS debs (skip ZFS source build)"
     return 0
   fi
@@ -591,6 +633,7 @@ restore_build_ownership() {
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
+  step_pin_kernel           # 2b: live kernel == pool/target kernel, enforced
   step_build_stack          # 3
   step_build_portal         # 3b: OPTIONAL xdph screencast backend (non-fatal)
   step_zfs                  # 4

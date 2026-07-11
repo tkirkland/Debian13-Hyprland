@@ -50,9 +50,11 @@ assert_contains "${user_body}" "canmount=on" \
 assert_contains "${user_body}" "sudo,adm,systemd-journal,video" \
   "create_user adds the owner to the video group (backlight access, issue #48)"
 
-# The zfs build must produce ONLY the utils/dkms package set:
-# native-deb-kmod compiles modules for the RUNNING (live) kernel and drags
-# that kernel image into the target as a dependency.
+# The in-target zfs build must produce ONLY the utils/dkms package set:
+# native-deb-kmod compiles modules for one fixed kernel and drags that kernel
+# image into the target as a dependency. The ISO-build path (ZFS_DEB_POOL set)
+# DOES build it, pinned — the per-path script assertions live in
+# tests/zfs-build.sh; here assert the kmod build stays behind the pool gate.
 zfs_body="$(bash -c '
   source lib/00-config.sh
   source lib/01-log.sh
@@ -60,12 +62,8 @@ zfs_body="$(bash -c '
   declare -f install_zfs_from_source')"
 assert_contains "${zfs_body}" "native-deb-utils" \
   "zfs build uses native-deb-utils"
-if printf '%s\n' "${zfs_body}" | grep -qE 'native-deb(-kmod)?[" ]*$'; then
-  echo "  FAIL: zfs build must not invoke native-deb or native-deb-kmod" >&2
-  TEST_FAILURES=$((TEST_FAILURES + 1))
-else
-  echo "  ok: zfs build avoids native-deb-kmod"
-fi
+assert_contains "${zfs_body}" 'ZFS_DEB_POOL' \
+  "the native-deb-kmod build is gated on ZFS_DEB_POOL (see tests/zfs-build.sh)"
 assert_contains "${zfs_body}" "openzfs-zfs-dkms" \
   "zfs build asserts the dkms package was produced"
 # pam_zfs_key in common-password breaks chpasswd without encrypted homes.

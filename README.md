@@ -359,6 +359,11 @@ booted target installs entirely from the on-ISO package store at
 - The temporary source and bind mount are torn down at cleanup. The installed
   system's **permanent** apt sources are the real Debian mirror, so future
   online `apt update`s work. The store is **not** copied into the target.
+- **ZFS compiles nowhere on this path**: the live squashfs ships a zfs module
+  prebaked for its own kernel (dkms ran once at ISO build), and the target
+  installs the prebuilt `openzfs-zfs-modules-<kver>` deb from the pool. All
+  prebuilt ZFS artifacts target ONE kernel, recorded in the store's
+  `KERNEL_PINNED` and enforced at build time (live kernel == pool kernel).
 
 Freshness/version checking is a **build-time** concern: `deb_needs_rebuild`
 recompiles a component at ISO-creation only when its release tag is newer than
@@ -534,14 +539,21 @@ Source policy:
   bespoke, namespaced names. Build trees under `/var/tmp` are deleted after
   packaging.
 - The **offline-from-ISO install compiles nothing** — it `apt-get install`s
-  the stack debs (already built at ISO creation) by name from the on-ISO repo.
+  the stack debs (already built at ISO creation) by name from the on-ISO repo,
+  including the ZFS kernel module (prebuilt `openzfs-zfs-modules-<kver>`, no
+  dkms compile).
 - **OpenZFS comes from upstream, not trixie**: the latest release is built as
-  native `openzfs-*` packages replacing Debian's 2.3.x, with modules
-  dkms-signed by the machine's MOK key. For offline-from-ISO installs these
-  debs are prebuilt into the on-ISO repo and installed from there; a networked
-  install builds them in the chroot. The pool itself is created by the live
-  session's 2.3.x, so its feature set stays conservative until you
-  `zpool upgrade` deliberately.
+  native `openzfs-*` packages replacing Debian's 2.3.x, with modules signed by
+  the machine's MOK key. For offline-from-ISO installs these debs — including
+  a prebuilt kernel-module deb for the pinned live/target kernel (the store's
+  `KERNEL_PINNED`; the build fails if the stock ISO's kernel and the pool's
+  diverge) — come from the on-ISO repo: the modules install prebuilt and are
+  MOK-signed (via linux-kbuild's `sign-file`, exactly as dkms would) at
+  install time, and `openzfs-zfs-dkms` arrives dormant via a
+  first-boot job so future kernel upgrades still get dkms rebuilds. A
+  networked install builds everything in the chroot instead. The pool itself
+  is created by the live session's 2.3.x, so its feature set stays
+  conservative until you `zpool upgrade` deliberately.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
 a successful build and verify, purged (`apt-get purge --autoremove`), leaving

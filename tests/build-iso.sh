@@ -66,6 +66,62 @@ fi
 unset -f git
 rm -rf "${wroot}"
 
+echo "test: probe_stock_kernel_version reads the live kernel from the stock ISO"
+# shellcheck disable=SC2317  # stubs invoked indirectly by probe_stock_kernel_version
+(
+  work="$(mktemp -d)"
+  xorriso() { : >"${@: -1}"; }   # emulate -extract: last arg is the out path
+  file() {
+    printf 'Linux kernel x86 boot executable bzImage, version 6.12.38+deb13-amd64 (debian-kernel@lists.debian.org) #1 SMP\n'
+  }
+  ver="$(probe_stock_kernel_version /stock.iso "${work}")" || exit 1
+  rm -rf "${work}"
+  [[ "${ver}" == "6.12.38+deb13-amd64" ]] || {
+    echo "  FAIL: parsed '${ver}' (want 6.12.38+deb13-amd64)" >&2; exit 1; }
+  echo "  ok: version parsed from file(1) output"
+  # Unparseable file output must fail, never echo an empty/garbage pin.
+  file() { printf 'data\n'; }
+  if probe_stock_kernel_version /stock.iso "${work}" >/dev/null 2>&1; then
+    echo "  FAIL: garbage file(1) output produced a pin" >&2; exit 1
+  fi
+  echo "  ok: undeterminable version is a probe failure"
+  # A failed extraction must fail too.
+  xorriso() { return 1; }
+  if probe_stock_kernel_version /stock.iso "${work}" >/dev/null 2>&1; then
+    echo "  FAIL: failed xorriso extraction produced a pin" >&2; exit 1
+  fi
+  echo "  ok: failed vmlinuz extraction is a probe failure"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
+echo "test: step_pin_kernel enforces live kernel == pool kernel and stores the pin"
+# shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_pin_kernel
+(
+  ISO_WORKSPACE="$(mktemp -d)"; CACHE_DIR="${ISO_WORKSPACE}/cache"
+  POOL="${CACHE_DIR}/repo/pool"; STOCK_ISO=/stock.iso
+  mkdir -p "${POOL}"
+  xorriso() { : >"${@: -1}"; }
+  file() { printf 'bzImage, version 6.12.38+deb13-amd64 (x) #1 SMP\n'; }
+  info() { :; }
+  rc=0
+  # Pool carries a DIFFERENT kernel image -> fatal (stale stock ISO).
+  : >"${POOL}/linux-image-6.12.99+deb13-amd64_6.12.99-1_amd64.deb"
+  (step_pin_kernel) >/dev/null 2>&1 && rc=1
+  if ((rc == 0)); then
+    echo "  ok: pool/pin kernel mismatch is fatal"
+  else
+    echo "  FAIL: mismatched pool kernel accepted" >&2
+  fi
+  # Matching image present -> pin exported to the store, one line.
+  : >"${POOL}/linux-image-6.12.38+deb13-amd64_6.12.38-1_amd64.deb"
+  step_pin_kernel >/dev/null 2>&1 || { echo "  FAIL: step_pin_kernel failed on a matching pool" >&2; exit 1; }
+  got="$(cat "${CACHE_DIR}/repo/KERNEL_PINNED")"
+  rm -rf "${ISO_WORKSPACE}"
+  [[ "${got}" == "6.12.38+deb13-amd64" ]] || {
+    echo "  FAIL: KERNEL_PINNED store file holds '${got}'" >&2; exit 1; }
+  echo "  ok: pin written to the store as KERNEL_PINNED"
+  exit "${rc}"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
 echo "test: step_build_stack hoists install_build_deps (runs once for N components)"
 # Run in a subshell so the collaborator stubs/globals don't leak into later tests.
 # SC2317: the stubs are invoked indirectly by step_build_stack; SC2034: the maps
@@ -118,6 +174,32 @@ echo "test: step_runtime_closure skips deps already in the pool"
   fi
   ((rc == 0)) && echo "  ok: already-pooled dep skipped, only the missing dep is fetched"
   exit "${rc}"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
+echo "test: step_zfs resume guard rebuilds a stale pool missing the pinned kmod deb (issue #110)"
+# shellcheck disable=SC2317,SC2030,SC2031  # stubs invoked indirectly by step_zfs
+(
+  POOL="$(mktemp -d)"
+  KERNEL_PINNED="6.12.38+deb13-amd64"
+  calls="$(mktemp)"
+  # Predefining install_zfs_from_source skips step_zfs's lazy source of
+  # 40-system.sh; the stub just records that the rebuild path was taken.
+  install_zfs_from_source() { echo run >>"${calls}"; }
+  assert_chrooted_in_target() { :; }
+  in_target() { :; }
+  info() { :; }
+  : >"${POOL}/openzfs-zfs-dkms_2.3.0-1_all.deb"
+  step_zfs   # dkms deb pooled but NO kmod deb for the pin -> must rebuild
+  : >"${POOL}/openzfs-zfs-modules-${KERNEL_PINNED}_2.3.0-1_amd64.deb"
+  step_zfs   # complete pool -> resume skip, no second build
+  n="$(wc -l <"${calls}")"
+  rm -rf "${POOL}"; rm -f "${calls}"
+  if [[ "${n}" == "1" ]]; then
+    echo "  ok: stale pool (no pinned kmod deb) rebuilds once; complete pool skips"
+    exit 0
+  fi
+  echo "  FAIL: install_zfs_from_source ran ${n}x (want 1: rebuild stale, skip complete)" >&2
+  exit 1
 ) || TEST_FAILURES=$((TEST_FAILURES + 1))
 
 echo "test: restore_build_ownership hands the workspace back to the sudo user (not left root-owned)"

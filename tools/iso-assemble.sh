@@ -42,7 +42,9 @@ LIVE_EXTRA_PACKAGES="${LIVE_EXTRA_PACKAGES:-git openssh-client openssh-server}"
 # root's own sources point at the install medium (file:/run/live/medium/...),
 # which does NOT exist at build time — so we install from this mirror instead
 # (the build host is online; this provisions the LIVE env, not the offline target).
-LIVE_EXTRA_APT_SOURCE="${LIVE_EXTRA_APT_SOURCE:-deb http://deb.debian.org/debian trixie main}"
+# contrib is REQUIRED: the zfs bake installs zfs-dkms/zfsutils-linux, which
+# Debian ships in contrib, not main.
+LIVE_EXTRA_APT_SOURCE="${LIVE_EXTRA_APT_SOURCE:-deb http://deb.debian.org/debian trixie main contrib}"
 # Unattended autoinstall launcher dropped in the live user's home as a REAL
 # generated script (NOT a symlink — a symlink cannot carry flags). It runs the
 # embedded installer fully hands-off via `sudo env ...`. The password is embedded
@@ -207,7 +209,20 @@ rebuild_live_squashfs() {
   rm -rf "${root}"
 }
 
-# live_extras_chroot_script PACKAGES
+# detect_live_root_kernel LIVE_ROOT
+# Echo the single kernel version under LIVE_ROOT/lib/modules. A stock Debian
+# live root carries exactly one; anything else means the image layout changed
+# and the zfs bake would target the wrong kernel — nonzero then.
+detect_live_root_kernel() {
+  local root="$1" entries=()
+  entries=("${root}"/lib/modules/*/)
+  [[ -d "${entries[0]}" ]] || return 1
+  ((${#entries[@]} == 1)) || return 1
+  local k="${entries[0]%/}"
+  printf '%s\n' "${k##*/}"
+}
+
+# live_extras_chroot_script PACKAGES [KVER]
 # Emit (stdout) the `sh -c` payload run inside the live-root chroot to install the
 # extras. When openssh-server is in the set, append an explicit offline
 # `systemctl enable ssh.service` so sshd is enabled to start on live boot:
@@ -216,8 +231,21 @@ rebuild_live_squashfs() {
 # script side effect. SYSTEMD_OFFLINE=1 forces systemctl to act purely on the
 # filesystem (there is no running manager / D-Bus in the build chroot). Pure
 # (string only), so tests can assert the payload without a real chroot.
+#
+# KVER (issue #110): when non-empty, additionally bake a loadable zfs module
+# for that kernel into the squashfs — install linux-headers-KVER + zfs-dkms +
+# zfsutils-linux so dkms compiles the module ONCE at ISO build, then purge the
+# headers (+ their now-orphaned toolchain via --autoremove; zfs-dkms itself
+# stays installed: purging it would dkms-remove the module it just built, and
+# its own deps keep dkms functional), verify the built module survived, and
+# depmod. Every live boot then has zfs loadable — preflight's modinfo probe
+# short-circuits and the per-boot dkms compile is gone. The live userland
+# stays Debian's zfsutils-linux 2.3.x DELIBERATELY: the pool is created by
+# the live session, and 2.3.x keeps its feature set conservative for ZBM.
 live_extras_chroot_script() {
-  local pkgs="$1" script=""
+  local pkgs="$1" kver="${2:-}" script=""
+  local zfs_pkgs=""
+  [[ -n "${kver}" ]] && zfs_pkgs=" linux-headers-${kver} zfs-dkms zfsutils-linux"
   # Use ONLY our online mirror for this install: -o SourceList points at a temp
   # list and an empty SourceParts ignores the live root's medium-based sources
   # (file:/run/live/medium/...) that are absent at build time. See
@@ -227,11 +255,20 @@ live_extras_chroot_script() {
   local aopt="-o Dir::Etc::SourceList=${list} -o Dir::Etc::SourceParts=/dev/null"
   script="printf '%s\\n' '${LIVE_EXTRA_APT_SOURCE}' >${list} &&"
   script+=" apt-get update -qq ${aopt} &&"
-  script+=" apt-get install -y --no-install-recommends ${pkgs} ${aopt} &&"
+  script+=" apt-get install -y --no-install-recommends ${pkgs}${zfs_pkgs} ${aopt} &&"
   case " ${pkgs} " in
     *" openssh-server "*)
       script+=" SYSTEMD_OFFLINE=1 systemctl enable ssh.service &&" ;;
   esac
+  if [[ -n "${kver}" ]]; then
+    # dkms just built for the only kernel present; drop the headers (and the
+    # toolchain they orphan) but KEEP zfs-dkms — its prerm dkms-removes the
+    # module. The dkms-built module lives OUTSIDE any package
+    # (/lib/modules/KVER/updates/dkms), so assert it survived, then depmod.
+    script+=" apt-get purge -y --autoremove linux-headers-${kver} ${aopt} &&"
+    script+=" ls /lib/modules/${kver}/updates/dkms/zfs.ko* >/dev/null &&"
+    script+=" depmod ${kver} &&"
+  fi
   # Neuter systemd-ssh-generator (systemd >=256): it queries the local AF_VSOCK
   # CID to set up ssh-over-vsock and, in a VM with no vhost-vsock device, exits 1
   # on every boot/daemon-reload, spamming "Failed to query local AF_VSOCK CID".
@@ -258,6 +295,16 @@ live_extras_chroot_script() {
 install_live_extras() {
   local root="$1"
   [[ -n "${LIVE_EXTRA_PACKAGES// /}" ]] || return 0
+  # The zfs bake (issue #110) targets the live root's own kernel; the pin
+  # exported by build-iso (step_pin_kernel) must agree or the whole prebuilt
+  # chain (pool kernel, kmod deb, baked module) is inconsistent. Standalone
+  # invocations without KERNEL_PINNED skip only the cross-check.
+  local kver=""
+  kver="$(detect_live_root_kernel "${root}")" ||
+    fatal "live root does not carry exactly one kernel under /lib/modules"
+  if [[ -n "${KERNEL_PINNED:-}" && "${KERNEL_PINNED}" != "${kver}" ]]; then
+    fatal "live squashfs kernel ${kver} != pinned kernel ${KERNEL_PINNED}"
+  fi
   local resolv="${root}/etc/resolv.conf" resolv_bak=""
   if [[ -e "${resolv}" || -L "${resolv}" ]]; then
     resolv_bak="${resolv}.iso-assemble.bak"; mv "${resolv}" "${resolv_bak}"
@@ -267,10 +314,11 @@ install_live_extras() {
   for m in dev dev/pts proc sys; do
     mount --bind "/${m}" "${root}/${m}" && mounted=("${root}/${m}" "${mounted[@]}")
   done
-  info "iso-assemble: baking live extras into the squashfs: ${LIVE_EXTRA_PACKAGES}"
+  info "iso-assemble: baking live extras + zfs module (${kver}) into the squashfs:" \
+    "${LIVE_EXTRA_PACKAGES}"
   local rc=0
   chroot "${root}" env DEBIAN_FRONTEND=noninteractive sh -c \
-    "$(live_extras_chroot_script "${LIVE_EXTRA_PACKAGES}")" || rc=$?
+    "$(live_extras_chroot_script "${LIVE_EXTRA_PACKAGES}" "${kver}")" || rc=$?
   for m in "${mounted[@]}"; do umount -l "${m}" 2>/dev/null || true; done
   rm -f "${resolv}"
   [[ -n "${resolv_bak}" ]] && mv "${resolv_bak}" "${resolv}"
