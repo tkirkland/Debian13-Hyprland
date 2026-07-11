@@ -71,7 +71,7 @@ if bash -c '
   exec >>"$2" 2>&1
   CONSOLE_READY=1
   CONSOLE_MODE="tty"
-  activity_start "Phase: hyprland"
+  activity_start "Phase 5/6: hyprland"
   sleep 0.6
   renderer_pid="${ACTIVITY_PID}"
   kill -0 "${renderer_pid}"
@@ -86,12 +86,49 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 spinner_body="$(<"${spinner_console}")"
-assert_contains "${spinner_body}" $'\r\033[K[|] Phase: hyprland' \
-  "TTY spinner clears and redraws the same row"
-assert_contains "${spinner_body}" $'\r\033[K[/] Phase: hyprland' \
+assert_contains "${spinner_body}" $'\r\033[K[|] Phase 5/6: hyprland' \
+  "TTY spinner clears and redraws the same row with the positioned label"
+assert_contains "${spinner_body}" $'\r\033[K[/] Phase 5/6: hyprland' \
   "TTY spinner advances through animation frames"
-assert_contains "${spinner_body}" "[INFO] Completed: Phase: hyprland" \
+assert_contains "${spinner_body}" "[INFO] Completed: Phase 5/6: hyprland" \
   "successful phase replaces the spinner with a stable result"
+
+# A silent log past ACTIVITY_STALL_SECS flags a probable hang; growth clears
+# the flag. The tail is prefixed "last:" so a tool's own completion banner
+# ("Installation finished. No error reported.") reads as context, never as
+# the installer finishing.
+stall_console="${tmp}/stall.console"
+stall_log="${tmp}/stall.log"
+bash -c '
+  VERBOSE=0
+  LOG_FILE="$2"
+  ACTIVITY_STALL_SECS=1
+  source lib/01-log.sh
+  exec 3>"$1" 4>&3
+  exec >>"$2" 2>&1
+  CONSOLE_READY=1
+  CONSOLE_MODE="tty"
+  activity_start "Phase 3/6: system"
+  sleep 2.6
+  cp "$1" "$1.stalled"
+  echo "Installation finished. No error reported."
+  sleep 1.6
+  activity_success
+' _ "${stall_console}" "${stall_log}"
+stalled_body="$(<"${stall_console}.stalled")"
+assert_contains "${stalled_body}" "(no output for " \
+  "silent log past the threshold renders a stall marker"
+whole_body="$(<"${stall_console}")"
+after_growth="${whole_body:${#stalled_body}}"
+recovered="$(printf '%s' "${after_growth}" | tr '\r' '\n' |
+  grep -F 'last: Installation finished. No error reported.' |
+  grep -cv 'no output for')" || recovered=0
+if ((recovered > 0)); then
+  echo "  ok: log growth clears the stall marker; tail stays 'last:'-prefixed"
+else
+  echo "  FAIL: stall marker persisted or 'last:' prefix missing after log growth" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
 
 # Pausing for a prompt or warning is also valid in non-TTY mode. Resuming
 # must be a successful no-op rather than an errexit-triggering false result.

@@ -173,10 +173,12 @@ main() {
   fi
 
   ensure_target_ready
-  local name=""
-  for name in storage bootstrap system boot hyprland verify; do
+  local name="" idx=0
+  local -a phases=(storage bootstrap system boot hyprland verify)
+  for name in "${phases[@]}"; do
+    idx=$((idx + 1))
     current_phase="${name}"
-    run_phase "${name}" "phase_${name}"
+    run_phase "${name}" "phase_${name}" "${idx}" "${#phases[@]}"
   done
   current_phase="cleanup"
   activity_start "Phase: cleanup"
