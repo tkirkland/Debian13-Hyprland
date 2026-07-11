@@ -80,6 +80,11 @@ assert_contains "${zcap}" "--with-linux=/usr/src/linux-headers-${KPIN}" \
   "kmod build configures against the PINNED kernel's headers"
 assert_contains "${zcap}" "openzfs-zfs-modules-${KPIN}" \
   "pool path asserts the pinned kmod deb was produced"
+# Upstream debian/rules defaults KVERS to the BUILD HOST's uname -r and its
+# module build re-configures with --with-linux=$(KSRC), overriding the
+# cfg_flags pin — both must ride the make invocation explicitly.
+assert_contains "${zcap}" "native-deb-kmod KVERS='${KPIN}' KSRC='/usr/src/linux-headers-${KPIN}'" \
+  "kmod make passes KVERS + KSRC so the deb targets the PINNED kernel, not uname -r"
 if [[ -e "${zpool_dir}/openzfs-zfs-modules-${KPIN}_2.3.0-1_amd64.deb" ]]; then
   echo "  ok: kmod deb copied into the pool (filter admits zfs-modules)"
 else

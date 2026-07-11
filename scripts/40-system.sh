@@ -468,8 +468,13 @@ install_zfs_from_source() {
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
     # Also build the prebuilt kernel-module deb for the pinned kernel
     # (issue #110). Pooled only — the throwaway buildroot never installs it.
+    # KVERS/KSRC must be passed EXPLICITLY: upstream debian/rules defaults
+    # KVERS to the build host's 'uname -r', and its module build re-runs
+    # ./configure with --with-linux=$(KSRC), clobbering cfg_flags' pin.
+    # The ls assertion is the hard guard — a wrong-kernel build produces a
+    # differently-named deb and dies here.
     zfs_script+="
-    make -j\"${jobs}\" native-deb-kmod
+    make -j\"${jobs}\" native-deb-kmod KVERS='${KERNEL_PINNED}' KSRC='/usr/src/linux-headers-${KERNEL_PINNED}'
     ls /var/tmp/openzfs-zfs-modules-${KERNEL_PINNED}_*.deb >/dev/null 2>&1 ||
       { echo 'required package not built: openzfs-zfs-modules-${KERNEL_PINNED}' >&2; exit 1; }"
   fi
