@@ -52,8 +52,18 @@ done
 for z in openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed; do
   seed_pkg "${z}"
 done
+# Prebuilt-kmod contract (issue #110): offline also requires the store's
+# KERNEL_PINNED file and the prebuilt openzfs-zfs-modules-<kver> deb indexed.
+seed_pkg "openzfs-zfs-modules-6.12.38+deb13-amd64"
+echo "6.12.38+deb13-amd64" >"${tmp}/repo/KERNEL_PINNED"
 out="$(run_validate)"
 assert_contains "${out}" "Cache repo valid" "complete repo passes (offline contract)"
+
+# Offline, KERNEL_PINNED removed -> fails naming it.
+mv "${tmp}/repo/KERNEL_PINNED" "${tmp}/repo/KERNEL_PINNED.gone"
+out="$(run_validate 2>&1 || true)"
+assert_contains "${out}" "KERNEL_PINNED missing" "offline requires the store's kernel pin"
+mv "${tmp}/repo/KERNEL_PINNED.gone" "${tmp}/repo/KERNEL_PINNED"
 
 # Gating: the upstream OpenZFS assertion fires ONLY offline. With the openzfs
 # debs removed from the index, the OFFLINE validate must fail naming them, but
@@ -73,6 +83,8 @@ out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
   NETWORK_AVAILABLE=0; cache_validate' 2>&1 || true)"
 assert_contains "${out}" "upstream OpenZFS deb missing" "offline requires upstream OpenZFS debs"
+assert_contains "${out}" "openzfs-zfs-modules deb missing" \
+  "offline requires the prebuilt kmod deb indexed"
 out="$(CACHE_REPO_DIR="${zfsless}" bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source scripts/10-cache.sh
   NETWORK_AVAILABLE=1; cache_validate' 2>&1 || true)"
