@@ -186,13 +186,23 @@ rm -rf "${otarget}" "${store}"; rm -f "${CAPTURE}"
 
 # A pool without the dkms deb must reach the NAMED fatal even under the
 # installer's own errexit/pipefail regime — compgen exits 1 on an empty glob,
-# which unguarded would kill the assignment before the fatal prints.
+# which unguarded would kill the assignment before the fatal prints. A fresh
+# bash process is required: errexit is inert inside this file's own $(...)
+# on the left of ||, so an in-shell subshell cannot reproduce the death.
 pstore="$(mktemp -d)"; mkdir -p "${pstore}/pool"
 echo "${KPIN}" >"${pstore}/KERNEL_PINNED"
-CAPTURE="$(mktemp)"
-out="$( (set -e; CACHE_REPO_DIR="${pstore}" TARGET="$(mktemp -d)" \
-  install_zfs_offline) 2>&1 )" || true
-rm -rf "${pstore}"; rm -f "${CAPTURE}"
+out="$(CACHE_REPO_DIR="${pstore}" TARGET="$(mktemp -d)" HERE="${HERE}" bash -c '
+  set -euo pipefail
+  source "${HERE}/../scripts/40-system.sh"
+  info() { :; }
+  fatal() { echo "FATAL: $*" >&2; exit 1; }
+  in_target() { :; }
+  stage_firstboot_runner() { mkdir -p "${TARGET}/usr/lib/hypr-deb/firstboot.d"; }
+  MOK_KEY=/k; MOK_CRT=/c
+  ZFS_UPSTREAM_PACKAGES=(openzfs-zfsutils)
+  install_zfs_offline
+' 2>&1)" || true
+rm -rf "${pstore}"
 assert_contains "${out}" "openzfs-zfs-dkms deb not in the offline pool" \
   "empty pool dies at the named fatal, not silently at the compgen assignment"
 
