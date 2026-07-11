@@ -317,6 +317,7 @@ detect_live_environment() {
 
 bootstrap_live_tools() {
   local missing=() pkg="" need_zfs_build=0 running_kernel="" kernel_pin=""
+  local prebuilt_kmod=0
   running_kernel="$(uname -r)"
   # KERNEL_PINNED (written by build-iso step_pin_kernel) names the kernel the
   # store's prebuilt zfs artifacts were built for. A mismatch is loud but NOT
@@ -349,6 +350,7 @@ bootstrap_live_tools() {
     if [[ -n "${kernel_pin}" && "${kernel_pin}" == "${running_kernel}" ]] &&
       ! ((NETWORK_AVAILABLE)); then
       missing+=("openzfs-zfs-modules-${running_kernel}")
+      prebuilt_kmod=1
     else
       missing+=(zfs-dkms "${LIVE_KERNEL_HEADERS}")
     fi
@@ -373,6 +375,13 @@ bootstrap_live_tools() {
     install_from_cache_repo "${missing[@]}"
   else
     fatal "No network and no cache; cannot install: ${missing[*]}"
+  fi
+
+  # The prebuilt kmod deb drops files under /lib/modules but runs no depmod
+  # of its own — refresh the index before the modprobe below (mirrors
+  # install_zfs_offline's explicit depmod).
+  if ((prebuilt_kmod)); then
+    depmod "${running_kernel}"
   fi
 
   if ! modprobe zfs 2>/dev/null; then

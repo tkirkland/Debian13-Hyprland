@@ -25,6 +25,7 @@ run_bootstrap() { # $1=running kernel  $2=module present (0/1)
     uname() { echo "${RUNNING}"; }
     modinfo() { ((MODPRESENT)); }
     modprobe() { return 0; }
+    depmod() { echo "DEPMOD: $*"; }
     for t in debootstrap sgdisk partprobe mdadm mkfs.vfat zpool \
       apt-ftparchive git curl efibootmgr rsync fuser openssl; do
       eval "${t}() { :; }"
@@ -63,6 +64,10 @@ else
   echo "  FAIL: dkms still requested despite a matching prebuilt kmod" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
+# The kmod deb runs no depmod of its own; the index must be refreshed before
+# the modprobe probe or the just-installed module is unresolvable.
+assert_contains "${out}" "DEPMOD: 6.12.38+deb13-amd64" \
+  "depmod runs for the running kernel after the prebuilt kmod install"
 
 echo "test: module missing + pin mismatch -> dkms fallback unchanged"
 out="$(run_bootstrap 6.99.0-other 0)"
