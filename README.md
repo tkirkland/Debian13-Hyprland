@@ -346,7 +346,7 @@ Offline installation is the [Offline-from-ISO](#offline-from-iso-recommended)
 model above: the network-bearing work happens once on the build host
 (`tools/build-iso.sh --confirm`), which assembles a self-sufficient ISO. The
 booted target installs entirely from the on-ISO package store at
-`/run/live/medium/hypr-repo`, with **no network**:
+`/opt/hypr-deb/repo` (see above), with **no network**:
 
 - The `bootstrap` phase runs `cache_validate` against the on-ISO repo
   (`CACHE_REPO_DIR`, pointed at the store by preflight) and fails with a precise
@@ -397,6 +397,14 @@ storage layout is identical regardless of choice.
 For grub and systemd-boot, a kernel postinst/initramfs hook syncs the
 current kernel + initramfs from `/boot` (on ZFS) to the ESP on every kernel
 or initramfs update.
+
+**Switching bootloaders later** (issue #50): boot the live ISO and run
+`--phase=boot --bootloader=<new>` against the existing install — the phase
+re-imports the pool, installs the new loader, and retires the old loader's
+NVRAM entry (entry matching fails closed; dangling same-label entries are
+reaped). The full grub→zbm→systemd-boot→grub cycle is VM-validated. Known
+cosmetic leftover: the old loader's ESP directory (`EFI/zbm`,
+`EFI/systemd`, ...) is not removed.
 
 **Rollback caveat:** with grub or systemd-boot, after rolling back the root
  dataset, the ESP still carries the newer kernel copy until the hook next
@@ -476,6 +484,13 @@ wallpaper cycle, and the traditional `Print` screenshot cluster
 `Super+Shift+R` screen recording (wf-recorder). A distro wallpaper set ships
 as the `assets/wallpapers` submodule, installed to
 `/usr/share/backgrounds/hypr-deb`.
+
+The install also ships **dark theming defaults** (PR #109): the `adw-gtk3`
+GTK theme (harvested into the offline store at build time) with
+`adw-gtk3-dark` selected via a gschema override, a matching dark
+`color-scheme` for the portal, and Qt/icon/cursor defaults exported through
+the uwsm environment — again just defaults, overridable by personal
+dotfiles.
 
 **External-display brightness** (issue #66): the `XF86MonBrightness` keys, the
 idle dim, and the lock screen all drive one logical brightness level across
