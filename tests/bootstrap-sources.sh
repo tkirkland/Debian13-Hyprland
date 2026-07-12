@@ -113,4 +113,61 @@ assert_contains "${cleanup_body}" "kill_target_processes" \
 assert_contains "${cleanup_body}" "teardown_target_iso_repo" \
   "cleanup removes the offline temp source and repo bind"
 
+# Offline means store-ONLY, not store-preferred: on a NETWORKED machine the
+# permanent mirror sources, if present during the install, win the candidate
+# race against the store (apt installs trixie-security's newer kernel instead
+# of the store's KERNEL_TARGET, stranding the prebuilt zfs kmod — issue #110
+# VM validation failure). So phase_bootstrap must write the permanent sources
+# ONLY online; offline they are deferred to phase_cleanup, after the last
+# package transaction.
+echo "test: offline install is store-only until cleanup (no mirror mid-install)"
+run_bootstrap() { # $1=NETWORK_AVAILABLE; runs phase_bootstrap with stubs
+  bash -c "
+    set -u
+    source lib/00-config.sh
+    source lib/01-log.sh
+    source scripts/30-bootstrap.sh
+    TARGET='${tmp}/btarget'
+    NETWORK_AVAILABLE=$1
+    mount_target_tree() { :; }
+    run_debootstrap() { :; }
+    install_policy_rc_d() { :; }
+    mount_chroot_binds() { :; }
+    setup_target_iso_repo() { write_iso_temp_source; }
+    in_target() { :; }
+    info() { :; }
+    phase_bootstrap
+  "
+}
+rm -rf "${tmp}/btarget"; mkdir -p "${tmp}/btarget/etc/apt"
+run_bootstrap 0
+if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/debian.sources" ]]; then
+  echo "  FAIL: offline bootstrap wrote the permanent mirror sources (mirror would outbid the store mid-install)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: offline bootstrap leaves the store as the ONLY apt source"
+fi
+if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/hypr-iso-temp.sources" ]]; then
+  echo "  ok: offline bootstrap wires the temporary store source"
+else
+  echo "  FAIL: offline bootstrap did not wire the store source" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+rm -rf "${tmp}/btarget"; mkdir -p "${tmp}/btarget/etc/apt"
+run_bootstrap 1
+if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/debian.sources" ]]; then
+  echo "  ok: online bootstrap writes the permanent mirror sources up front"
+else
+  echo "  FAIL: online bootstrap must write the mirror sources" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
+# ...and cleanup writes the permanent sources (idempotent online) so the
+# installed system always ends up with the real mirror, plus drops the
+# store-derived apt indexes.
+assert_contains "${cleanup_body}" "write_target_apt_sources" \
+  "cleanup writes the permanent mirror sources after the last transaction"
+assert_contains "${cleanup_body}" "var/lib/apt/lists/" \
+  "cleanup drops the store-derived apt indexes"
+
 finish_test

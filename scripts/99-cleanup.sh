@@ -40,6 +40,13 @@ phase_cleanup() {
     rm -f "${TARGET}/usr/sbin/policy-rc.d" \
       "${TARGET}/etc/apt/sources.list.d/sid-toolchain.sources" \
       "${TARGET}/etc/apt/preferences.d/sid-toolchain"
+    # Every package transaction is done — NOW write the installed system's
+    # permanent Debian mirror sources (offline installs ran store-only until
+    # here; see phase_bootstrap). Idempotent online (rewrites the same files).
+    # Drop the apt indexes too: offline's are the ISO store's (whose source is
+    # about to vanish); first `apt update` on the booted system rebuilds them.
+    write_target_apt_sources
+    rm -rf "${TARGET}/var/lib/apt/lists/"*
   fi
   teardown_target_tree
   info "Cleanup done. Remove the live medium and reboot."
