@@ -101,9 +101,17 @@ echo "test: step_pin_kernel enforces live kernel == pool kernel and stores pin +
   mkdir -p "${POOL}"
   xorriso() { : >"${@: -1}"; }
   file() { printf 'bzImage, version 6.12.38+deb13-amd64 (x) #1 SMP\n'; }
-  # The pooled linux-image-amd64 metapackage resolves the TARGET kernel via
-  # its Depends — security-suite skew means it can outrun the live pin.
-  dpkg-deb() { echo "linux-image-6.12.44+deb13-amd64 (= 6.12.44-1)"; }
+  # The pooled linux-image/-headers-amd64 metapackages resolve the TARGET
+  # kernel via their Depends — security-suite skew means it can outrun the
+  # live pin. HDR_KERNEL is mutable so the skew case below can desync them.
+  HDR_KERNEL="6.12.44+deb13-amd64"
+  dpkg-deb() {
+    case "$2" in
+      *linux-headers*) echo "linux-headers-${HDR_KERNEL} (= 6.12.44-1)" ;;
+      *linux-image-amd64_6.12.40*) echo "linux-image-6.12.40+deb13-amd64 (= 6.12.40-1)" ;;
+      *) echo "linux-image-6.12.44+deb13-amd64 (= 6.12.44-1)" ;;
+    esac
+  }
   info() { :; }
   rc=0
   # Pool carries a DIFFERENT kernel image -> fatal (stale stock ISO).
@@ -123,13 +131,27 @@ echo "test: step_pin_kernel enforces live kernel == pool kernel and stores pin +
   fi
   # Metapackage resolves to a kernel whose image deb is NOT pooled -> fatal.
   : >"${POOL}/linux-image-amd64_6.12.44-1_amd64.deb"
+  : >"${POOL}/linux-headers-amd64_6.12.44-1_amd64.deb"
   if (step_pin_kernel) >/dev/null 2>&1; then
     echo "  FAIL: metapackage kernel absent from pool accepted" >&2; rc=1
   else
     echo "  ok: metapackage kernel missing its pooled image deb is fatal"
   fi
-  # Complete pool -> pin AND target written to the store.
+  # Image and headers metapackages skewed (mixed populate epochs) -> fatal:
+  # the skewed headers meta Recommends a SECOND kernel image that grub then
+  # boots without a prebuilt zfs module (seen live 2026-07-11).
   : >"${POOL}/linux-image-6.12.44+deb13-amd64_6.12.44-1_amd64.deb"
+  HDR_KERNEL="6.12.99+deb13-amd64"
+  if (step_pin_kernel) >/dev/null 2>&1; then
+    echo "  FAIL: skewed image/headers metapackages accepted" >&2; rc=1
+  else
+    echo "  ok: image/headers metapackage skew is fatal"
+  fi
+  HDR_KERNEL="6.12.44+deb13-amd64"
+  # Several metapackage versions pooled (cp -n accretion): the HIGHEST must
+  # win — that is the one apt installs in the target.
+  : >"${POOL}/linux-image-amd64_6.12.40-1_amd64.deb"
+  # Complete pool -> pin AND target written to the store.
   step_pin_kernel >/dev/null 2>&1 || { echo "  FAIL: step_pin_kernel failed on a complete pool" >&2; exit 1; }
   got="$(cat "${CACHE_DIR}/repo/KERNEL_PINNED")"
   gott="$(cat "${CACHE_DIR}/repo/KERNEL_TARGET")"
