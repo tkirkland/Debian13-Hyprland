@@ -247,9 +247,21 @@ else
   echo "  FAIL: firstboot dkms job missing or not executable" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
-assert_contains "$(cat "${job}" 2>/dev/null)" \
+jobbody="$(cat "${job}" 2>/dev/null)"
+assert_contains "${jobbody}" \
   "apt-get install -y /var/cache/hypr-deb/openzfs-zfs-dkms_*.deb" \
   "firstboot job installs the staged dkms deb"
+# Ownership handover (seen failing on the first VM firstboot): upstream's
+# dkms postinst installs for the RUNNING kernel and aborts on the prebuilt
+# kmod deb's files at the same path — the kmod package must be removed first.
+# shellcheck disable=SC2016  # the literal $(uname -r) is the expected job text
+assert_contains "${jobbody}" 'apt-get remove -y "openzfs-zfs-modules-$(uname -r)"' \
+  "firstboot job removes the prebuilt kmod deb before the dkms install"
+case "${jobbody}" in
+  *'apt-get remove'*'apt-get install'*) echo "  ok: remove precedes the dkms install" ;;
+  *) echo "  FAIL: kmod removal must precede the dkms install" >&2
+     TEST_FAILURES=$((TEST_FAILURES + 1)) ;;
+esac
 rm -rf "${otarget}" "${store}"; rm -f "${CAPTURE}"
 
 # A pool without the dkms deb must reach the NAMED fatal even under the

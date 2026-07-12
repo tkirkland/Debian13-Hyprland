@@ -403,8 +403,18 @@ stage_zfs_dkms_firstboot() {
 # installer.sh). The system already runs the prebuilt zfs module; this one
 # dkms build covers all future kernel upgrades. Deps (dkms/headers/toolchain)
 # landed at install time, so no network is needed.
+#
+# Ownership handover: upstream's dkms postinst builds AND installs for the
+# RUNNING kernel, and dkms refuses to overwrite the prebuilt kmod deb's
+# files at the same /lib/modules path (exit 6, seen on first VM firstboot).
+# So remove the prebuilt kmod package first, then let dkms take over every
+# kernel. Safe window: the zfs module is loaded (root is on it) and the
+# already-built initramfs keeps its own copy, so even a crash between the
+# two steps leaves a bootable system; a failed job leaves the .failed
+# re-run path as usual.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+apt-get remove -y "openzfs-zfs-modules-$(uname -r)" 2>/dev/null || true
 apt-get install -y /var/cache/hypr-deb/openzfs-zfs-dkms_*.deb
 rm -f /var/cache/hypr-deb/openzfs-zfs-dkms_*.deb
 EOF
