@@ -240,8 +240,11 @@ step_pin_kernel() {
   # metapackage's Depends, record the resolved version as KERNEL_TARGET, and
   # let step_zfs build a prebuilt zfs kmod deb for BOTH kernels (deduped when
   # equal). install_zfs_offline installs the KERNEL_TARGET one.
-  local meta_deb="" dep=""
-  meta_deb="$(compgen -G "${POOL}/linux-image-${ARCH}_*.deb" | head -n1 || true)"
+  # Metapackage picks use sort -V | tail -1: the pool can accrete SEVERAL
+  # versions of a metapackage across populate epochs (cp -n never prunes),
+  # and apt installs the highest — the parse must match apt's choice.
+  local meta_deb="" hdr_deb="" dep="" hdr_kernel=""
+  meta_deb="$(compgen -G "${POOL}/linux-image-${ARCH}_*.deb" | sort -V | tail -n1 || true)"
   [[ -n "${meta_deb}" ]] ||
     fatal "pool carries no linux-image-${ARCH} metapackage — cannot resolve" \
       "the target kernel (cache_populate_debs pools the TARGET_BASE closure)."
@@ -255,6 +258,26 @@ step_pin_kernel() {
   compgen -G "${POOL}/linux-image-${KERNEL_TARGET}_*.deb" >/dev/null ||
     fatal "pool metapackage resolves to linux-image-${KERNEL_TARGET} but the" \
       "pool does not carry that image deb (closure incomplete)."
+  # The image and headers metapackages MUST resolve to the same kernel. The
+  # pool accretes across populate epochs, so they can skew (seen live:
+  # image-amd64 -> 6.12.86, headers-amd64 -> 6.12.94) — and Debian's
+  # linux-headers-<v>-<arch> Recommends its matching image, so a skewed
+  # headers metapackage drags a SECOND kernel into the target that boots
+  # first (grub picks the highest) with no prebuilt zfs module. Headers must
+  # also match the boot kernel for dkms (NVIDIA, firstboot zfs) to build.
+  hdr_deb="$(compgen -G "${POOL}/linux-headers-${ARCH}_*.deb" | sort -V | tail -n1 || true)"
+  [[ -n "${hdr_deb}" ]] ||
+    fatal "pool carries no linux-headers-${ARCH} metapackage (TARGET_BASE closure incomplete)."
+  hdr_kernel="$(dpkg-deb -f "${hdr_deb}" Depends |
+    grep -oE "linux-headers-[0-9][^, ]*-${ARCH}" | head -n1 || true)"
+  hdr_kernel="${hdr_kernel#linux-headers-}"
+  [[ -n "${hdr_kernel}" ]] ||
+    fatal "cannot parse the headers kernel from ${hdr_deb##*/} Depends"
+  [[ "${hdr_kernel}" == "${KERNEL_TARGET}" ]] ||
+    fatal "pool kernel metapackages skew: ${meta_deb##*/} -> ${KERNEL_TARGET}" \
+      "but ${hdr_deb##*/} -> ${hdr_kernel}. The pool mixes populate epochs;" \
+      "refresh it: rm ${CACHE_DIR}/.pkgset.sha256 and re-run (repopulate" \
+      "pulls the current, matching metapackage pair)."
   printf '%s\n' "${KERNEL_TARGET}" >"${CACHE_DIR}/repo/KERNEL_TARGET"
 }
 
