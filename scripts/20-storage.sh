@@ -170,7 +170,14 @@ create_pool_and_datasets() {
   # env has a stable /etc/hostid before create — configure_zfs_boot_support
   # then copies this very file into the target so the two always agree.
   [[ -f /etc/hostid ]] || zgenhostid
+  # compatibility caps the pool's ENABLED feature set explicitly. The live env
+  # runs the same upstream OpenZFS 2.4.x as the target (baked prebuilt debs),
+  # whose defaults would enable 2.4 features; the boot chain (ZFSBootMenu's
+  # embedded zfs) must be able to import this pool, so cap at the 2.3 set —
+  # the exact feature level every prior validated install shipped (pools were
+  # created by Debian's 2.3.x userland before the prebuilt bake).
   zpool create -f \
+    -o compatibility=openzfs-2.3-linux \
     -o ashift=12 \
     -o autotrim=on \
     -O acltype=posix \

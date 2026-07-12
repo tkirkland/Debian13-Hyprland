@@ -359,9 +359,11 @@ booted target installs entirely from the on-ISO package store at
 - The temporary source and bind mount are torn down at cleanup. The installed
   system's **permanent** apt sources are the real Debian mirror, so future
   online `apt update`s work. The store is **not** copied into the target.
-- **ZFS compiles nowhere on this path**: the live squashfs ships a zfs module
-  prebaked for its own kernel (dkms ran once at ISO build), and the target
-  installs the prebuilt `openzfs-zfs-modules-<kver>` deb from the pool. Two
+- **ZFS compiles nowhere on this path**: the live squashfs ships the ISO's own
+  prebuilt upstream OpenZFS debs (kmod for the live kernel + userland — the
+  same 2.4.x the target gets; pool feature safety is enforced explicitly via
+  `zpool create -o compatibility=`), and the target installs the prebuilt
+  `openzfs-zfs-modules-<kver>` deb from the pool. Two
   kernels are recorded in the store: `KERNEL_PINNED` (the stock ISO's live
   kernel, asserted present in the pool at build time) and `KERNEL_TARGET`
   (the kernel the pool's `linux-image-amd64` metapackage resolves to — often

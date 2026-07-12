@@ -27,6 +27,11 @@ else
   echo "  FAIL: zgenhostid must run before zpool create (pool must record it)" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
+# The live env runs the same upstream OpenZFS 2.4.x as the target (prebuilt
+# bake), so the pool's enabled feature set must be capped EXPLICITLY — the
+# boot chain (ZFSBootMenu's embedded zfs) has to import this pool.
+assert_contains "${create_fn}" "compatibility=openzfs-2.3-linux" \
+  "zpool create caps enabled features explicitly (boot-chain importable)"
 
 boot_fn="$(declare -f configure_zfs_boot_support)"
 assert_contains "${boot_fn}" "/etc/hostid" \

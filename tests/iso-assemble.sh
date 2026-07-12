@@ -110,8 +110,8 @@ assert_contains "${with_ssh}" "apt-get install -y --no-install-recommends git op
   "installs the requested live extras"
 assert_contains "${with_ssh}" "Dir::Etc::SourceList=/etc/apt/sources.list.d/zz-live-extras-build.list" \
   "live-extras apt uses an explicit online source list, not the build-absent live medium"
-assert_contains "${with_ssh}" "deb http://deb.debian.org/debian trixie main contrib" \
-  "live-extras source includes contrib (zfs-dkms/zfsutils-linux live there, not main)"
+assert_contains "${with_ssh}" "deb http://deb.debian.org/debian trixie main" \
+  "live-extras source uses main (zfs comes from the staged store, not contrib)"
 if [[ "${with_ssh}" != *"/run/live/medium"* ]]; then
   echo "  ok: live-extras install does not reference the build-absent live medium"
 else
@@ -133,22 +133,29 @@ else
   echo "  FAIL: chroot payload is not valid shell" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
 
-echo "test: live_extras_chroot_script bakes the zfs module for the live kernel (issue #110)"
+echo "test: live_extras_chroot_script bakes the PREBUILT upstream zfs debs (issue #110)"
 kv="6.12.38+deb13-amd64"
 zfs_bake="$(live_extras_chroot_script "git" "${kv}")"
-assert_contains "${zfs_bake}" "linux-headers-${kv} zfs-dkms zfsutils-linux" \
-  "installs headers + zfs-dkms + zfsutils-linux so dkms compiles ONCE at build"
-assert_contains "${zfs_bake}" "apt-get purge -y --autoremove linux-headers-${kv}" \
-  "purges the headers (+ orphaned toolchain) after the one-time dkms build"
-if [[ "${zfs_bake}" == *"purge"*zfs-dkms* ]]; then
-  echo "  FAIL: purging zfs-dkms would dkms-remove the module it just built" >&2
-  TEST_FAILURES=$((TEST_FAILURES+1))
-else
-  echo "  ok: zfs-dkms itself is kept installed (purge would remove the module)"
-fi
-assert_contains "${zfs_bake}" "ls /lib/modules/${kv}/updates/dkms/zfs.ko*" \
-  "asserts the dkms-built module survived the purge"
+# The live env runs the same upstream OpenZFS as the target: the kmod deb for
+# the live kernel plus the userland debs come from the staged store — no dkms,
+# no headers, no compile in the chroot.
+assert_contains "${zfs_bake}" "/opt/hypr-deb/repo/pool/openzfs-zfs-modules-${kv}_*.deb" \
+  "installs the prebuilt kmod deb for the live kernel from the staged store"
+assert_contains "${zfs_bake}" "/opt/hypr-deb/repo/pool/openzfs-zfsutils_*.deb" \
+  "installs the upstream userland from the staged store"
+assert_contains "${zfs_bake}" "/opt/hypr-deb/repo/pool/openzfs-libzfs7_*.deb" \
+  "installs the upstream zfs libs from the staged store"
+for gone in zfs-dkms "linux-headers-${kv}" "apt-get purge"; do
+  if [[ "${zfs_bake}" == *"${gone}"* ]]; then
+    echo "  FAIL: bake still carries '${gone}' (dkms compile path must be gone)" >&2
+    TEST_FAILURES=$((TEST_FAILURES+1))
+  else
+    echo "  ok: no '${gone}' in the bake (no compile machinery)"
+  fi
+done
 assert_contains "${zfs_bake}" "depmod ${kv}" "runs depmod for the baked module"
+assert_contains "${zfs_bake}" "modinfo -k ${kv} zfs" \
+  "asserts the prebuilt module is resolvable after depmod"
 if bash -n <(printf '%s\n' "${zfs_bake}"); then
   echo "  ok: zfs-bake chroot payload is valid shell"
 else
@@ -156,7 +163,7 @@ else
 fi
 # Without a kernel version the payload must not grow any zfs machinery.
 no_kv="$(live_extras_chroot_script "git")"
-if [[ "${no_kv}" != *zfs-dkms* && "${no_kv}" != *depmod* ]]; then
+if [[ "${no_kv}" != *openzfs* && "${no_kv}" != *depmod* ]]; then
   echo "  ok: no kver -> no zfs bake in the payload"
 else
   echo "  FAIL: zfs bake emitted without a kernel version" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
