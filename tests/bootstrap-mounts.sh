@@ -245,6 +245,7 @@ run_teardown() { # $1 = function to call
     info() { :; }
     warn() { :; }
     teardown_target_iso_repo() { echo "iso_repo_teardown" >>"${calls}"; }
+    write_target_apt_sources() { echo "permanent_sources" >>"${calls}"; }
     kill_target_processes() { :; }
     teardown_chroot_binds() { :; }
     release_target_propagation() { echo "release_bind" >>"${calls}"; }

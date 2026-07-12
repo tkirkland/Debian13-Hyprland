@@ -236,13 +236,17 @@ phase_bootstrap() {
   run_debootstrap
   install_policy_rc_d
   mount_chroot_binds
-  # Offline: stand up the temporary file:// store source (+ bind) BEFORE writing
-  # the permanent Debian sources, so the in-chroot apt-get update below indexes
-  # the on-ISO packages. The unreachable Debian mirror is only warned about by
-  # apt (exit 0); the installed system keeps it as its permanent source.
+  # Offline: the temporary file:// store source is the ONLY apt source for the
+  # whole install. The permanent Debian mirror sources are written by
+  # phase_cleanup, AFTER the last package transaction — writing them here made
+  # apt prefer the (reachable) mirror's newer candidates over the store on any
+  # networked machine, e.g. installing trixie-security's kernel instead of the
+  # store's KERNEL_TARGET and stranding the prebuilt zfs kmod (issue #110).
+  # Offline means store-only, not store-preferred.
   if ((NETWORK_AVAILABLE == 0)); then
     setup_target_iso_repo
+  else
+    write_target_apt_sources
   fi
-  write_target_apt_sources
   in_target "apt-get update"
 }
