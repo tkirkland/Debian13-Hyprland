@@ -516,12 +516,17 @@ install_zfs_from_source() {
     local kv="" kmod_kvers=("${KERNEL_PINNED}")
     [[ "${KERNEL_TARGET}" != "${KERNEL_PINNED}" ]] && kmod_kvers+=("${KERNEL_TARGET}")
     for kv in "${kmod_kvers[@]}"; do
-      # make clean between kmod builds: the rules re-run configure for the
-      # new kernel but kbuild keeps the PREVIOUS kernel's module objects and
-      # dh_builddeb packages them under the new name (caught live by the
-      # vermagic guard below: the 2nd deb carried the 1st kernel's modules).
+      # Two resets between kmod builds, both proven necessary live by the
+      # vermagic guard below:
+      #  - make clean: kbuild keeps the previous kernel's module objects and
+      #    dh_builddeb packages them under the new name;
+      #  - rm the rules' configure stamp (override_dh_configure_modules is
+      #    stamped in the tree root): with the stamp present the 2nd run
+      #    skips the reconfigure and compiles FRESH objects against the 1st
+      #    kernel's config — right mtime, wrong vermagic.
       zfs_script+="
     make -s clean >/dev/null 2>&1 || true
+    rm -f override_dh_configure_modules_stamp
     make -j\"${jobs}\" native-deb-kmod KVERS='${kv}' KSRC='/usr/src/linux-headers-${kv%-*}-common' KOBJ='/usr/src/linux-headers-${kv}'
     ls /var/tmp/openzfs-zfs-modules-${kv}_*.deb >/dev/null 2>&1 ||
       { echo 'required package not built: openzfs-zfs-modules-${kv}' >&2; exit 1; }

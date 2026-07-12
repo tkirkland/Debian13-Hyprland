@@ -102,15 +102,17 @@ assert_contains "${zcap}" "native-deb-kmod KVERS='${KTGT}' KSRC='/usr/src/linux-
   "skewed pool also builds the kmod deb for the TARGET kernel"
 assert_contains "${zcap}" "modinfo -F vermagic" \
   "each kmod deb's packaged .ko is vermagic-checked against its KVERS"
-# Without a clean between builds, kbuild keeps the previous kernel's objects
-# and dh_builddeb packages them under the new name (seen live: the 6.12.94
-# deb carried 6.12.86 modules; the vermagic guard caught it).
+# Without a clean AND a configure-stamp removal between builds, the second
+# kmod build ships the first kernel's modules (both seen live: stale objects
+# packaged under the new name; then fresh objects compiled against the old
+# kernel config because override_dh_configure_modules is stamped).
 n_clean="$(grep -c "make -s clean" <<<"${zcap}")"
+n_stamp="$(grep -c "rm -f override_dh_configure_modules_stamp" <<<"${zcap}")"
 n_kmod="$(grep -c "native-deb-kmod" <<<"${zcap}")"
-if [[ "${n_clean}" == "${n_kmod}" && "${n_clean}" == "2" ]]; then
-  echo "  ok: every kmod build is preceded by a make clean (no stale objects)"
+if [[ "${n_clean}" == "${n_kmod}" && "${n_stamp}" == "${n_kmod}" && "${n_kmod}" == "2" ]]; then
+  echo "  ok: every kmod build is preceded by make clean + configure-stamp removal"
 else
-  echo "  FAIL: ${n_kmod} kmod builds but ${n_clean} cleans (stale-object risk)" >&2
+  echo "  FAIL: ${n_kmod} kmod builds, ${n_clean} cleans, ${n_stamp} stamp removals" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 if [[ -e "${zpool_dir}/openzfs-zfs-modules-${KPIN}_2.3.0-1_amd64.deb" &&
