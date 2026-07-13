@@ -23,6 +23,17 @@ cache_repo_exists() {
 # does not invalidate the pool. Used to detect when the pool is stale because a
 # package was added/removed since it was last populated.
 cache_pkgset_hash() {
+  # Golden mode (issue #111): the pool only feeds the golden-image debootstrap
+  # + its one apt transaction — no live-tool set, no source-build toolchain
+  # (the buildroot pulls its toolchain from the network directly). The hash
+  # differs from legacy's by construction, so switching modes repopulates.
+  if ((HYPR_ISO_GOLDEN)); then
+    printf '%s\n' \
+      "${TARGET_BASE_PACKAGES[@]}" \
+      "${GOLDEN_EXTRA_PACKAGES[@]}" |
+      sort | sha256sum | awk '{print $1}'
+    return 0
+  fi
   printf '%s\n' \
     "${TARGET_BASE_PACKAGES[@]}" \
     "${HYPR_BUILD_PACKAGES[@]}" \
@@ -78,51 +89,88 @@ cache_populate_debs() {
 
   info "Resolving full package closure in a scratch chroot..."
   debootstrap "${cache_args[@]}" --arch="${ARCH}" "${SUITE}" "${work}/closure" "${MIRROR}"
-  # The pinned sid source supplies gcc-15 (absent from trixie) and
-  # trixie-backports supplies the Rust toolchain (cargo/rustc) for swww, so the
-  # offline cache carries both toolchain sets too. The scoped allow-pins these
-  # writers install let the toolchain resolve by NAME (no `-t`), so the closure
-  # downloads exactly the versions the build will install (see install_build_deps
-  # in 60-hyprland.sh): `-t` would override the pins and pull collateral sid/
-  # backports upgrades (libmpfr6/libnghttp3-9/libngtcp2-16) the build never uses.
-  write_sid_toolchain_sources "${work}/closure"
-  write_backports_sources "${work}/closure"
-  chroot "${work}/closure" /usr/bin/env bash -c "
+  if ((HYPR_ISO_GOLDEN)); then
+    # Golden mode (issue #111): the pool feeds ONLY the golden-image bootstrap
+    # + its one apt transaction. No live-tool set, no bootloader trio (those
+    # ride the separate install store), and no source-build toolchain — the
+    # buildroot installs sid/backports toolchains from the network directly,
+    # and nothing toolchain-flavored may reach the golden image.
+    chroot "${work}/closure" /usr/bin/env bash -c "
+      set -e
+      echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
+        > /etc/apt/sources.list
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+        ${TARGET_BASE_PACKAGES[*]} ${GOLDEN_EXTRA_PACKAGES[*]}
+    "
+  else
+    # The pinned sid source supplies gcc-15 (absent from trixie) and
+    # trixie-backports supplies the Rust toolchain (cargo/rustc) for swww, so the
+    # offline cache carries both toolchain sets too. The scoped allow-pins these
+    # writers install let the toolchain resolve by NAME (no `-t`), so the closure
+    # downloads exactly the versions the build will install (see install_build_deps
+    # in 60-hyprland.sh): `-t` would override the pins and pull collateral sid/
+    # backports upgrades (libmpfr6/libnghttp3-9/libngtcp2-16) the build never uses.
+    write_sid_toolchain_sources "${work}/closure"
+    write_backports_sources "${work}/closure"
+    chroot "${work}/closure" /usr/bin/env bash -c "
+      set -e
+      echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
+        > /etc/apt/sources.list
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+        ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_PACKAGES[*]} \
+        ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 grub-efi-amd64-signed \
+        systemd-boot os-prober
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+        ${HYPR_TOOLCHAIN_PACKAGES[*]}
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
+        ${HYPR_BACKPORTS_PACKAGES[*]}
+    "
+  fi
+  cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
+
+  # NVIDIA drivers: legacy mode pools the driver closure alongside everything
+  # else (the on-ISO /hypr-repo installs NVIDIA with no network). Golden mode
+  # skips it here — the drivers go to the SEPARATE install store instead
+  # (cache_populate_nvidia, called by build-iso's golden flow), never the pool.
+  if ! ((HYPR_ISO_GOLDEN)); then
+    cache_populate_nvidia "${pool}" "${work}/closure"
+  fi
+  rm -rf "${work}"
+  # Stamp the pool with the package-set hash so a later build reuses it only
+  # while the sets are unchanged (cache_pkgset_fresh); adding/removing a package
+  # now invalidates it and forces a repopulate instead of a stale reuse.
+  cache_pkgset_hash >"${CACHE_DIR}/.pkgset.sha256"
+  info "Pool populated: $(find "${pool}" -name '*.deb' | wc -l) packages"
+}
+
+# Emit (stdout) the chroot payload that resolves the NVIDIA driver closure for
+# BOTH flavors (open + proprietary) and BOTH branches (595 + 610) into the
+# chroot's apt archives. Trust comes from the cuda-keyring deb; the deb822
+# source matches the flat (Suites: /) NVIDIA repo. The two
+# nvidia-driver-pinning-<branch> packages select the branch and share
+# /etc/apt/preferences.d/nvidia-driver-pin (they Conflict), so each branch is
+# installed, downloaded, then purged before switching. open and proprietary
+# are downloaded separately because nvidia-open Conflicts the proprietary
+# nvidia-kernel-dkms; the shared userspace overlaps and is deduped by cp -n.
+# CRITICAL: each --download-only resolution must be internally conflict-free.
+# We list ONLY the flavor metapackages + firmware + dkms build-deps and let
+# apt resolve the shared userspace itself. Force-listing the shared set
+# (nvidia-suspend-common, nvidia-kernel-common, ...) made apt refuse the
+# transaction: nvidia-driver Conflicts nvidia-suspend-common, and
+# nvidia-kernel-support (which nvidia-driver pulls) Conflicts
+# nvidia-kernel-common. Pure (string only), so tests assert the payload
+# without a real chroot; \${branch}/\${pin} expand at run time in the chroot.
+nvidia_closure_chroot_script() {
+  cat <<EOF
     set -e
+    export DEBIAN_FRONTEND=noninteractive
+    # Self-sufficient: (re)write the Debian source + update so the payload
+    # also works in a fresh minbase chroot (golden mode's own scratch).
     echo 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' \
       > /etc/apt/sources.list
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      ${TARGET_BASE_PACKAGES[*]} ${HYPR_BUILD_PACKAGES[*]} \
-      ${LIVE_TOOL_PACKAGES[*]} grub-efi-amd64 grub-efi-amd64-signed \
-      systemd-boot os-prober
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      ${HYPR_TOOLCHAIN_PACKAGES[*]}
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --download-only \
-      ${HYPR_BACKPORTS_PACKAGES[*]}
-  "
-  cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
-
-  # NVIDIA drivers (Phase 5): resolve the full offline closure for BOTH flavors
-  # (open + proprietary) and BOTH branches (595 + 610) into the same pool, so
-  # the on-ISO /hypr-repo can install NVIDIA with no network. Runs only inside
-  # this throwaway closure chroot (never touches the host). Trust comes from the
-  # cuda-keyring deb; the deb822 source matches the flat (Suites: /) NVIDIA repo.
-  # The two nvidia-driver-pinning-<branch> packages select the branch and share
-  # /etc/apt/preferences.d/nvidia-driver-pin (they Conflict), so each branch is
-  # installed, downloaded, then purged before switching. open and proprietary
-  # are downloaded separately because nvidia-open Conflicts the proprietary
-  # nvidia-kernel-dkms; the shared userspace overlaps and is deduped by cp -n.
-  # CRITICAL: each --download-only resolution must be internally conflict-free.
-  # We list ONLY the flavor metapackages + firmware + dkms build-deps and let
-  # apt resolve the shared userspace itself. Force-listing the shared set
-  # (nvidia-suspend-common, nvidia-kernel-common, ...) made apt refuse the
-  # transaction: nvidia-driver Conflicts nvidia-suspend-common, and
-  # nvidia-kernel-support (which nvidia-driver pulls) Conflicts nvidia-kernel-common.
-  info "Resolving NVIDIA driver closure (open+proprietary, branches 595+610)..."
-  chroot "${work}/closure" /usr/bin/env bash -c "
-    set -e
-    export DEBIAN_FRONTEND=noninteractive
     # Tools to fetch the keyring deb over HTTPS (minbase has neither).
     apt-get install -y --no-install-recommends ca-certificates curl
     # Establish trust: fetch + install cuda-keyring (drops the trusted key at
@@ -143,11 +191,11 @@ Signed-By: /usr/share/keyrings/cuda-archive-keyring.gpg
 SRC
     apt-get update
     for branch in 595 610; do
-      pin=\"nvidia-driver-pinning-\${branch}\"
+      pin="nvidia-driver-pinning-\${branch}"
       # Activate the branch pin (installs preferences.d/nvidia-driver-pin) so
       # the branch-agnostic metapackages resolve to this branch; this also
       # downloads the pin deb itself into the pool.
-      apt-get install -y \"\${pin}\"
+      apt-get install -y "\${pin}"
       # Open flavor: nvidia-open drags in its open-flavor shared userspace.
       apt-get install -y --download-only \
         ${NVIDIA_OPEN_PACKAGES[*]} \
@@ -163,16 +211,36 @@ SRC
         ${NVIDIA_DKMS_BUILD_PACKAGES[*]} \
         linux-headers-amd64
       # Purge the pin before switching branches (the two pins Conflict).
-      apt-get purge -y \"\${pin}\"
+      apt-get purge -y "\${pin}"
     done
-  "
-  cp -n "${work}/closure/var/cache/apt/archives/"*.deb "${pool}/"
-  rm -rf "${work}"
-  # Stamp the pool with the package-set hash so a later build reuses it only
-  # while the sets are unchanged (cache_pkgset_fresh); adding/removing a package
-  # now invalidates it and forces a repopulate instead of a stale reuse.
-  cache_pkgset_hash >"${CACHE_DIR}/.pkgset.sha256"
-  info "Pool populated: $(find "${pool}" -name '*.deb' | wc -l) packages"
+EOF
+}
+
+# Resolve the NVIDIA driver closure into POOL. Runs the payload inside
+# CLOSURE_CHROOT when given (legacy: cache_populate_debs' scratch chroot, so
+# the drivers land in the SAME pool as everything else); with no chroot it
+# debootstraps its own throwaway one (golden mode: the drivers are the bulk
+# of the separate install store on the ISO9660 medium). Never touches the
+# host. Network required (build time only).
+cache_populate_nvidia() {
+  local pool="${1:?pool dir}" croot="${2:-}" own=0
+  mkdir -p "${pool}"
+  if [[ -z "${croot}" ]]; then
+    own=1
+    croot="$(mktemp -d "${CACHE_DIR}/.nvidia-closure.XXXXXX")"
+    # Same shared-debootstrap-cache idiom as cache_populate_debs.
+    local -a cache_args=()
+    if [[ -n "${DEBOOTSTRAP_CACHE:-}" ]]; then
+      cache_args=(--cache-dir="${DEBOOTSTRAP_CACHE}")
+    fi
+    debootstrap "${cache_args[@]}" --arch="${ARCH}" "${SUITE}" "${croot}" "${MIRROR}"
+  fi
+  info "Resolving NVIDIA driver closure (open+proprietary, branches 595+610)..."
+  chroot "${croot}" /usr/bin/env bash -c "$(nvidia_closure_chroot_script)"
+  cp -n "${croot}/var/cache/apt/archives/"*.deb "${pool}/"
+  if ((own)); then
+    rm -rf "${croot}"
+  fi
 }
 
 # chezmoi (dotfile manager) is GitHub-only, not in Debian. Harvest its official
@@ -252,8 +320,11 @@ cache_populate_brave() {
     fatal "Failed to harvest the Brave archive keyring."
 }
 
+# Index an apt-ftparchive repo (pool/ -> dists/ Packages + Release). Takes the
+# repo root as an optional argument (default: the build pool) so the golden
+# flow can index the separate install store with the same code (issue #111).
 cache_index_repo() {
-  local repo="${CACHE_DIR}/repo"
+  local repo="${1:-${CACHE_DIR}/repo}"
   local bindir="dists/${SUITE}/main/binary-${ARCH}"
   mkdir -p "${repo}/${bindir}"
   (
