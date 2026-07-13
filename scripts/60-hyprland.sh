@@ -1851,6 +1851,15 @@ write_firstboot_runner() {
 set -uo pipefail
 dir=/usr/lib/hypr-deb/firstboot.d
 shopt -s nullglob
+# Bounded clock-settle wait: on an RTC-mode mismatch (e.g. --rtc=local on a
+# UTC-RTC machine) timesyncd steps the clock by hours shortly after boot; a
+# backwards jump mid-dkms-build fails every kbuild conftest (seen live
+# 2026-07-13). Wait for NTP sync — or 60s, so offline machines (stable
+# clock, no step coming) proceed unharmed.
+for _ in $(seq 1 30); do
+  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] && break
+  sleep 2
+done
 for job in "${dir}"/*.sh; do
   echo "hypr-deb-firstboot: running ${job##*/}" >&2
   if bash "${job}"; then

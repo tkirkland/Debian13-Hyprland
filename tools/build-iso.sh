@@ -1018,7 +1018,7 @@ step_assemble() {
     HYPR_INSTALLER_DIR="${payload}" \
     LIVE_AUTOINSTALL_PASSWORD="${LIVE_AUTOINSTALL_PASSWORD:-}" \
     LIVE_AUTOINSTALL_BOOTLOADER="${LIVE_AUTOINSTALL_BOOTLOADER:-grub}" \
-    LIVE_AUTOINSTALL_RTC="${LIVE_AUTOINSTALL_RTC:-local}" \
+    LIVE_AUTOINSTALL_RTC="${LIVE_AUTOINSTALL_RTC:-utc}" \
     LIVE_AUTOINSTALL_USERNAME="${LIVE_AUTOINSTALL_USERNAME:-me}" \
     bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${repo_arg}" "${OUT_ISO}" \
     || fatal "iso-assemble failed"

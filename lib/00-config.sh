@@ -83,7 +83,8 @@ EOF
 }
 
 # --- System identity ---------------------------------------------------------
-TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
+# Generic default (env-overridable): "precision" was reference-machine leak.
+TARGET_HOSTNAME="${TARGET_HOSTNAME:-hyprland}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked

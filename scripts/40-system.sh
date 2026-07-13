@@ -28,6 +28,9 @@ write_mdadm_conf() {
   mkdir -p "${TARGET}/etc/mdadm"
   {
     echo "HOMEHOST <ignore>"
+    # mdmonitor exits 1 ("not monitoring") without a mail target; root is
+    # the Debian-postinst default the golden bake skips.
+    echo "MAILADDR root"
     mdadm --detail --scan
   } >"${TARGET}/etc/mdadm/mdadm.conf"
 }
