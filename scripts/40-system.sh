@@ -241,6 +241,21 @@ detect_cpu_vendor() {
   grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $NF}'
 }
 
+# Echo the given package names minus Debian's zfs-* set (one per line).
+# Upstream OpenZFS replaces Debian's zfs-* on every path — installing them
+# first would only churn (and dkms-build) packages immediately replaced — so
+# both the installer's base install and the golden-image build (issue #111)
+# filter them through this one helper.
+filter_zfs_debian_packages() {
+  local p=""
+  for p in "$@"; do
+    case " ${ZFS_DEBIAN_PACKAGES[*]} " in
+      *" ${p} "*) continue ;;
+    esac
+    printf '%s\n' "${p}"
+  done
+}
+
 install_base_packages() {
   local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
   # VMware guest integration (display resize, clipboard, time sync,
@@ -249,18 +264,7 @@ install_base_packages() {
   if [[ "${VIRT_TYPE}" == "vmware" ]]; then
     pkgs+=(open-vm-tools open-vm-tools-desktop)
   fi
-  # Upstream OpenZFS replaces Debian's zfs-* on BOTH paths: online builds it from
-  # source (install_zfs_from_source), offline installs the prebuilt upstream debs
-  # from the on-ISO pool (install_zfs_offline). Either way, installing Debian's
-  # zfs-* first would only churn (and dkms-build) packages we immediately replace,
-  # so filter them out of the base set unconditionally.
-  for p in "${pkgs[@]}"; do
-    case " ${ZFS_DEBIAN_PACKAGES[*]} " in
-      *" ${p} "*) continue ;;
-    esac
-    filtered+=("${p}")
-  done
-  pkgs=("${filtered[@]}")
+  mapfile -t pkgs < <(filter_zfs_debian_packages "${pkgs[@]}")
   # Microcode is CPU-vendor-specific: the other vendor's blob is dead weight on
   # the installed system. Install ONLY the microcode matching this CPU. BOTH debs
   # stay in the offline pool (TARGET_BASE_PACKAGES is unchanged, so the ISO still
@@ -387,6 +391,15 @@ install_zfs_offline() {
 # EVERY offline install — stage_firstboot_runner (60-hyprland.sh) is shared
 # with --build-on-firstboot and self-disables once no jobs remain.
 stage_zfs_dkms_firstboot() {
+  stage_zfs_dkms_job
+  stage_firstboot_runner
+}
+
+# Job-staging half of the dkms handover, split out (issue #111): the golden-
+# image build bakes the dormant deb + job with the runner never enabled
+# (write_firstboot_runner), while the installer path keeps the enabling
+# wrapper above. Reads the pooled deb from CACHE_REPO_DIR either way.
+stage_zfs_dkms_job() {
   local deb=""
   # compgen exits 1 on an empty glob, which under the installer's pipefail
   # would kill the assignment itself — || true so the fatal below gets to
@@ -396,7 +409,7 @@ stage_zfs_dkms_firstboot() {
     fatal "openzfs-zfs-dkms deb not in the offline pool (${CACHE_REPO_DIR}/pool)."
   mkdir -p "${TARGET}/var/cache/hypr-deb"
   cp "${deb}" "${TARGET}/var/cache/hypr-deb/"
-  stage_firstboot_runner
+  mkdir -p "${TARGET}/usr/lib/hypr-deb/firstboot.d"
   cat >"${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh" <<'EOF'
 #!/usr/bin/env bash
 # Firstboot job: install the deferred openzfs-zfs-dkms deb (staged by
@@ -758,6 +771,13 @@ install_brave() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y brave-browser
   "
+  stage_brave_apt_source
+}
+
+# Keyring + deb822 source staging half of install_brave, split out (issue
+# #111): the golden-image build installs brave-browser in its one apt
+# transaction and stages the update channel through this alone.
+stage_brave_apt_source() {
   local keyring_src="${CACHE_REPO_DIR}/${BRAVE_KEYRING_NAME}"
   if [[ ! -f "${keyring_src}" ]]; then
     warn "Brave archive keyring absent from the offline store (${keyring_src});"

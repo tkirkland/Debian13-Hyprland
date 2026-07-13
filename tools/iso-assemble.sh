@@ -60,6 +60,15 @@ LIVE_AUTOINSTALL_USERNAME="${LIVE_AUTOINSTALL_USERNAME:-me}"
 LIVE_AUTOINSTALL_PASSWORD="${LIVE_AUTOINSTALL_PASSWORD:-}"
 # Path of the live root squashfs inside the ISO (Debian live default).
 ISO_LIVE_SQUASHFS="${ISO_LIVE_SQUASHFS:-/live/filesystem.squashfs}"
+# Golden mode (issue #111): GOLDEN_ROOT (env, set by build-iso) selects the
+# golden path — mksquashfs GOLDEN_ROOT as the ONE live/install image, map its
+# kernel/initrd over the stock /live names, and put the install store + the
+# installer tree on the ISO9660 MEDIUM (visible at /run/live/medium/...)
+# instead of inside the squashfs. The medium store location matches the
+# installer's ISO_MEDIUM_REPO probe (lib/00-config.sh).
+GOLDEN_ROOT="${GOLDEN_ROOT:-}"
+ISO_MEDIUM_STORE_DIR="${ISO_MEDIUM_STORE_DIR:-/hypr-repo}"
+ISO_MEDIUM_INSTALLER_DIR="${ISO_MEDIUM_INSTALLER_DIR:-/hypr-installer}"
 # Stock paths to drop from the output ISO: Debian's own live-installer (d-i)
 # pool + metadata, which this distro never uses (it installs via our own
 # installer + the embedded store). Removing them reclaims the ~200 base .debs.
@@ -328,13 +337,20 @@ install_live_extras() {
   ((rc == 0)) || fatal "live-extras install failed (rc=${rc})"
 }
 
-# build_write_iso_args STOCK_ISO NEW_SQUASHFS OUT_ISO
+# build_write_iso_args STOCK_ISO NEW_SQUASHFS OUT_ISO [SRC TARGET]...
 # Emit (one per line) the native-xorriso argv that writes OUT_ISO = STOCK_ISO
 # with the live squashfs replaced by NEW_SQUASHFS and the d-i pool stripped,
 # replaying the stock El-Torito BIOS + EFI boot images so OUT_ISO stays bootable.
-# Split out as a pure seam so the argv is unit-testable without xorriso.
+# Extra SRC/TARGET pairs become additional -map edits (golden mode: the golden
+# kernel/initrd mapped OVER the stock /live names so the boot cfgs keep working,
+# and the install store + installer onto the medium top level) — still emitted
+# BEFORE the boot replay, preserving the load-bearing ordering. Split out as a
+# pure seam so the argv is unit-testable without xorriso.
 build_write_iso_args() {
   local stock="$1" sqfs="$2" out="$3"
+  shift 3
+  (($# % 2 == 0)) ||
+    fatal "build_write_iso_args: extra map arguments must be SRC TARGET pairs"
   # Ordering is load-bearing (Debian RepackBootableISO): acquire input/output,
   # THEN manipulate the tree (-rm_r / -map), THEN replay the boot equipment, THEN
   # commit. Running `-boot_image any replay` BEFORE the edits can lose the
@@ -346,15 +362,76 @@ build_write_iso_args() {
     printf '%s\n' -abort_on NEVER -rm_r "${strip[@]}" -- -abort_on FAILURE
   fi
   printf '%s\n' -map "${sqfs}" "${ISO_LIVE_SQUASHFS}"
+  while (($#)); do
+    printf '%s\n' -map "$1" "$2"
+    shift 2
+  done
   printf '%s\n' -boot_image any replay -compliance no_emul_toc -padding included
   printf '%s\n' -commit
 }
 
-# write_iso_with_squashfs STOCK_ISO NEW_SQUASHFS OUT_ISO — run the xorriso write.
+# write_iso_with_squashfs STOCK_ISO NEW_SQUASHFS OUT_ISO [SRC TARGET]...
 write_iso_with_squashfs() {
   local -a args=()
-  mapfile -t args < <(build_write_iso_args "$1" "$2" "$3")
+  mapfile -t args < <(build_write_iso_args "$@")
   xorriso "${args[@]}"
+}
+
+# parse_live_boot_paths CFG_TEXT
+# Pure: extract the kernel and initrd ISO paths the stock boot configs
+# reference under /live/ (isolinux for BIOS, grub for EFI). The golden ISO
+# maps OUR kernel/initrd over exactly these names, so the replayed stock boot
+# equipment keeps loading a matching pair whatever the version-string in the
+# name says. Echoes "KERNEL_PATH INITRD_PATH"; nonzero unless exactly one
+# distinct token of each is found (several distinct names would mean the
+# stock layout changed — fail loudly, see issue #111 U1).
+parse_live_boot_paths() {
+  local text="$1" kpaths="" ipaths=""
+  kpaths="$(grep -oE '/live/vmlinuz[^ "]*' <<<"${text}" | sort -u)"
+  ipaths="$(grep -oE '/live/initrd[^ "]*' <<<"${text}" | sort -u)"
+  [[ -n "${kpaths}" && -n "${ipaths}" ]] || return 1
+  (($(wc -l <<<"${kpaths}") == 1)) || return 1
+  (($(wc -l <<<"${ipaths}") == 1)) || return 1
+  printf '%s %s\n' "${kpaths}" "${ipaths}"
+}
+
+# probe_stock_live_boot_paths STOCK_ISO WORKDIR
+# Extract the stock ISO's boot configs (best-effort per file: layouts vary
+# across releases) and parse the /live/ kernel/initrd path pair from their
+# combined text. Heavy half of the seam; the parsing is pure above.
+probe_stock_live_boot_paths() {
+  local stock="$1" work="$2" cfg="" text=""
+  local -a candidates=(
+    /isolinux/live.cfg /isolinux/menu.cfg /isolinux/isolinux.cfg
+    /boot/grub/grub.cfg /boot/grub/loopback.cfg
+  )
+  rm -rf "${work}/bootcfg"
+  mkdir -p "${work}/bootcfg"
+  for cfg in "${candidates[@]}"; do
+    xorriso -osirrox on -indev "${stock}" \
+      -extract "${cfg}" "${work}/bootcfg/${cfg//\//_}" >/dev/null 2>&1 || true
+  done
+  text="$(cat "${work}/bootcfg"/* 2>/dev/null || true)"
+  rm -rf "${work}/bootcfg"
+  [[ -n "${text}" ]] || return 1
+  parse_live_boot_paths "${text}"
+}
+
+# stage_golden_home GOLDEN_ROOT
+# Seed the live user's home inside the golden root: the installer symlink and
+# the generated autoinstall launcher, both pointing at the MEDIUM-side
+# installer (golden mode moves the store + installer out of the squashfs).
+# live-config creates the live user as uid 1000 (Debian live default) and
+# adopts an existing /home/user, so ownership is set to match. These two
+# files are live-only; customize removes them from the copied tree.
+stage_golden_home() {
+  local root="${1:?golden root}"
+  local home="${root%/}${LIVE_USER_HOME}"
+  mkdir -p "${home}"
+  ln -sfn "${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}/${LIVE_INSTALLER_ENTRY}" \
+    "${home}/${LIVE_INSTALLER_ENTRY}"
+  stage_autoinstall_launcher "${home}"
+  chown -R 1000:1000 "${home}" 2>/dev/null || true
 }
 
 # assemble STOCK_ISO REPO_DIR OUT_ISO
@@ -388,6 +465,13 @@ assemble() {
   local stock_sqfs="${work}/stock.squashfs" new_sqfs="${work}/filesystem.squashfs"
   local stage="${work}/stage"
 
+  if [[ -n "${GOLDEN_ROOT}" ]]; then
+    assemble_golden "${stock_iso}" "${repo_dir}" "${out_iso}" \
+      "${installer_dir}" "${work}"
+    printf '%s\n' "${out_iso}"
+    return 0
+  fi
+
   info "iso-assemble: extracting ${ISO_LIVE_SQUASHFS} from the stock ISO"
   extract_stock_squashfs "${stock_iso}" "${stock_sqfs}"
   info "iso-assemble: staging repo${installer_dir:+ + installer} under ${LIVE_STORE_ROOT}"
@@ -398,6 +482,78 @@ assemble() {
   write_iso_with_squashfs "${stock_iso}" "${new_sqfs}" "${out_iso}"
 
   printf '%s\n' "${out_iso}"
+}
+
+# assemble_golden STOCK_ISO STORE_DIR OUT_ISO INSTALLER_DIR WORK
+# Golden-mode assembly (issue #111): the golden rootfs becomes the ONE
+# squashfs (live session == install image); its kernel/initrd are mapped over
+# the stock /live names so the replayed stock boot equipment (BIOS isolinux +
+# EFI grub) keeps loading a matching pair; the install store and the
+# installer tree ride the ISO9660 medium, NOT the squashfs — the squashfs is
+# exactly the tree the installer copies to disk.
+assemble_golden() {
+  local stock_iso="$1" store_dir="$2" out_iso="$3" installer_dir="$4" work="$5"
+  local stock_sqfs="${work}/stock.squashfs" new_sqfs="${work}/filesystem.squashfs"
+
+  [[ -d "${GOLDEN_ROOT}" ]] || fatal "golden root not found: ${GOLDEN_ROOT}"
+  # Exactly one kernel, with its live-capable initrd next to it (live-boot is
+  # baked into the golden image, so update-initramfs produced a live initrd).
+  local kver="" kfile="" ifile=""
+  kver="$(detect_live_root_kernel "${GOLDEN_ROOT}")" ||
+    fatal "golden root must carry exactly one kernel under /lib/modules"
+  kfile="${GOLDEN_ROOT}/boot/vmlinuz-${kver}"
+  ifile="${GOLDEN_ROOT}/boot/initrd.img-${kver}"
+  [[ -f "${kfile}" ]] || fatal "golden kernel missing: ${kfile}"
+  [[ -f "${ifile}" ]] || fatal "golden initrd missing: ${ifile}"
+  # The installer unpacks THROUGH the mounted ESP at /target/boot/efi; the
+  # image must not carry anything there (issue #111 D3 invariant).
+  if [[ -n "$(ls -A "${GOLDEN_ROOT}/boot/efi" 2>/dev/null || true)" ]]; then
+    fatal "golden /boot/efi is not empty — the image would write into the mounted ESP"
+  fi
+  # No chroot guard and no build-time file:// source may ship (step_finalize_golden
+  # removes them; assert, because a squashfs with either is broken subtly).
+  [[ -e "${GOLDEN_ROOT}/usr/sbin/policy-rc.d" ]] &&
+    fatal "golden root still carries policy-rc.d (run step_finalize_golden)"
+  if grep -qs 'file://' "${GOLDEN_ROOT}/etc/apt/sources.list" 2>/dev/null; then
+    fatal "golden root still carries the build-time file:// apt source"
+  fi
+
+  # The stock /live names the boot cfgs reference — our kernel/initrd map
+  # over exactly those (plan B on layout drift: edit the cfg text; see U1).
+  local kpath="" ipath=""
+  read -r kpath ipath < <(probe_stock_live_boot_paths "${stock_iso}" "${work}") ||
+    fatal "cannot determine the stock ISO's /live kernel/initrd paths (boot cfg layout changed?)"
+  [[ -n "${kpath}" && -n "${ipath}" ]] ||
+    fatal "cannot determine the stock ISO's /live kernel/initrd paths (boot cfg layout changed?)"
+  info "iso-assemble: golden kernel ${kver} maps over ${kpath} + ${ipath}"
+
+  # Medium-side paths: the live home seed must point at the medium installer.
+  LIVE_STORE_ROOT="/run/live/medium"
+  LIVE_REPO_SUBDIR="${ISO_MEDIUM_STORE_DIR#/}"
+  LIVE_INSTALLER_SUBDIR="${ISO_MEDIUM_INSTALLER_DIR#/}"
+  if [[ -n "${installer_dir}" ]]; then
+    stage_golden_home "${GOLDEN_ROOT}"
+  fi
+
+  # Compressor/blocksize parity with the stock image (zstd + large blocks;
+  # mksquashfs defaults would bloat the image).
+  info "iso-assemble: extracting ${ISO_LIVE_SQUASHFS} from the stock ISO (compression params)"
+  extract_stock_squashfs "${stock_iso}" "${stock_sqfs}"
+  local comp="" bsize=""
+  read -r comp bsize < <(detect_squashfs_params "${stock_sqfs}") ||
+    fatal "could not read compressor/block size from ${stock_sqfs}"
+  rm -f "${stock_sqfs}"
+  info "iso-assemble: squashing the golden rootfs (${comp}, block ${bsize})"
+  mksquashfs "${GOLDEN_ROOT}" "${new_sqfs}" -noappend -no-progress -no-recovery \
+    -comp "${comp}" -b "${bsize}"
+
+  info "iso-assemble: writing ${out_iso} (golden squashfs + medium store)"
+  local -a extra_maps=("${kfile}" "${kpath}" "${ifile}" "${ipath}"
+    "${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
+  if [[ -n "${installer_dir}" ]]; then
+    extra_maps+=("${installer_dir}" "${ISO_MEDIUM_INSTALLER_DIR}")
+  fi
+  write_iso_with_squashfs "${stock_iso}" "${new_sqfs}" "${out_iso}" "${extra_maps[@]}"
 }
 
 main() {

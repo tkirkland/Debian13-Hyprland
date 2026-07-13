@@ -411,6 +411,15 @@ target_xkb_value() {
   printf '%s\n' "${val:-${fallback}}"
 }
 
+# Target-relative home directory receiving the staged default user configs.
+# SESSION_CONFIG_HOME (lib/00-config.sh) overrides it: the golden-image build
+# stages into /etc/skel so every adduser-created account inherits the files;
+# empty (the installer default) keeps writing the target user's real home.
+# set-u-safe for test contexts that never sourced lib/00-config.sh.
+user_config_home() {
+  printf '%s\n' "${SESSION_CONFIG_HOME:-/home/${TARGET_USERNAME}}"
+}
+
 # The user's starter config is Hyprland's own example/hyprland.lua at the
 # resolved tag — full upstream keybind set, rules, docs — SPLIT into one
 # module per upstream section header (---- MONITORS ----, ----
@@ -438,7 +447,8 @@ write_hypr_lua_config() {
   [[ -n "${example}" ]] ||
     fatal "Upstream example config not found (neither the staged Hyprland" \
       "source nor the installed /usr/share/hypr/hyprland.lua is present)."
-  local cfg_dir="${TARGET}/home/${TARGET_USERNAME}/.config/hypr"
+  local cfg_dir=""
+  cfg_dir="${TARGET}$(user_config_home)/.config/hypr"
   local entry="${cfg_dir}/hyprland.lua"
   local hdr_re='^-{2,}[[:space:]]+([A-Za-z][A-Za-z[:space:]]*[A-Za-z])[[:space:]]+-{2,}$'
   local line="" section="" slug="" modules=()
@@ -1014,7 +1024,8 @@ EOF
 # rounding 6 + 1px border); the chown -R in the Hyprland phase gives the user
 # ownership. Mako is intentionally never installed.
 stage_swaync_config() {
-  local sw_dir="${TARGET}/home/${TARGET_USERNAME}/.config/swaync"
+  local sw_dir=""
+  sw_dir="${TARGET}$(user_config_home)/.config/swaync"
   install -d "${sw_dir}"
   cat >"${sw_dir}/config.json" <<'EOF'
 {
@@ -1123,7 +1134,8 @@ EOF
 # example config); ownership comes from the later chown -R.
 stage_kitty_config() {
   local example="${TARGET}/usr/share/doc/kitty/examples/kitty.conf"
-  local kitty_dir="${TARGET}/home/${TARGET_USERNAME}/.config/kitty"
+  local kitty_dir=""
+  kitty_dir="${TARGET}$(user_config_home)/.config/kitty"
   if [[ ! -f "${example}" ]]; then
     warn "kitty annotated default config missing (${example}); skipping."
     return 0
@@ -1141,7 +1153,8 @@ stage_kitty_config() {
 # (WALKER_RUNTIME_PACKAGES) come from the apt base set.
 stage_walker_launcher() {
   local src="${CACHE_REPO_DIR:-}/${WALKER_STORE_SUBDIR:-walker}" p=""
-  local prov_dir="${TARGET}/home/${TARGET_USERNAME}/.config/elephant/providers"
+  local prov_dir=""
+  prov_dir="${TARGET}$(user_config_home)/.config/elephant/providers"
   if [[ ! -x "${src}/walker" || ! -x "${src}/elephant" ]]; then
     warn "walker launcher stack absent from the offline store (${src}); skipping."
     return 0
@@ -1167,7 +1180,8 @@ stage_walker_launcher() {
 # configure_session BEFORE its chown -R so the user config file is owned by the
 # target user.
 write_portal_config() {
-  local portal_dir="${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal"
+  local portal_dir=""
+  portal_dir="${TARGET}$(user_config_home)/.config/xdg-desktop-portal"
   install -d "${portal_dir}"
   cat >"${portal_dir}/hyprland-portals.conf" <<'EOF'
 [preferred]
@@ -1196,8 +1210,10 @@ EOF
 # apps match the gschema cursor-theme. The Hyprland-wiki NVIDIA variables
 # (issue #4) are appended only when an NVIDIA driver install was requested.
 write_uwsm_env() {
-  mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm"
-  cat >"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
+  local env_dir=""
+  env_dir="${TARGET}$(user_config_home)/.config/uwsm"
+  mkdir -p "${env_dir}"
+  cat >"${env_dir}/env" <<'EOF'
 # Managed by hypr-deb: session environment sourced by uwsm into the systemd
 # user environment. Theming defaults (issues #51/#76): Qt6 apps follow the GTK
 # theme through the gtk3 platform theme; Adwaita cursors everywhere.
@@ -1205,7 +1221,7 @@ export QT_QPA_PLATFORMTHEME=gtk3
 export XCURSOR_THEME=Adwaita
 EOF
   if nvidia_install_requested; then
-    cat >>"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
+    cat >>"${env_dir}/env" <<'EOF'
 # NVIDIA environment for the Hyprland session (issue #4).
 export LIBVA_DRIVER_NAME=nvidia
 export __GLX_VENDOR_LIBRARY_NAME=nvidia
@@ -1239,6 +1255,27 @@ configure_session() {
       printf 'XKB_DEFAULT_OPTIONS=%s\n' "${xkb_options}"
     fi
   } >>"${TARGET}/etc/environment"
+  stage_session_configs
+  install_drm_reprobe_sudoers
+  # The user config is generated against this install's keymap (it reads the
+  # target's /etc/default/keyboard), so it stays out of the machine-
+  # independent staging above.
+  write_hypr_lua_config
+  in_target "
+    set -e
+    # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
+    # shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
+  "
+}
+
+# Machine-independent session staging (issue #111): every session file that
+# does NOT depend on this install's user, keymap, or NVIDIA choice. The
+# installer reaches it through configure_session; the golden-image build
+# calls it directly with SESSION_CONFIG_HOME=/etc/skel (and the default
+# HYPR_AUTOLOGIN=0 tuigreet greeter) so one staged copy bakes into the image.
+stage_session_configs() {
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
   # Hyprland startup chatter paints over the console during the greeter →
   # desktop handoff (issue #12). Both session paths route through this
@@ -1395,19 +1432,6 @@ for path in /sys/class/drm/card*-*/status; do
 done
 EOF
   chmod 755 "${TARGET}/usr/bin/drm-reprobe"
-  # NOPASSWD for the single fixed command (no args) -> minimal privilege; the
-  # hyprland.start hook runs it as ${TARGET_USERNAME} via sudo (user is in the
-  # sudo group, and Debian's /etc/sudoers @includedir's /etc/sudoers.d).
-  install -d -m 755 "${TARGET}/etc/sudoers.d"
-  # rm first: a resumed run must rewrite this file, but the previous pass
-  # left it 0440 and `cat >` onto a read-only file fails for non-root.
-  rm -f "${TARGET}/etc/sudoers.d/drm-reprobe"
-  cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
-# Managed by installer.sh: let the desktop user force a DRM connector re-probe
-# at Hyprland start, recovering an external display the greeter disabled.
-${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/bin/drm-reprobe
-EOF
-  chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
   # hyprlock PAM service (issue #71): authenticate the lock screen against the
   # system stack. hypridle (issue #72) is enabled for the user by linking its
   # unit into graphical-session.target.wants — a plain symlink (not `systemctl
@@ -1702,7 +1726,6 @@ HYPRDIM_SERVICE
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   ln -sf /usr/lib/systemd/user/hyprdim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
-  write_hypr_lua_config
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
@@ -1713,10 +1736,6 @@ HYPRDIM_SERVICE
   write_portal_config
   in_target "
     set -e
-    # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
-    # shipping a broken (or privilege-widening) rule into the target.
-    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
-    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
     # tuigreet --remember writes its cache as _greetd; the Debian package
     # does not create the directory, and a greeter that cannot write it
     # can crash-loop (repaint storm, swallowed keystrokes on VT1).
@@ -1729,6 +1748,24 @@ HYPRDIM_SERVICE
   "
 }
 
+# Per-install NOPASSWD rule for the single fixed drm-reprobe command (no args)
+# -> minimal privilege; the hyprland.start hook runs it as ${TARGET_USERNAME}
+# via sudo (the user is in the sudo group, and Debian's /etc/sudoers
+# @includedir's /etc/sudoers.d). Named for TARGET_USERNAME, so it never bakes
+# into the golden image — it is written per install (configure_session).
+install_drm_reprobe_sudoers() {
+  install -d -m 755 "${TARGET}/etc/sudoers.d"
+  # rm first: a resumed run must rewrite this file, but the previous pass
+  # left it 0440 and `cat >` onto a read-only file fails for non-root.
+  rm -f "${TARGET}/etc/sudoers.d/drm-reprobe"
+  cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
+# Managed by installer.sh: let the desktop user force a DRM connector re-probe
+# at Hyprland start, recovering an external display the greeter disabled.
+${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/bin/drm-reprobe
+EOF
+  chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
+}
+
 # --- First-boot deferral (--build-on-firstboot) ------------------------------
 
 # Shared firstboot machinery: a per-job directory so independent features
@@ -1738,10 +1775,11 @@ HYPRDIM_SERVICE
 # renames it .failed and the boot CONTINUES — jobs must leave the system
 # usable when they fail. The unit disables itself once no runnable jobs
 # remain; a job requests a reboot by touching /run/hypr-deb-reboot-required.
-stage_firstboot_runner() {
-  # The enable runs UNCONDITIONALLY (it is idempotent): a resumed run that
-  # died between writing the files and enabling the unit must still enable
-  # it, so only the file-writing is skipped when the runner exists.
+# File-writing half of the firstboot machinery, split out (issue #111) so the
+# golden-image build can bake the runner + unit DORMANT (never enabled — the
+# live session must not run firstboot jobs); the installer path enables it via
+# stage_firstboot_runner below.
+write_firstboot_runner() {
   if [[ ! -x "${TARGET}/usr/sbin/hypr-deb-firstboot" ]]; then
     mkdir -p "${TARGET}/usr/sbin" \
       "${TARGET}/usr/lib/hypr-deb/firstboot.d" \
@@ -1791,6 +1829,13 @@ TimeoutStartSec=0
 WantedBy=multi-user.target
 EOF
   fi
+}
+
+stage_firstboot_runner() {
+  # The enable runs UNCONDITIONALLY (it is idempotent): a resumed run that
+  # died between writing the files and enabling the unit must still enable
+  # it, so only the file-writing is skipped when the runner exists.
+  write_firstboot_runner
   in_target "systemctl enable hypr-deb-firstboot.service"
 }
 

@@ -136,6 +136,17 @@ ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
 # ISO_LIVE_REPO/ISO_MEDIUM_REPO MUST be defined above this line (set -u).
 CACHE_REPO_DIR="${CACHE_REPO_DIR:-${ISO_LIVE_REPO}}"
 
+# --- ISO build mode (issue #111, golden rootfs) --------------------------------
+# HYPR_ISO_GOLDEN=1 switches tools/build-iso.sh to the golden-rootfs pipeline:
+# the build debootstraps a second, clean chroot from the file:// pool, installs
+# the COMPLETE target system into it once, and ships that one squashfs as BOTH
+# the live session and the image the installer copies to disk. The multi-GB
+# pool becomes a build-workspace artifact; the ISO carries only the small
+# install store (NVIDIA + bootloader debs, ZBM EFI, KERNEL stamp) on the
+# ISO9660 medium at /hypr-repo. 0 (default) keeps the legacy stock-squashfs
+# repack with the full pool embedded at /opt/hypr-deb/repo.
+HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-0}"
+
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
 BOOTLOADER="${BOOTLOADER:-}"
@@ -788,6 +799,24 @@ TARGET_BASE_PACKAGES=(
   intel-microcode amd64-microcode hwdata xwayland xkb-data
 )
 
+# Packages the golden image (issue #111) carries ON TOP of the target base
+# set — they serve the live session and the install pipeline, and the ones
+# that are live-only (live-boot/live-config*) are purged from the copied tree
+# at customize time:
+#   live-boot/live-config*  boot the squashfs as the live session
+#   git                     live convenience (was a live-extras graft)
+#   squashfs-tools          unsquashfs — the installer's rootfs copy step
+#   gdisk parted rsync      partitioning/copy tools (were LIVE_TOOL_PACKAGES,
+#                           whose uname-keyed headers entry cannot bake)
+#   openssl                 ensure_mok_key runs it in the live env
+#   NVIDIA_DKMS_BUILD_PACKAGES + linux-headers (via TARGET_BASE) bake so the
+#   conflict-free half of every NVIDIA variant is already in the image.
+GOLDEN_EXTRA_PACKAGES=(
+  live-boot live-config live-config-systemd
+  git squashfs-tools gdisk parted rsync openssl
+  "${NVIDIA_DKMS_BUILD_PACKAGES[@]}"
+)
+
 # --- Addons -------------------------------------------------------------------
 # User drop-in package lists: every addons/*.list file is read (one Debian
 # package per line; blank lines and # comments ignored) and appended to
@@ -821,6 +850,13 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
+# Target-relative destination for the staged default user configs (uwsm env,
+# portal routing, swaync/kitty/walker/hypr configs). Empty (the default) =
+# the target user's real home (/home/${TARGET_USERNAME}); the golden-image
+# build (issue #111) overrides it to /etc/skel so every adduser-created
+# account — the live-config live user and the installed create_user account —
+# inherits the same defaults from one staged copy.
+SESSION_CONFIG_HOME="${SESSION_CONFIG_HOME:-}"
 # --ntp: space-separated NTP servers written into the target's
 # systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
 # Empty (the default) leaves timesyncd on Debian's stock pool/DHCP behaviour;
