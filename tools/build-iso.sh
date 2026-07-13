@@ -92,6 +92,12 @@ export DEBOOTSTRAP_CACHE
 # Chroot-internal staging root for DESTDIR installs (host-visible at
 # ${TARGET}${BUILD_STAGE_REL}; chroot-visible at ${BUILD_STAGE_REL}).
 BUILD_STAGE_REL="${BUILD_STAGE_REL:-/var/tmp/hypr-stage}"
+# Golden mode (issue #111, HYPR_ISO_GOLDEN=1): the second, clean chroot that
+# becomes the one shipped squashfs (live session == install image), and the
+# small install store that rides the ISO9660 medium at /hypr-repo (NVIDIA +
+# bootloader debs, ZBM EFI, KERNEL stamp).
+GOLDEN="${ISO_WORKSPACE}/golden"
+INSTALL_STORE="${ISO_WORKSPACE}/install-store"
 
 # The build host is online by definition (we are populating the offline cache
 # FROM the network). The installer sets this in its preflight phase; build-iso
@@ -109,12 +115,19 @@ export NETWORK_AVAILABLE=1
 
 # --- Testable seam: print the resolved plan, mutate nothing ------------------
 plan_summary() {
+  local mode="legacy (stock-squashfs repack + on-ISO pool)"
+  if ((HYPR_ISO_GOLDEN)); then
+    mode="golden rootfs (issue #111: one self-built squashfs + medium install store)"
+  fi
   cat <<EOF
 Debian13-Hyprland offline-ISO build plan
+  mode      : ${mode}
   workspace : ${ISO_WORKSPACE}
   target    : ${TARGET}
   cache dir : ${CACHE_DIR}
   pool      : ${POOL}
+  golden    : ${GOLDEN}
+  store     : ${INSTALL_STORE}
   stage rel : ${BUILD_STAGE_REL}
   stock iso : ${STOCK_ISO}
   out iso   : ${OUT_ISO}
@@ -240,10 +253,26 @@ step_pin_kernel() {
   # metapackage's Depends, record the resolved version as KERNEL_TARGET, and
   # let step_zfs build a prebuilt zfs kmod deb for BOTH kernels (deduped when
   # equal). install_zfs_offline installs the KERNEL_TARGET one.
-  # Metapackage picks use sort -V | tail -1: the pool can accrete SEVERAL
-  # versions of a metapackage across populate epochs (cp -n never prunes),
-  # and apt installs the highest — the parse must match apt's choice.
-  local meta_deb="" hdr_deb="" dep="" hdr_kernel=""
+  # Explicit capture + check: fatal inside the substitution only exits the
+  # subshell, so the caller must not rely on errexit (AGENTS.md rule).
+  KERNEL_TARGET="$(resolve_pool_kernel)" ||
+    fatal "cannot resolve the target kernel from the pool metapackages"
+  [[ -n "${KERNEL_TARGET}" ]] ||
+    fatal "cannot resolve the target kernel from the pool metapackages"
+  export KERNEL_TARGET
+  info "[build] target kernel (pool metapackage): ${KERNEL_TARGET}"
+  printf '%s\n' "${KERNEL_TARGET}" >"${CACHE_DIR}/repo/KERNEL_TARGET"
+}
+
+# Echo the kernel the pool's linux-image-amd64 metapackage resolves to, after
+# asserting the pool carries its image deb and that the headers metapackage
+# resolves to the SAME kernel. Shared by step_pin_kernel (legacy) and
+# step_resolve_kernel (golden mode, where this IS the one build kernel).
+# Metapackage picks use sort -V | tail -1: the pool can accrete SEVERAL
+# versions of a metapackage across populate epochs (cp -n never prunes),
+# and apt installs the highest — the parse must match apt's choice.
+resolve_pool_kernel() {
+  local meta_deb="" hdr_deb="" dep="" hdr_kernel="" kernel=""
   meta_deb="$(compgen -G "${POOL}/linux-image-${ARCH}_*.deb" | sort -V | tail -n1 || true)"
   [[ -n "${meta_deb}" ]] ||
     fatal "pool carries no linux-image-${ARCH} metapackage — cannot resolve" \
@@ -252,11 +281,9 @@ step_pin_kernel() {
     grep -oE "linux-image-[0-9][^, ]*-${ARCH}" | head -n1 || true)"
   [[ -n "${dep}" ]] ||
     fatal "cannot parse the target kernel from ${meta_deb##*/} Depends"
-  KERNEL_TARGET="${dep#linux-image-}"
-  export KERNEL_TARGET
-  info "[build] target kernel (pool metapackage): ${KERNEL_TARGET}"
-  compgen -G "${POOL}/linux-image-${KERNEL_TARGET}_*.deb" >/dev/null ||
-    fatal "pool metapackage resolves to linux-image-${KERNEL_TARGET} but the" \
+  kernel="${dep#linux-image-}"
+  compgen -G "${POOL}/linux-image-${kernel}_*.deb" >/dev/null ||
+    fatal "pool metapackage resolves to linux-image-${kernel} but the" \
       "pool does not carry that image deb (closure incomplete)."
   # The image and headers metapackages MUST resolve to the same kernel. The
   # pool accretes across populate epochs, so they can skew (seen live:
@@ -273,12 +300,31 @@ step_pin_kernel() {
   hdr_kernel="${hdr_kernel#linux-headers-}"
   [[ -n "${hdr_kernel}" ]] ||
     fatal "cannot parse the headers kernel from ${hdr_deb##*/} Depends"
-  [[ "${hdr_kernel}" == "${KERNEL_TARGET}" ]] ||
-    fatal "pool kernel metapackages skew: ${meta_deb##*/} -> ${KERNEL_TARGET}" \
+  [[ "${hdr_kernel}" == "${kernel}" ]] ||
+    fatal "pool kernel metapackages skew: ${meta_deb##*/} -> ${kernel}" \
       "but ${hdr_deb##*/} -> ${hdr_kernel}. The pool mixes populate epochs;" \
       "refresh it: rm ${CACHE_DIR}/.pkgset.sha256 and re-run (repopulate" \
       "pulls the current, matching metapackage pair)."
-  printf '%s\n' "${KERNEL_TARGET}" >"${CACHE_DIR}/repo/KERNEL_TARGET"
+  printf '%s\n' "${kernel}"
+}
+
+# 2b-golden (issue #111): ONE kernel, chosen by the pool — no stock ISO probe.
+# KERNEL_PINNED existed only because the stock image dictated the live kernel;
+# the golden rootfs IS the live image, so pin == target by construction.
+# Setting both keeps step_zfs's two-kernel machinery working unchanged (its
+# kmod loop dedupes equal kernels to a single build). The stamp rides the
+# install store as KERNEL for the install-time contract.
+step_resolve_kernel() {
+  # Explicit capture + check — see step_pin_kernel's note on substitutions.
+  KERNEL_TARGET="$(resolve_pool_kernel)" ||
+    fatal "cannot resolve the build kernel from the pool metapackages"
+  [[ -n "${KERNEL_TARGET}" ]] ||
+    fatal "cannot resolve the build kernel from the pool metapackages"
+  KERNEL_PINNED="${KERNEL_TARGET}"
+  export KERNEL_TARGET KERNEL_PINNED
+  info "[build] build kernel (pool metapackage): ${KERNEL_TARGET}"
+  mkdir -p "${INSTALL_STORE}"
+  printf '%s\n' "${KERNEL_TARGET}" >"${INSTALL_STORE}/KERNEL"
 }
 
 # 3) Build the source stack to pooled .debs, freshness-gated and chroot-correct.
@@ -520,6 +566,371 @@ step_depsim() {
   fi
 }
 
+# =============================================================================
+# Golden-rootfs pipeline (issue #111, HYPR_ISO_GOLDEN=1). A second, clean
+# chroot is debootstrapped FROM THE FILE:// POOL and receives the complete
+# target system in one apt transaction — a REAL offline install, strictly
+# stronger than step_depsim's --simulate, and its result ships as the one
+# squashfs (live session == install image). The buildroot (gcc-15/sid, dpkg-
+# unowned /usr drops from step_build_stack) can never be that image.
+# =============================================================================
+
+# 6g-1) Debootstrap + populate the golden rootfs from the pool ONLY.
+step_golden_rootfs() {
+  # Hand the buildroot's binds back before switching chroots: from here on
+  # every in_target call must land in the golden root, and the TARGET-keyed
+  # guard machinery re-asserts against the new path.
+  kill_target_processes
+  teardown_chroot_binds
+  TARGET="${GOLDEN}"
+  export TARGET
+  assert_build_sandbox "${ISO_WORKSPACE}" "${TARGET}" \
+    || fatal "unsafe golden sandbox config."
+
+  # Resume support: a fully-populated golden root from a prior run is reused
+  # only while the pool's package sets are unchanged; anything else (partial
+  # transaction, stale stamp) is rebuilt from scratch — a half-installed
+  # golden image must never ship.
+  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done"
+  if [[ -f "${stamp}" ]] && cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
+    info "[build] reusing existing golden rootfs ${GOLDEN}"
+    install_policy_rc_d
+    export HYPR_PRIVATE_RUN=1
+    mount_chroot_binds
+    assert_chrooted_in_target \
+      || fatal "in_target is not chroot-backed; refusing to touch the golden root."
+    return 0
+  fi
+  rm -f "${stamp}"
+  rm -rf "${GOLDEN}"
+  mkdir -p "${GOLDEN}"
+  info "[build] debootstrap ${SUITE} -> ${GOLDEN} (from the file:// pool)"
+  # --no-check-gpg: the pool's apt-ftparchive Release is unsigned (same
+  # empirically-verified idiom as step_depsim's bootstrap).
+  debootstrap --no-check-gpg "${SUITE}" "${GOLDEN}" "file://${CACHE_DIR}/repo" \
+    || fatal "golden debootstrap failed"
+  install_policy_rc_d
+  export HYPR_PRIVATE_RUN=1
+  mount_chroot_binds
+  assert_chrooted_in_target \
+    || fatal "in_target is not chroot-backed; refusing to build the golden root on the host."
+  # Point apt at the pool ONLY (bind-mounted so file:// resolves inside the
+  # chroot), exactly like step_depsim — the transaction below IS the offline-
+  # completeness gate: anything missing from the pool fails it loudly.
+  printf 'deb [trusted=yes] file://%s/repo %s main\n' "${CACHE_DIR}" "${SUITE}" \
+    >"${GOLDEN}/etc/apt/sources.list"
+  mkdir -p "${GOLDEN}${CACHE_DIR}"
+  if mount --bind "${CACHE_DIR}" "${GOLDEN}${CACHE_DIR}"; then
+    track_mount "${GOLDEN}${CACHE_DIR}"
+  fi
+  # The one transaction: full target base (both microcodes — the image is
+  # CPU-agnostic), golden extras, the source-built stack, upstream OpenZFS
+  # (prebuilt kmod for the ONE kernel; dkms deb stays dormant for firstboot),
+  # chezmoi + brave, and the dkms-dep tail that must be resident before
+  # firstboot (file/lsb-release/libc6-dev — the store is gone by then).
+  local -a pkgs=() p=""
+  mapfile -t pkgs < <(filter_zfs_debian_packages "${TARGET_BASE_PACKAGES[@]}")
+  pkgs+=("${GOLDEN_EXTRA_PACKAGES[@]}" "${HYPR_BUILD_ORDER[@]}")
+  pkgs+=(chezmoi brave-browser)
+  pkgs+=("openzfs-zfs-modules-${KERNEL_TARGET}")
+  for p in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
+    [[ "${p}" == "openzfs-zfs-dkms" ]] || pkgs+=("${p}")
+  done
+  pkgs+=(file lsb-release libc6-dev)
+  info "[build] installing the golden system (${#pkgs[@]} package names, pool only)"
+  # man-db's per-transaction reindex is minutes of dead CPU; same debconf
+  # trick as install_base_packages, persisted into the image (the daily
+  # timer indexes on the running system).
+  in_target "echo 'man-db man-db/auto-update boolean false' | debconf-set-selections"
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y ${pkgs[*]}
+  "
+  # Optional Qt6 ScreenCast backend — best-effort AFTER the must-succeed set,
+  # exactly like the installer path (never strands the build).
+  install_xdph_best_effort
+  # Addon vendor debs bake into the image (addons/*.list already rode
+  # TARGET_BASE_PACKAGES); the per-install addon hooks (*.sh) and staged
+  # runfiles (*.run) stay install-time concerns.
+  if compgen -G "addons/*.deb" >/dev/null; then
+    info "[build] baking addon .deb packages into the golden image"
+    rm -rf "${GOLDEN}/var/tmp/addon-debs"
+    install -d "${GOLDEN}/var/tmp/addon-debs"
+    cp addons/*.deb "${GOLDEN}/var/tmp/addon-debs/"
+    in_target "
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y /var/tmp/addon-debs/*.deb
+    "
+    rm -rf "${GOLDEN}/var/tmp/addon-debs"
+  fi
+  # Upstream-OpenZFS install tail, mirrored from install_zfs_offline MINUS the
+  # MOK signing (the key is per-machine; customize signs the .ko in place) —
+  # assert the prebuilt module landed, keep the pam module out, pin the
+  # metapackages manual, and depmod so the module resolves in the live boot.
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    if dpkg-query -W 'openzfs*pam*' >/dev/null 2>&1; then
+      apt-get purge -y 'openzfs*pam*'
+    fi
+    rm -f /usr/share/pam-configs/*zfs*
+    pam-auth-update --package
+    apt-mark manual openzfs-zfs-modules-${KERNEL_TARGET} openzfs-zfsutils \
+      openzfs-zfs-initramfs openzfs-zfs-zed file lsb-release libc6-dev >/dev/null
+    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${KERNEL_TARGET}' | grep '\\.ko\$' || true)\"
+    [[ -n \"\${kos}\" ]] ||
+      { echo 'openzfs-zfs-modules-${KERNEL_TARGET} installed no .ko files' >&2; exit 1; }
+    depmod '${KERNEL_TARGET}'
+    modinfo -k '${KERNEL_TARGET}' zfs >/dev/null
+  "
+  : >"${stamp}"
+}
+
+# 6g-2) Session + identity staging inside the golden root: the machine-
+# independent session files (user configs into /etc/skel — the live-config
+# live user AND the installed create_user account both inherit them via
+# adduser), the harvested vendor artifacts, the dormant firstboot machinery,
+# the live-only autologin hook, and the image manifest.
+step_golden_session() {
+  # install_lythmono_fonts/stage_brave_apt_source/stage_zfs_dkms_job/... live
+  # in scripts/40-system.sh, outside the critical top-level source order —
+  # lazy-source + re-assert, exactly like step_zfs.
+  if ! declare -f install_lythmono_fonts >/dev/null 2>&1; then
+    # shellcheck disable=SC1091  # validated repo-relative path
+    source "${REPO_ROOT}/scripts/40-system.sh"
+  fi
+  assert_chrooted_in_target \
+    || fatal "in_target is not chroot-backed after sourcing 40-system.sh; refusing to stage on host."
+  info "[build] staging session configs + vendor artifacts into the golden root"
+  SESSION_CONFIG_HOME=/etc/skel stage_session_configs
+  # A working default Hyprland config ships in skel too (us layout — the
+  # installer re-generates it per keymap at customize; the live demo uses
+  # this copy as-is). Reads the example the hyprland deb just installed.
+  SESSION_CONFIG_HOME=/etc/skel write_hypr_lua_config
+  # Vendor artifacts harvested into the workspace store bake straight into
+  # the image (they no longer ship on the ISO).
+  install_lythmono_fonts
+  install_adw_gtk3_theme
+  stage_brave_apt_source
+  # Dormant firstboot: runner + unit + the zfs-dkms handover job bake in
+  # DISABLED — the live session must never run firstboot jobs; customize
+  # enables the unit on the installed system.
+  write_firstboot_runner
+  stage_zfs_dkms_job
+  stage_live_autologin_hook
+  # ssh-over-vsock generator noise fix (was a live-extras bake).
+  neuter_ssh_vsock_generator
+  # sshd serves the live session (and the installed system); host keys are
+  # scrubbed from the image, so a conditional oneshot regenerates them on
+  # any boot that finds none (live boots; customize regenerates for the
+  # installed system, leaving the unit inert there).
+  cat >"${GOLDEN}/etc/systemd/system/hypr-sshd-keygen.service" <<'EOF'
+[Unit]
+Description=Generate missing ssh host keys (the golden image ships none)
+Before=ssh.service
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  in_target "
+    set -e
+    systemctl enable ssh.service
+    systemctl enable hypr-sshd-keygen.service
+  "
+  write_build_manifest
+}
+
+# Live-only greetd autologin (issue #111 decision): a live-config hook
+# rewrites config.toml at LIVE BOOT, in the tmpfs overlay — the squashfs
+# keeps the tuigreet default, so the tree the installer copies is untouched.
+# The hook file is NOT owned by live-config's package; customize removes it
+# explicitly on the installed system.
+stage_live_autologin_hook() {
+  install -d "${GOLDEN}/usr/lib/live/config"
+  cat >"${GOLDEN}/usr/lib/live/config/2999-hypr-autologin" <<'EOF'
+#!/bin/sh
+# hypr-deb golden image: autologin the live user straight into Hyprland.
+# Runs only under live-config (live boots); the rewrite lands in the
+# overlay, never in the squashfs the installer copies to disk.
+user="${LIVE_USERNAME:-user}"
+cat > /etc/greetd/config.toml <<CFG
+[terminal]
+vt = 1
+
+[default_session]
+command = "/usr/bin/hypr-session"
+user = "${user}"
+CFG
+EOF
+  chmod 755 "${GOLDEN}/usr/lib/live/config/2999-hypr-autologin"
+}
+
+# /etc/hypr-deb/build-manifest: what this image was built from — consumed by
+# the end-of-install upstream advisory (issue #94) and by humans debugging an
+# installed system. Component versions come from the pooled debs (survives
+# cached-rebuild resumes where HYPR_RESOLVED_TAG is unpopulated).
+write_build_manifest() {
+  local manifest="${GOLDEN}/etc/hypr-deb/build-manifest" name="" deb=""
+  mkdir -p "${GOLDEN}/etc/hypr-deb"
+  {
+    printf 'built=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'kernel=%s\n' "${KERNEL_TARGET}"
+    for name in "${HYPR_BUILD_ORDER[@]}" "${XDPH_COMPONENT}" openzfs-zfsutils; do
+      deb="$(compgen -G "${POOL}/${name}_*.deb" | sort -V | tail -n1 || true)"
+      [[ -n "${deb}" ]] || continue
+      printf '%s=%s\n' "${name}" "$(dpkg-deb -f "${deb}" Version)"
+    done
+  } >"${manifest}"
+}
+
+# 6g-3) The install store: everything install time still needs from the
+# medium — the four NVIDIA variants, the bootloader trio, the ZBM EFI and the
+# KERNEL stamp — indexed as its own apt repo. The bootloader closure resolves
+# INSIDE the golden chroot against its real installed set (a temporary online
+# source scoped by -o, downloads only), so the store carries exactly what an
+# install of any of the three loaders would still need.
+step_install_store() {
+  mkdir -p "${INSTALL_STORE}/pool"
+  info "[build] downloading the bootloader closure into the install store"
+  local list="/etc/apt/sources.list.d/zz-bootloader-store-build.list"
+  local resolv="${GOLDEN}/etc/resolv.conf" had_resolv=0
+  # The golden root was bootstrapped offline; give its apt a resolver for
+  # this one online download (same idiom as the legacy live-extras bake).
+  if [[ -e "${resolv}" || -L "${resolv}" ]]; then
+    had_resolv=1
+    mv "${resolv}" "${resolv}.store-build.bak"
+  fi
+  cp -L /etc/resolv.conf "${resolv}" 2>/dev/null || true
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    printf '%s\n' 'deb ${MIRROR} ${SUITE} main contrib non-free-firmware' >${list}
+    aopt='-o Dir::Etc::SourceList=${list} -o Dir::Etc::SourceParts=/dev/null'
+    apt-get update -qq \${aopt}
+    apt-get install -y --download-only \${aopt} \
+      grub-efi-amd64 grub-efi-amd64-signed systemd-boot os-prober
+    rm -f ${list}
+  "
+  rm -f "${resolv}"
+  if ((had_resolv)); then
+    mv "${resolv}.store-build.bak" "${resolv}"
+  fi
+  if compgen -G "${GOLDEN}/var/cache/apt/archives/*.deb" >/dev/null; then
+    cp -n "${GOLDEN}/var/cache/apt/archives/"*.deb "${INSTALL_STORE}/pool/"
+  fi
+  in_target "apt-get clean"
+  # The NVIDIA closures (both flavors x both branches + cuda-keyring) are the
+  # bulk of the store; cache_populate_nvidia builds them in its own scratch
+  # chroot so nothing NVIDIA ever touches the golden root.
+  cache_populate_nvidia "${INSTALL_STORE}/pool"
+  cache_index_repo "${INSTALL_STORE}"
+  # Non-apt store artifacts: the ZBM EFI for --bootloader=zbm and the KERNEL
+  # stamp (written by step_resolve_kernel; re-asserted here).
+  [[ -f "${INSTALL_STORE}/KERNEL" ]] ||
+    fatal "install store lacks the KERNEL stamp (step_resolve_kernel writes it)"
+  if [[ ! -f "${INSTALL_STORE}/zfsbootmenu.EFI" ]]; then
+    if ! declare -f fetch_zbm_efi >/dev/null 2>&1; then
+      # shellcheck disable=SC1091  # validated repo-relative path
+      source "${REPO_ROOT}/scripts/50-boot.sh"
+    fi
+    info "[build] staging ZFSBootMenu EFI into the install store"
+    fetch_zbm_efi "${INSTALL_STORE}/zfsbootmenu.EFI"
+  fi
+}
+
+# 6g-4) NVIDIA depsim: prove every variant resolves offline against the
+# GOLDEN image's real dpkg status + the install store, per branch and flavor.
+# The branch pin works through apt preferences installed by the pin package;
+# a pure simulation never installs it, so the preferences file is extracted
+# from the pooled pin deb and passed via -o — the simulation then resolves
+# exactly the branch an install would.
+step_nvidia_depsim() {
+  info "[build] simulating the NVIDIA variants against the install store only"
+  local simtmp="" branch="" flavor="" pin_deb="" prefs="" out="" rc=0
+  local -a flavor_pkgs=()
+  simtmp="$(mktemp -d "${ISO_WORKSPACE}/nvidia-depsim.XXXXXX")"
+  printf 'deb [trusted=yes] file://%s %s main\n' "${INSTALL_STORE}" "${SUITE}" \
+    >"${simtmp}/sources.list"
+  mkdir -p "${simtmp}/state/lists/partial" "${simtmp}/cache"
+  local -a aopt=(
+    -o "Dir::Etc::SourceList=${simtmp}/sources.list"
+    -o "Dir::Etc::SourceParts=/dev/null"
+    -o "Dir::Etc::PreferencesParts=/dev/null"
+    -o "Dir::State=${simtmp}/state"
+    -o "Dir::State::status=${GOLDEN}/var/lib/dpkg/status"
+    -o "Dir::Cache=${simtmp}/cache"
+  )
+  for branch in 595 610; do
+    pin_deb="$(compgen -G "${INSTALL_STORE}/pool/nvidia-driver-pinning-${branch}_*.deb" |
+      sort -V | tail -n1 || true)"
+    [[ -n "${pin_deb}" ]] ||
+      { rm -rf "${simtmp}"; fatal "install store lacks the ${branch} pin deb"; }
+    rm -rf "${simtmp}/pin"
+    dpkg-deb -x "${pin_deb}" "${simtmp}/pin"
+    prefs="$(compgen -G "${simtmp}/pin/etc/apt/preferences.d/*" | head -n1 || true)"
+    [[ -n "${prefs}" ]] ||
+      { rm -rf "${simtmp}"; fatal "${pin_deb##*/} carries no apt preferences file"; }
+    apt-get "${aopt[@]}" -o "Dir::Etc::Preferences=${prefs}" update -qq ||
+      { rm -rf "${simtmp}"; fatal "nvidia depsim: apt update against the store failed"; }
+    for flavor in open proprietary; do
+      if [[ "${flavor}" == open ]]; then
+        flavor_pkgs=("${NVIDIA_OPEN_PACKAGES[@]}")
+      else
+        flavor_pkgs=("${NVIDIA_PROP_PACKAGES[@]}")
+      fi
+      out="$(DEBIAN_FRONTEND=noninteractive apt-get "${aopt[@]}" \
+        -o "Dir::Etc::Preferences=${prefs}" \
+        install --simulate -y \
+        "${flavor_pkgs[@]}" "${NVIDIA_FIRMWARE_PACKAGES[@]}" cuda-keyring)" && rc=0 || rc=$?
+      ((rc == 0)) ||
+        { rm -rf "${simtmp}"; fatal "nvidia depsim failed: branch ${branch} ${flavor}"; }
+      if grep -Eq 'https?://' <<<"${out}"; then
+        grep -E 'https?://' <<<"${out}" | warn_lines
+        rm -rf "${simtmp}"
+        fatal "nvidia depsim: branch ${branch} ${flavor} would resolve outside the store."
+      fi
+      info "[build] nvidia depsim ok: branch ${branch}, ${flavor}"
+    done
+  done
+  rm -rf "${simtmp}"
+}
+
+# 6g-5) Finalize the golden image for shipping: permanent Debian sources
+# replace the temporary file:// pool source, the chroot service guard comes
+# OUT (it must never ship), identity is scrubbed (machine-id, ssh host keys
+# — regenerated per boot/install), apt caches drop, and the binds are torn
+# down so mksquashfs captures a quiescent tree.
+step_finalize_golden() {
+  info "[build] finalizing the golden image (sources, guard, identity scrub)"
+  write_debian_sources "${GOLDEN}"
+  rm -f "${GOLDEN}/etc/apt/sources.list"
+  rm -f "${GOLDEN}/usr/sbin/policy-rc.d"
+  golden_hygiene_scrub
+  kill_target_processes
+  teardown_chroot_binds
+}
+
+# Identity + cache scrub. machine-id is TRUNCATED (not removed): an empty
+# file means "uninitialized" to systemd, which then generates a fresh id on
+# boot (live) or via systemd-machine-id-setup (customize). ssh host keys are
+# removed outright (hypr-sshd-keygen / customize regenerate). apt lists and
+# the binary caches are regenerable dead weight in a squashfs.
+golden_hygiene_scrub() {
+  : >"${GOLDEN}/etc/machine-id"
+  rm -f "${GOLDEN}/var/lib/dbus/machine-id"
+  rm -f "${GOLDEN}/etc/ssh/ssh_host_"*
+  in_target "apt-get clean"
+  rm -rf "${GOLDEN}/var/lib/apt/lists"/* "${GOLDEN}/var/cache/apt"/*.bin
+}
+
 # ensure_wallpapers_checked_out [REPO_ROOT_OVERRIDE]
 # Check out the assets/wallpapers shallow submodule so step_assemble bakes the
 # actual images onto the ISO. The offline install copies wallpapers from this
@@ -566,12 +977,22 @@ step_assemble() {
   # LIVE_AUTOINSTALL_PASSWORD is the security-critical one — it is supplied at
   # build time and defaults EMPTY (never hardcoded/committed). iso-assemble.sh
   # defaults the rest itself, so these prefixes only pass through operator values.
-  HYPR_INSTALLER_DIR="${payload}" \
+  # Golden mode: GOLDEN_ROOT selects iso-assemble's golden path (mksquashfs the
+  # golden tree, map our kernel/initrd over the stock /live names, store +
+  # installer to the ISO9660 medium) and the repo argument becomes the small
+  # install store instead of the full pool.
+  local repo_arg="${CACHE_DIR}/repo" golden_root=""
+  if ((HYPR_ISO_GOLDEN)); then
+    repo_arg="${INSTALL_STORE}"
+    golden_root="${GOLDEN}"
+  fi
+  GOLDEN_ROOT="${golden_root}" \
+    HYPR_INSTALLER_DIR="${payload}" \
     LIVE_AUTOINSTALL_PASSWORD="${LIVE_AUTOINSTALL_PASSWORD:-}" \
     LIVE_AUTOINSTALL_BOOTLOADER="${LIVE_AUTOINSTALL_BOOTLOADER:-grub}" \
     LIVE_AUTOINSTALL_RTC="${LIVE_AUTOINSTALL_RTC:-local}" \
     LIVE_AUTOINSTALL_USERNAME="${LIVE_AUTOINSTALL_USERNAME:-me}" \
-    bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${CACHE_DIR}/repo" "${OUT_ISO}" \
+    bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${repo_arg}" "${OUT_ISO}" \
     || fatal "iso-assemble failed"
 }
 
@@ -675,6 +1096,21 @@ step_stage_adw_gtk3() {
 # No-op when not run under sudo (real root login: nothing to hand back).
 restore_build_ownership() {
   [[ -n "${SUDO_UID:-}" ]] || return 0
+  if ((HYPR_ISO_GOLDEN)); then
+    # The golden rootfs IS the shipped filesystem: its internal ownership
+    # (root, _greetd, man, ...) must survive into mksquashfs and across
+    # resumed builds, so it is exempt from the handback — everything else
+    # in the workspace still goes back to the operator.
+    local entry=""
+    for entry in "${ISO_WORKSPACE}"/* "${ISO_WORKSPACE}"/.[!.]*; do
+      [[ -e "${entry}" ]] || continue
+      [[ "${entry}" == "${GOLDEN}" ]] && continue
+      chown -R "${SUDO_UID}:${SUDO_GID:-${SUDO_UID}}" "${entry}" 2>/dev/null || true
+    done
+    chown "${SUDO_UID}:${SUDO_GID:-${SUDO_UID}}" \
+      "${ISO_WORKSPACE}" "${OUT_ISO}" 2>/dev/null || true
+    return 0
+  fi
   chown -R "${SUDO_UID}:${SUDO_GID:-${SUDO_UID}}" \
     "${ISO_WORKSPACE}" "${OUT_ISO}" 2>/dev/null || true
 }
@@ -682,19 +1118,34 @@ restore_build_ownership() {
 run_heavy_build() {
   step_bootstrap_chroot     # 1
   step_cache                # 2
-  step_pin_kernel           # 2b: live kernel == pool/target kernel, enforced
+  if ((HYPR_ISO_GOLDEN)); then
+    step_resolve_kernel     # 2b-golden: ONE kernel, chosen by the pool
+  else
+    step_pin_kernel         # 2b: live kernel == pool/target kernel, enforced
+  fi
   step_build_stack          # 3
   step_build_portal         # 3b: OPTIONAL xdph screencast backend (non-fatal)
-  step_zfs                  # 4
+  step_zfs                  # 4 (golden: pin == target, so ONE kmod builds)
   step_runtime_closure      # 4.5: pool the runtime deps the built debs declare
   step_reindex              # 5
-  step_depsim               # 6
-  step_stage_zbm            # 6b: ship ZFSBootMenu EFI inside /hypr-repo
-  step_stage_fonts          # 6c: ship LythMono TTFs inside the offline store
-  step_stage_walker         # 6d: ship walker+elephant inside the offline store
-  step_stage_adw_gtk3       # 6e: ship the adw-gtk3 theme inside the offline store
+  if ((HYPR_ISO_GOLDEN)); then
+    step_stage_fonts        # harvests feed the golden image, not the medium
+    step_stage_walker
+    step_stage_adw_gtk3
+    step_golden_rootfs      # 6g-1: the REAL offline install (replaces depsim)
+    step_golden_session     # 6g-2: skel configs, vendor bakes, dormant firstboot
+    step_install_store      # 6g-3: NVIDIA + bootloader store, ZBM, KERNEL
+    step_nvidia_depsim      # 6g-4: every variant resolves against the store
+    step_finalize_golden    # 6g-5: sources/guard/identity scrub, binds down
+  else
+    step_depsim             # 6
+    step_stage_zbm          # 6b: ship ZFSBootMenu EFI inside /hypr-repo
+    step_stage_fonts        # 6c: ship LythMono TTFs inside the offline store
+    step_stage_walker       # 6d: ship walker+elephant inside the offline store
+    step_stage_adw_gtk3     # 6e: ship the adw-gtk3 theme inside the offline store
+  fi
   step_assemble             # 7
-  kill_target_processes     # 8: reap any stray buildroot daemon holding a mount
+  kill_target_processes     # 8: reap any stray chroot daemon holding a mount
   teardown_chroot_binds     # 9 (also via trap)
   info "[build] done: ${OUT_ISO}"
 }
