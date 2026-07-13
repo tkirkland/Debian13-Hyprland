@@ -611,11 +611,20 @@ step_golden_rootfs() {
     || fatal "unsafe golden sandbox config."
 
   # Resume support: a fully-populated golden root from a prior run is reused
-  # only while the pool's package sets are unchanged; anything else (partial
-  # transaction, stale stamp) is rebuilt from scratch — a half-installed
-  # golden image must never ship.
-  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done"
-  if [[ -f "${stamp}" ]] && cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
+  # only while the pool's package sets AND the pool's actual deb contents are
+  # unchanged; anything else (partial transaction, stale stamp) is rebuilt
+  # from scratch — a half-installed golden image must never ship. The name-set
+  # hash (cache_pkgset_fresh) alone is NOT enough: a newer deb staged into the
+  # pool under the same package name (step_stage_kitty) changes what the
+  # golden transaction installs without touching any name list — reusing then
+  # ships the old version (hit live 2026-07-13, kitty 0.41 vs 0.47). The
+  # stamp therefore records the pool's deb filename hash (name+version+arch).
+  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done" poolhash=""
+  poolhash="$(cd "${CACHE_DIR}/repo/pool" 2>/dev/null &&
+    ls -- *.deb 2>/dev/null | sort | sha256sum | awk '{print $1}')" || poolhash=""
+  if [[ -f "${stamp}" && -n "${poolhash}" ]] &&
+    [[ "$(cat "${stamp}")" == "${poolhash}" ]] &&
+    cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
     info "[build] reusing existing golden rootfs ${GOLDEN}"
     install_policy_rc_d
     export HYPR_PRIVATE_RUN=1
@@ -726,7 +735,7 @@ step_golden_rootfs() {
     depmod '${KERNEL_TARGET}'
     modinfo -k '${KERNEL_TARGET}' zfs >/dev/null
   "
-  : >"${stamp}"
+  printf '%s\n' "${poolhash}" >"${stamp}"
 }
 
 # 6g-2) Session + identity staging inside the golden root: the machine-
