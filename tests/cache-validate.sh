@@ -48,8 +48,7 @@ echo "6.12.44+deb13-amd64" >"${tmp}/repo/KERNEL"
 out="$(run_validate)"
 assert_contains "${out}" "Install store valid" "complete store passes"
 
-# KERNEL stamp removed -> fails naming it (sign_zfs_modules and the preflight
-# pin warning read it).
+# KERNEL stamp removed -> fails naming it (the preflight pin warning reads it).
 mv "${tmp}/repo/KERNEL" "${tmp}/repo/KERNEL.gone"
 out="$(run_validate 2>&1 || true)"
 assert_contains "${out}" "KERNEL stamp missing" "store requires the KERNEL stamp"

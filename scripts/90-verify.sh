@@ -73,11 +73,13 @@ phase_verify() {
     [[ -f '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' ]] &&
     ! cmp -s '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' \
       /etc/ssh/ssh_host_ed25519_key.pub"
-  # Firstboot dkms handover armed (baked dormant; customize enables it).
-  vcheck "firstboot unit enabled" in_target \
-    "systemctl is-enabled hypr-deb-firstboot.service"
-  vcheck "zfs-dkms firstboot job staged" test -f \
-    "${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh"
+  # The install is COMPLETE at reboot: zfs is dkms-owned with its module
+  # already built (baked at image-build time), and no deferred install work
+  # is queued for the user's first boot.
+  vcheck "zfs module owned by dkms (baked, no firstboot build)" in_target \
+    "dkms status zfs | grep -q installed"
+  vcheck "no firstboot jobs pending" bash -c \
+    "! compgen -G '${TARGET}/usr/lib/hypr-deb/firstboot.d/*.sh' >/dev/null"
 
   # Screenshot/recording capture helpers + deps (epic #67, item 1). Staged
   # unconditionally by configure_session, so verified on both install paths.
@@ -268,9 +270,10 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
-  # BOTH paths replace Debian's zfs with the upstream build (online from source,
-  # offline from the on-ISO pool via install_zfs_offline), so the upstream package
-  # must be present regardless of network — verify it unconditionally.
+  # Every path replaces Debian's zfs with the upstream build (baked into the
+  # golden image; legacy paths install it from source or the on-ISO pool), so
+  # the upstream package must be present regardless of network — verify it
+  # unconditionally.
   vcheck "upstream openzfs installed" in_target \
     "dpkg -s openzfs-zfsutils >/dev/null"
   vcheck "pool bootfs set" bash -c \

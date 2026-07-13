@@ -619,12 +619,15 @@ step_golden_rootfs() {
   # golden transaction installs without touching any name list — reusing then
   # ships the old version (hit live 2026-07-13, kitty 0.41 vs 0.47). The
   # stamp therefore records the pool's deb filename hash (name+version+arch).
-  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done" poolhash=""
+  # The recipe rev salts the stamp: bump it whenever the golden TRANSACTION
+  # changes with the pool unchanged (e.g. r2: dkms-baked zfs replaced the
+  # prebuilt kmod deb), else the stale flavor is silently reused.
+  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done" poolhash="" recipe_rev="r2"
   poolhash="$(cd "${CACHE_DIR}/repo/pool" 2>/dev/null &&
     find . -maxdepth 1 -name '*.deb' -printf '%f\n' |
     sort | sha256sum | awk '{print $1}')" || poolhash=""
   if [[ -f "${stamp}" && -n "${poolhash}" ]] &&
-    [[ "$(cat "${stamp}")" == "${poolhash}" ]] &&
+    [[ "$(cat "${stamp}")" == "${recipe_rev}:${poolhash}" ]] &&
     cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
     info "[build] reusing existing golden rootfs ${GOLDEN}"
     install_policy_rc_d
@@ -658,18 +661,14 @@ step_golden_rootfs() {
   fi
   # The one transaction: full target base (both microcodes — the image is
   # CPU-agnostic), golden extras, the source-built stack, upstream OpenZFS
-  # (prebuilt kmod for the ONE kernel; dkms deb stays dormant for firstboot),
-  # chezmoi + brave, and the dkms-dep tail that must be resident before
-  # firstboot (file/lsb-release/libc6-dev — the store is gone by then).
-  local -a pkgs=() p=""
+  # INCLUDING the dkms deb (the module compiles + signs right here, at build
+  # time — neither the install nor first boot ever builds a module), and
+  # chezmoi + brave.
+  local -a pkgs=()
   mapfile -t pkgs < <(filter_zfs_debian_packages "${TARGET_BASE_PACKAGES[@]}")
   pkgs+=("${GOLDEN_EXTRA_PACKAGES[@]}" "${HYPR_BUILD_ORDER[@]}")
   pkgs+=(chezmoi brave-browser)
-  pkgs+=("openzfs-zfs-modules-${KERNEL_TARGET}")
-  for p in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
-    [[ "${p}" == "openzfs-zfs-dkms" ]] || pkgs+=("${p}")
-  done
-  pkgs+=(file lsb-release libc6-dev)
+  pkgs+=("${ZFS_UPSTREAM_PACKAGES[@]}")
   info "[build] installing the golden system (${#pkgs[@]} package names, pool only)"
   # man-db's per-transaction reindex is minutes of dead CPU; same debconf
   # trick as install_base_packages, persisted into the image (the daily
@@ -681,8 +680,8 @@ step_golden_rootfs() {
   # build host the policy script sees SecureBoot=1 + a DKMS dir (ddcci),
   # takes the disable-SB prompt path (template default: true) and exits 1
   # noninteractively, failing the whole transaction. Preseed "keep Secure
-  # Boot as-is" — it bakes into the image and equally protects the firstboot
-  # zfs-dkms install on SB machines (MOK signing is our own machinery).
+  # Boot as-is" — it bakes into the image and equally protects any later
+  # in-image dkms transaction on SB machines (MOK signing is our own machinery).
   in_target "echo 'shim-signed-common shim/disable_secureboot boolean false' | debconf-set-selections"
   in_target "
     set -e
@@ -716,10 +715,17 @@ step_golden_rootfs() {
     "
     rm -rf "${GOLDEN}/var/tmp/addon-debs"
   fi
-  # Upstream-OpenZFS install tail, mirrored from install_zfs_offline MINUS the
-  # MOK signing (the key is per-machine; customize signs the .ko in place) —
-  # assert the prebuilt module landed, keep the pam module out, pin the
-  # metapackages manual, and depmod so the module resolves in the live boot.
+  # Upstream-OpenZFS bake tail. The dkms postinst may configure before the
+  # kernel headers in the one big transaction and silently skip the build, so
+  # the explicit autoinstall for KERNEL_TARGET is load-bearing (it also
+  # catches ddcci and any other dkms module the base set carries). Keep the
+  # pam module out and pin the metapackages manual, then assert the module
+  # resolves for the live boot. Finally SCRUB the dkms-generated MOK keypair:
+  # it is per-machine, and an image-baked private key would be shared by
+  # every install. The baked modules keep that throwaway key's signature
+  # (harmless — nothing enforces it before enrollment); customize re-signs
+  # them in place with the fresh per-install key (sign_dkms_modules; the
+  # kernel validates the outermost signature).
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -728,15 +734,13 @@ step_golden_rootfs() {
     fi
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
-    apt-mark manual openzfs-zfs-modules-${KERNEL_TARGET} openzfs-zfsutils \
-      openzfs-zfs-initramfs openzfs-zfs-zed file lsb-release libc6-dev >/dev/null
-    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${KERNEL_TARGET}' | grep '\\.ko\$' || true)\"
-    [[ -n \"\${kos}\" ]] ||
-      { echo 'openzfs-zfs-modules-${KERNEL_TARGET} installed no .ko files' >&2; exit 1; }
+    apt-mark manual ${ZFS_UPSTREAM_PACKAGES[*]} >/dev/null
+    dkms autoinstall -k '${KERNEL_TARGET}'
     depmod '${KERNEL_TARGET}'
     modinfo -k '${KERNEL_TARGET}' zfs >/dev/null
+    rm -f /var/lib/dkms/mok.key /var/lib/dkms/mok.pub
   "
-  printf '%s\n' "${poolhash}" >"${stamp}"
+  printf '%s\n' "${recipe_rev}:${poolhash}" >"${stamp}"
 }
 
 # 6g-2) Session + identity staging inside the golden root: the machine-
@@ -745,7 +749,7 @@ step_golden_rootfs() {
 # adduser), the harvested vendor artifacts, the dormant firstboot machinery,
 # the live-only autologin hook, and the image manifest.
 step_golden_session() {
-  # install_lythmono_fonts/stage_brave_apt_source/stage_zfs_dkms_job/... live
+  # install_lythmono_fonts/stage_brave_apt_source/stage_live_autologin_hook/... live
   # in scripts/40-system.sh, outside the critical top-level source order —
   # lazy-source + re-assert, exactly like step_zfs.
   if ! declare -f install_lythmono_fonts >/dev/null 2>&1; then
@@ -765,11 +769,10 @@ step_golden_session() {
   install_lythmono_fonts
   install_adw_gtk3_theme
   stage_brave_apt_source
-  # Dormant firstboot: runner + unit + the zfs-dkms handover job bake in
-  # DISABLED — the live session must never run firstboot jobs; customize
-  # enables the unit on the installed system.
+  # Dormant firstboot: runner + unit bake in DISABLED with no jobs — zfs-dkms
+  # is fully baked above, so a standard install has nothing left for first
+  # boot; customize enables the unit only if some path stages a job.
   write_firstboot_runner
-  stage_zfs_dkms_job
   stage_live_autologin_hook
   # ssh-over-vsock generator noise fix (was a live-extras bake).
   neuter_ssh_vsock_generator

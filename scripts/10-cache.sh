@@ -373,8 +373,7 @@ cache_validate() {
     done
 
     # The KERNEL stamp names the golden image's one kernel (written by
-    # build-iso step_resolve_kernel); sign_zfs_modules and the preflight pin
-    # warning read it.
+    # build-iso step_resolve_kernel); the preflight pin warning reads it.
     [[ -f "${CACHE_REPO_DIR}/KERNEL" ]] ||
       problems+=("KERNEL stamp missing from store: ${CACHE_REPO_DIR}/KERNEL")
   fi

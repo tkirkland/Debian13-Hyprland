@@ -52,49 +52,64 @@ fi
 assert_contains "$(cat "${tmp}/ssh/in_target.log")" "ssh-keygen -A" \
   "host keys regenerated in the chroot"
 
-# --- sign_zfs_modules -----------------------------------------------------------
+# --- sign_dkms_modules ----------------------------------------------------------
 mkdir -p "${tmp}/sign/lib/modules/6.12.90-amd64"
-run_fn sign '' sign_zfs_modules
+run_fn sign '' sign_dkms_modules
 sig_log="$(cat "${tmp}/sign/in_target.log")"
-assert_contains "${sig_log}" "openzfs-zfs-modules-6.12.90-amd64" \
-  "signs the kmod deb matching the image kernel"
+assert_contains "${sig_log}" "/lib/modules/6.12.90-amd64/updates/dkms" \
+  "signs the dkms-built modules of the image kernel"
 assert_contains "${sig_log}" "sign-file" "signs via the kernel's sign-file"
 assert_contains "${sig_log}" "sha512" "sha512 signature (dkms parity)"
+assert_contains "${sig_log}" "unxz" \
+  "xz-compressed modules are unpacked around signing (dkms 3.x ships .ko.xz)"
 assert_contains "${sig_log}" "depmod '6.12.90-amd64'" \
   "depmod refreshes the module index after signing"
 
 # Two kernels: the newest is picked (sort -V).
 mkdir -p "${tmp}/sign2/lib/modules/6.12.9-amd64" \
   "${tmp}/sign2/lib/modules/6.12.10-amd64"
-run_fn sign2 '' sign_zfs_modules
+run_fn sign2 '' sign_dkms_modules
 assert_contains "$(cat "${tmp}/sign2/in_target.log")" \
-  "openzfs-zfs-modules-6.12.10-amd64" \
+  "/lib/modules/6.12.10-amd64/updates/dkms" \
   "version sort picks 6.12.10 over 6.12.9 (not lexicographic)"
 
 # No kernel in the tree -> fatal (deploy did not unpack a golden tree).
-if out="$(run_fn signempty '' sign_zfs_modules 2>&1)"; then
-  echo "  FAIL: sign_zfs_modules must fail with no kernel in the tree" >&2
+if out="$(run_fn signempty '' sign_dkms_modules 2>&1)"; then
+  echo "  FAIL: sign_dkms_modules must fail with no kernel in the tree" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
   assert_contains "${out}" "No kernel under" "missing kernel is fatal"
 fi
 
 # --- enable_firstboot -----------------------------------------------------------
+# A staged job arms the baked-dormant runner.
 mkdir -p "${tmp}/fb/usr/sbin" "${tmp}/fb/usr/lib/hypr-deb/firstboot.d"
 install -m755 /dev/null "${tmp}/fb/usr/sbin/hypr-deb-firstboot"
-: >"${tmp}/fb/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh"
+: >"${tmp}/fb/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
 run_fn fb '' enable_firstboot
 assert_contains "$(cat "${tmp}/fb/in_target.log")" \
   "systemctl enable hypr-deb-firstboot.service" \
-  "customize arms the baked-dormant firstboot runner"
+  "customize arms the runner when a job is staged"
 
-# Runner or job missing from the image -> fatal (build regression, not skippable).
-mkdir -p "${tmp}/fb2/usr/sbin"
-if run_fn fb2 '' enable_firstboot >/dev/null 2>&1; then
-  echo "  FAIL: enable_firstboot must fail when the runner is not baked" >&2
+# No jobs staged (the standard golden install) -> runner stays dormant.
+mkdir -p "${tmp}/fb3/usr/sbin"
+install -m755 /dev/null "${tmp}/fb3/usr/sbin/hypr-deb-firstboot"
+run_fn fb3 '' enable_firstboot
+if [[ -e "${tmp}/fb3/in_target.log" ]]; then
+  echo "  FAIL: enable_firstboot must not enable the runner with no jobs" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
-  echo "  ok: missing baked runner is fatal"
+  echo "  ok: no jobs -> runner left dormant (install complete at reboot)"
+fi
+
+# Jobs staged but runner missing from the image -> fatal (build regression).
+mkdir -p "${tmp}/fb2/usr/lib/hypr-deb/firstboot.d"
+: >"${tmp}/fb2/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
+if run_fn fb2 '' enable_firstboot >/dev/null 2>&1; then
+  echo "  FAIL: enable_firstboot must fail when jobs exist but the runner is not baked" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: staged jobs without a baked runner is fatal"
 fi
 
 finish_test

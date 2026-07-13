@@ -76,45 +76,60 @@ regen_ssh_host_keys() {
   in_target "ssh-keygen -A"
 }
 
-# MOK-sign the prebuilt zfs modules in place (the signing tail of the former
-# install_zfs_offline, issue #111): the golden image bakes the kmod deb
-# UNSIGNED — the MOK keypair is per-machine (ensure_mok_key). Signed with the
-# kernel's sign-file exactly as dkms would (Debian dkms itself signs via
-# linux-kbuild's sign-file; there is no kmodsign on Debian), then depmod, so
-# configure_zfs_boot_support's update-initramfs captures signed, resolvable
-# modules. Re-signing on a resumed run appends a second signature — the
-# kernel validates the outermost one, so this stays idempotent in effect.
-sign_zfs_modules() {
+# Re-sign the golden image's dkms-built modules (zfs/spl, ddcci, ...) with
+# the per-machine MOK key (ensure_mok_key). The image bakes them signed by a
+# throwaway build-chroot key that was scrubbed from the image — the fresh
+# signature is appended and the kernel validates the outermost one, which
+# also keeps a resumed run idempotent in effect. Signed with the kernel's
+# sign-file exactly as dkms itself does (via linux-kbuild; there is no
+# kmodsign on Debian), then depmod, so configure_zfs_boot_support's
+# update-initramfs captures signed, resolvable modules. dkms 3.x ships the
+# modules xz-compressed; sign-file only signs the raw .ko, so unpack/repack
+# around it (the kernel loads any xz preset).
+sign_dkms_modules() {
   local kver=""
   kver="$(find "${TARGET}/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' \
     2>/dev/null | sort -V | tail -n1)"
   [[ -n "${kver}" ]] ||
     fatal "No kernel under ${TARGET}/lib/modules — deploy did not unpack a golden tree?"
-  info "MOK-signing the prebuilt zfs modules for ${kver}..."
+  info "MOK-signing the dkms-built modules for ${kver}..."
   in_target "
     set -e
-    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${kver}' | grep '\\.ko\$' || true)\"
+    kos=\"\$(find /lib/modules/${kver}/updates/dkms \\
+      \\( -name '*.ko' -o -name '*.ko.xz' \\) 2>/dev/null || true)\"
     [[ -n \"\${kos}\" ]] ||
-      { echo 'openzfs-zfs-modules-${kver} installed no .ko files' >&2; exit 1; }
+      { echo 'no dkms-built modules under /lib/modules/${kver}/updates/dkms' >&2; exit 1; }
     sf=\"\$(ls /usr/lib/linux-kbuild-*/scripts/sign-file 2>/dev/null | head -n1)\"
     [[ -x \"\${sf}\" ]] ||
       { echo 'sign-file not found under /usr/lib/linux-kbuild-*/scripts' >&2; exit 1; }
     for ko in \${kos}; do
-      \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
+      case \"\${ko}\" in
+        *.ko.xz)
+          unxz \"\${ko}\"
+          \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko%.xz}\"
+          xz -f \"\${ko%.xz}\"
+          ;;
+        *)
+          \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
+          ;;
+      esac
     done
     depmod '${kver}'
   "
 }
 
-# The golden image bakes the firstboot runner + the dormant zfs-dkms handover
-# job DISABLED (the live session must never run firstboot jobs). Arm them for
-# the installed system's first boot; the runner self-disables when no jobs
-# remain.
+# The golden image bakes the firstboot runner DISABLED with no jobs — a
+# standard install is COMPLETE at reboot (module builds and signing all
+# happen at image-build or install time, never on the user's first boot).
+# Arm the runner only when some path actually staged a job; it self-disables
+# once no jobs remain.
 enable_firstboot() {
+  if ! compgen -G "${TARGET}/usr/lib/hypr-deb/firstboot.d/*.sh" >/dev/null; then
+    info "No firstboot jobs staged; leaving the runner dormant."
+    return 0
+  fi
   [[ -x "${TARGET}/usr/sbin/hypr-deb-firstboot" ]] ||
     fatal "Firstboot runner missing from the golden image (/usr/sbin/hypr-deb-firstboot)."
-  [[ -f "${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh" ]] ||
-    fatal "40-zfs-dkms firstboot job missing from the golden image."
   in_target "systemctl enable hypr-deb-firstboot.service"
 }
 
@@ -395,131 +410,45 @@ install_base_packages() {
 # Offline counterpart to install_zfs_from_source: the upstream OpenZFS debs were
 # already built into the on-ISO pool at build time (tools/build-iso.sh step_zfs),
 # so install them BY NAME from the file:// store the bootstrap phase set up,
-# replacing Debian's 2.3.x — NO network, NO source build, NO compile (issue
-# #110): the kernel module comes PREBUILT as openzfs-zfs-modules-<kver> for the
-# store's pinned kernel (KERNEL_PINNED, == the pool's linux-image by build-time
-# assertion). openzfs-zfs-dkms is deliberately NOT installed here — its postinst
-# would compile immediately (linux-headers-amd64 is present for the NVIDIA dkms
-# path); it arrives dormant at firstboot instead (stage_zfs_dkms_firstboot).
-# The prebuilt modules are MOK-signed in place exactly as dkms would have —
-# with the kernel's sign-file from linux-kbuild (ensure_mok_key ran earlier;
-# linux-headers-amd64 in the base set guarantees a linux-kbuild-* is present;
-# Debian has NO kmodsign — that is Ubuntu's sbsigntool addition, and Debian's
-# dkms itself signs via linux-kbuild's sign-file) — and depmod'd — BOTH must
-# complete before configure_zfs_boot_support's update-initramfs so the
-# initramfs carries signed, resolvable modules. The kmod deb ships its
-# modules as UNCOMPRESSED .ko (upstream's dh_binary-modules recipe never
-# compresses them; dh_compress touches docs only) — the .ko grep and
-# sign-file both assume that, and a compressed-module future fails loudly
-# at the no-.ko check below.
+# replacing Debian's 2.3.x — NO network, NO source build. The dkms deb IS part
+# of the set: its build for the target kernel happens right here in the chroot
+# (headers are present via linux-headers-amd64), because the install must be
+# COMPLETE at reboot — no module builds on the user's first boot. dkms signs
+# with the MOK key at /var/lib/dkms/mok.key (generating it if ensure_mok_key
+# has not run yet) and depmods; the explicit autoinstall below is load-bearing:
+# the postinst can configure before the headers in one transaction and
+# silently skip the build.
 # Mirrors the source path's install tail: keep the pam module out (the build
 # filter never pools it, but purge defensively if a prior attempt pulled it,
 # then regenerate the PAM stack from clean profiles), and apt-mark the
-# metapackages manual so the later Hyprland build-dep autoremove cannot reap
+# packages manual so the later Hyprland build-dep autoremove cannot reap
 # them.
 install_zfs_offline() {
   info "Installing upstream OpenZFS from the offline store (replaces Debian's zfs-*)..."
   # The target boots the kernel the pool's linux-image-amd64 resolves to —
   # KERNEL_TARGET, written by build-iso step_pin_kernel. That is often NEWER
   # than KERNEL_PINNED (the live kernel): security-suite kernels move between
-  # point releases. Installing the pinned kmod here would leave the boot
-  # kernel without zfs (and drag a second linux-image into the target via the
-  # kmod deb's Depends). Install the TARGET kernel's kmod deb.
+  # point releases. Build the module for the TARGET kernel.
   local ktarget=""
   ktarget="$(cat "${CACHE_REPO_DIR}/KERNEL_TARGET" 2>/dev/null)" || true
   [[ -n "${ktarget}" ]] ||
     fatal "Offline store carries no KERNEL_TARGET (${CACHE_REPO_DIR}) —" \
       "rebuild the ISO (tools/build-iso.sh writes it)."
-  local -a pkgs=("openzfs-zfs-modules-${ktarget}") p=""
-  for p in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
-    [[ "${p}" == "openzfs-zfs-dkms" ]] || pkgs+=("${p}")
-  done
-  # Depends of the firstboot-staged dkms deb (openzfs-zfs-dkms 2.4.3-1:
-  # dkms, file, libc6-dev | libc-dev, lsb-release, python3, debconf) that
-  # nothing else installs in the target — they used to ride the old
-  # install-time dkms transaction, and the wired store is GONE at firstboot,
-  # so they must land NOW for the staged deb to resolve entirely locally
-  # (dkms arrives via ddcci-dkms; python3/debconf are base). Sharing this
-  # transaction also apt-marks them manual below, so the Hyprland build-dep
-  # autoremove cannot reap them before firstboot.
-  pkgs+=(file lsb-release libc6-dev)
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y ${pkgs[*]}
+    apt-get install -y ${ZFS_UPSTREAM_PACKAGES[*]}
     if dpkg-query -W 'openzfs*pam*' >/dev/null 2>&1; then
       apt-get purge -y 'openzfs*pam*'
     fi
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
-    apt-mark manual ${pkgs[*]} >/dev/null
-    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${ktarget}' | grep '\\.ko\$' || true)\"
-    [[ -n \"\${kos}\" ]] ||
-      { echo 'openzfs-zfs-modules-${ktarget} installed no .ko files' >&2; exit 1; }
-    sf=\"\$(ls /usr/lib/linux-kbuild-*/scripts/sign-file 2>/dev/null | head -n1)\"
-    [[ -x \"\${sf}\" ]] ||
-      { echo 'sign-file not found under /usr/lib/linux-kbuild-*/scripts' >&2; exit 1; }
-    for ko in \${kos}; do
-      \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
-    done
+    apt-mark manual ${ZFS_UPSTREAM_PACKAGES[*]} >/dev/null
+    dkms autoinstall -k '${ktarget}'
     depmod '${ktarget}'
+    modinfo -k '${ktarget}' zfs >/dev/null
   "
-  stage_zfs_dkms_firstboot
   in_target "zfs version" || true
-}
-
-# Dormant dkms (issue #110): the offline target boots on the prebuilt module,
-# but future kernel upgrades still need dkms rebuilds. Stage the pooled
-# openzfs-zfs-dkms deb in the target and register a firstboot job that installs
-# it: the one dkms compile happens in the background of an already-working boot,
-# never on the install path. Its deps are already in the target — dkms via
-# ddcci-dkms, headers via linux-headers-amd64, and file/lsb-release/libc6-dev
-# installed by install_zfs_offline's own transaction — so the job needs no
-# network and no store (both are gone at firstboot). Runs on
-# EVERY offline install — stage_firstboot_runner (60-hyprland.sh) is shared
-# with --build-on-firstboot and self-disables once no jobs remain.
-stage_zfs_dkms_firstboot() {
-  stage_zfs_dkms_job
-  stage_firstboot_runner
-}
-
-# Job-staging half of the dkms handover, split out (issue #111): the golden-
-# image build bakes the dormant deb + job with the runner never enabled
-# (write_firstboot_runner), while the installer path keeps the enabling
-# wrapper above. Reads the pooled deb from CACHE_REPO_DIR either way.
-stage_zfs_dkms_job() {
-  local deb=""
-  # compgen exits 1 on an empty glob, which under the installer's pipefail
-  # would kill the assignment itself — || true so the fatal below gets to
-  # name the real problem (same idiom as the kpin read above).
-  deb="$(compgen -G "${CACHE_REPO_DIR}/pool/openzfs-zfs-dkms_*.deb" | head -n1)" || true
-  [[ -n "${deb}" ]] ||
-    fatal "openzfs-zfs-dkms deb not in the offline pool (${CACHE_REPO_DIR}/pool)."
-  mkdir -p "${TARGET}/var/cache/hypr-deb"
-  cp "${deb}" "${TARGET}/var/cache/hypr-deb/"
-  mkdir -p "${TARGET}/usr/lib/hypr-deb/firstboot.d"
-  cat >"${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh" <<'EOF'
-#!/usr/bin/env bash
-# Firstboot job: install the deferred openzfs-zfs-dkms deb (staged by
-# installer.sh). The system already runs the prebuilt zfs module; this one
-# dkms build covers all future kernel upgrades. Deps (dkms/headers/toolchain)
-# landed at install time, so no network is needed.
-#
-# Ownership handover: upstream's dkms postinst builds AND installs for the
-# RUNNING kernel, and dkms refuses to overwrite the prebuilt kmod deb's
-# files at the same /lib/modules path (exit 6, seen on first VM firstboot).
-# So remove the prebuilt kmod package first, then let dkms take over every
-# kernel. Safe window: the zfs module is loaded (root is on it) and the
-# already-built initramfs keeps its own copy, so even a crash between the
-# two steps leaves a bootable system; a failed job leaves the .failed
-# re-run path as usual.
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get remove -y "openzfs-zfs-modules-$(uname -r)" 2>/dev/null || true
-apt-get install -y /var/cache/hypr-deb/openzfs-zfs-dkms_*.deb
-rm -f /var/cache/hypr-deb/openzfs-zfs-dkms_*.deb
-EOF
-  chmod +x "${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh"
 }
 
 # ZFS_DEB_POOL (optional): when non-empty, the produced .debs that pass the
@@ -1140,7 +1069,7 @@ phase_customize() {
   write_fstab
   write_mdadm_conf
   ensure_mok_key
-  sign_zfs_modules
+  sign_dkms_modules
   install_nvidia_driver
   install_addon_runtime
   configure_locale_tz

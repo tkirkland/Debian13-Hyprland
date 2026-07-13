@@ -105,14 +105,14 @@ assert_contains "${base_body}" "man-db/auto-update boolean false" \
   "install disables man-db auto-update to skip per-transaction reindexing"
 
 # configure_zfs_boot_support's update-initramfs must capture the SIGNED zfs
-# modules, so sign_zfs_modules must come first in phase_customize.
+# modules, so sign_dkms_modules must come first in phase_customize.
 first_step="$(bash -c '
   source lib/00-config.sh
   source lib/01-log.sh
   source scripts/40-system.sh
   declare -f phase_customize' |
-  grep -oE 'sign_zfs_modules|configure_zfs_boot_support' | head -n1)"
-assert_eq "sign_zfs_modules" "${first_step}" \
+  grep -oE 'sign_dkms_modules|configure_zfs_boot_support' | head -n1)"
+assert_eq "sign_dkms_modules" "${first_step}" \
   "zfs modules signed before the initramfs rebuild"
 
 finish_test

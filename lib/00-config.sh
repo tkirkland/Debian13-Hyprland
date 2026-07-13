@@ -691,13 +691,13 @@ ADW_GTK3_STORE_SUBDIR="${ADW_GTK3_STORE_SUBDIR:-adw-gtk3}"
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
-# Upstream OpenZFS packages the OFFLINE path consumes from the on-ISO pool
-# (built by build-iso step_zfs), so the offline default ships the SAME upstream
-# OpenZFS the online source build produces — not Debian's 2.3.x. All four must
-# be POOLED (cache_validate), but install_zfs_offline installs only the
-# userland three plus the prebuilt openzfs-zfs-modules-<kver> kmod deb: the
-# dkms deb is staged for firstboot instead (issue #110, no install-time
-# compile). The online path builds these from source (install_zfs_from_source).
+# Upstream OpenZFS packages consumed from the on-ISO pool (built by build-iso
+# step_zfs), so every install ships the SAME upstream OpenZFS the online
+# source build produces — not Debian's 2.3.x. All four (dkms included) bake
+# into the golden image at ISO-build time, module compiled and signed there —
+# installs and first boots never build modules (issue #111). The legacy
+# offline path (install_zfs_offline) installs the same set in the chroot; the
+# online path builds from source (install_zfs_from_source).
 ZFS_UPSTREAM_PACKAGES=(
   openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed
 )

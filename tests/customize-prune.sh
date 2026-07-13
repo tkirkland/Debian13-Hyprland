@@ -51,7 +51,7 @@ body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/40-system.sh; declare -f phase_customize')"
 lineof() { printf '%s\n' "${body}" | grep -n "$1" | cut -d: -f1 | head -n1; }
 for fn in prune_live_artifacts regen_machine_id regen_ssh_host_keys \
-  sign_zfs_modules install_nvidia_driver create_user configure_session_local \
+  sign_dkms_modules install_nvidia_driver create_user configure_session_local \
   enable_firstboot configure_zfs_boot_support; do
   assert_contains "${body}" "${fn}" "phase_customize calls ${fn}"
 done
