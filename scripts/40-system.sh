@@ -85,7 +85,10 @@ regen_ssh_host_keys() {
 # kmodsign on Debian), then depmod, so configure_zfs_boot_support's
 # update-initramfs captures signed, resolvable modules. dkms 3.x ships the
 # modules xz-compressed; sign-file only signs the raw .ko, so unpack/repack
-# around it (the kernel loads any xz preset).
+# around it. The repack MUST use --check=crc32 (dkms's own compress_xz_opts):
+# module decompression happens IN THE KERNEL (finit_module), whose xz decoder
+# supports only CRC32/none — a default-check (CRC64) repack boots to
+# "decompression failed" and an initramfs prompt (hit live 2026-07-13).
 sign_dkms_modules() {
   local kver=""
   kver="$(find "${TARGET}/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' \
@@ -107,7 +110,7 @@ sign_dkms_modules() {
         *.ko.xz)
           unxz \"\${ko}\"
           \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko%.xz}\"
-          xz -f \"\${ko%.xz}\"
+          xz --check=crc32 --lzma2=dict=1MiB -f \"\${ko%.xz}\"
           ;;
         *)
           \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"

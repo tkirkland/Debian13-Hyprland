@@ -62,6 +62,8 @@ assert_contains "${sig_log}" "sign-file" "signs via the kernel's sign-file"
 assert_contains "${sig_log}" "sha512" "sha512 signature (dkms parity)"
 assert_contains "${sig_log}" "unxz" \
   "xz-compressed modules are unpacked around signing (dkms 3.x ships .ko.xz)"
+assert_contains "${sig_log}" "xz --check=crc32" \
+  "repack uses CRC32 (kernel xz decoder rejects xz's default CRC64)"
 assert_contains "${sig_log}" "depmod '6.12.90-amd64'" \
   "depmod refreshes the module index after signing"
 
