@@ -154,6 +154,11 @@ CACHE_REPO_DIR="${CACHE_REPO_DIR:-${ISO_LIVE_REPO}}"
 # its ISO still boots but the current installer cannot install from it.
 HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-1}"
 
+# Upstream kitty deb source (daily repackage of kovidgoyal's official
+# binaries; Debian's 0.41 has the false NVIDIA sRGB warning, fixed >= 0.47).
+# step_stage_kitty pulls the latest release deb into the build pool.
+KITTY_DEB_REPO_URL="${KITTY_DEB_REPO_URL:-https://github.com/tkirkland/kitty-deb}"
+
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
 BOOTLOADER="${BOOTLOADER:-}"

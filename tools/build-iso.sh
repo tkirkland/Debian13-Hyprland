@@ -491,6 +491,29 @@ step_runtime_closure() {
 }
 
 # 5) Re-index after the source stack + ZFS landed new .debs.
+# 4k) Stage the upstream kitty deb (github.com/tkirkland/kitty-deb: official
+# kovidgoyal binaries repackaged) into the pool. Debian ships kitty 0.41,
+# which prints a false sRGB warning on NVIDIA (fixed upstream >= 0.47); the
+# repackaged deb versions higher (e.g. 0.47.4-0gh1), so apt resolves it over
+# Debian's during the golden install with no pin needed. Reuse any staged
+# copy; fetch failure is fatal (a silent fallback to 0.41 would ship the bug).
+step_stage_kitty() {
+  local dest="${CACHE_DIR}/repo/pool" api="" url=""
+  if compgen -G "${dest}/kitty_*gh*_amd64.deb" >/dev/null; then
+    info "[build] reusing staged upstream kitty deb"
+    return 0
+  fi
+  api="${KITTY_DEB_REPO_URL/github.com/api.github.com\/repos}/releases/latest"
+  url="$(curl -fsSL --retry 3 "${api}" 2>/dev/null |
+    grep -oE '"browser_download_url": *"[^"]+"' | cut -d'"' -f4 |
+    grep -E '/kitty_[^/]+_amd64\.deb$' | head -n1 || true)"
+  [[ -n "${url}" ]] || fatal "no kitty deb asset found at ${api}"
+  info "[build] staging upstream kitty deb: ${url##*/}"
+  mkdir -p "${dest}"
+  curl -fsSL --retry 5 --retry-all-errors -o "${dest}/${url##*/}" "${url}" ||
+    fatal "kitty deb download failed: ${url}"
+}
+
 step_reindex() {
   cache_index_repo
 }
@@ -1155,6 +1178,7 @@ run_heavy_build() {
   step_build_portal         # 3b: OPTIONAL xdph screencast backend (non-fatal)
   step_zfs                  # 4 (golden: pin == target, so ONE kmod builds)
   step_runtime_closure      # 4.5: pool the runtime deps the built debs declare
+  step_stage_kitty          # 4k: upstream kitty deb outbids Debian's in the pool
   step_reindex              # 5
   if ((HYPR_ISO_GOLDEN)); then
     step_stage_fonts        # harvests feed the golden image, not the medium
