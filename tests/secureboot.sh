@@ -59,7 +59,7 @@ fi
 
 hypr_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/60-hyprland.sh
-  declare -f stage_firstboot_runner stage_firstboot' 2>/dev/null || true)"
+  declare -f write_firstboot_runner stage_firstboot_runner stage_firstboot' 2>/dev/null || true)"
 assert_contains "${hypr_body}" "firstboot.d" \
   "runner executes a per-job directory"
 # shellcheck disable=SC2016  # literal needles: the runner expands these at boot
@@ -77,7 +77,7 @@ assert_contains "${hypr_body}" "Before=greetd.service" \
 
 zfs_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f install_base_packages install_zfs_from_source' \
+  declare -f filter_zfs_debian_packages install_base_packages install_zfs_from_source' \
   2>/dev/null || true)"
 assert_contains "${zfs_body}" "install_zfs_from_source" \
   "networked installs build upstream openzfs in the chroot"

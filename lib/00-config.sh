@@ -821,6 +821,13 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
+# Target-relative destination for the staged default user configs (uwsm env,
+# portal routing, swaync/kitty/walker/hypr configs). Empty (the default) =
+# the target user's real home (/home/${TARGET_USERNAME}); the golden-image
+# build (issue #111) overrides it to /etc/skel so every adduser-created
+# account — the live-config live user and the installed create_user account —
+# inherits the same defaults from one staged copy.
+SESSION_CONFIG_HOME="${SESSION_CONFIG_HOME:-}"
 # --ntp: space-separated NTP servers written into the target's
 # systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
 # Empty (the default) leaves timesyncd on Debian's stock pool/DHCP behaviour;
