@@ -237,4 +237,74 @@ params="$(detect_squashfs_params /any.squashfs)"
 unset -f unsquashfs
 assert_eq "zstd 1048576" "${params}" "parses Compression + Block size from unsquashfs -s"
 
+echo "test: parse_live_boot_paths extracts the one /live kernel/initrd pair (issue #111)"
+cfg_versioned='
+label live
+  kernel /live/vmlinuz-6.12.41+deb13-amd64
+  append initrd=/live/initrd.img-6.12.41+deb13-amd64 boot=live
+menuentry "Live" {
+  linux  /live/vmlinuz-6.12.41+deb13-amd64 boot=live
+  initrd /live/initrd.img-6.12.41+deb13-amd64
+}'
+pair="$(parse_live_boot_paths "${cfg_versioned}")"
+assert_eq "/live/vmlinuz-6.12.41+deb13-amd64 /live/initrd.img-6.12.41+deb13-amd64" \
+  "${pair}" "versioned /live names parsed from isolinux + grub text"
+cfg_generic='kernel /live/vmlinuz
+append initrd=/live/initrd.img boot=live'
+pair="$(parse_live_boot_paths "${cfg_generic}")"
+assert_eq "/live/vmlinuz /live/initrd.img" "${pair}" "generic /live names parsed"
+assert_fails "two distinct kernel tokens rejected (layout drift must be loud)" \
+  parse_live_boot_paths $'kernel /live/vmlinuz-a\nkernel /live/vmlinuz-b\ninitrd /live/initrd.img'
+assert_fails "initrd-less cfg rejected" parse_live_boot_paths 'kernel /live/vmlinuz'
+assert_fails "empty cfg rejected" parse_live_boot_paths ''
+
+echo "test: build_write_iso_args extra map pairs ride between the tree edits and the replay"
+g_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso \
+  /ws/golden/boot/vmlinuz-6.12.41 /live/vmlinuz \
+  /ws/golden/boot/initrd.img-6.12.41 /live/initrd.img \
+  /ws/install-store /hypr-repo \
+  /ws/installer-payload /hypr-installer)"
+for tgt in /live/vmlinuz /live/initrd.img /hypr-repo /hypr-installer; do
+  assert_contains "${g_args}" "${tgt}" "extra map targets ${tgt}"
+done
+kmap_idx="$(printf '%s\n' "${g_args}" | grep -n -- '^/live/vmlinuz$' | head -n1 | cut -d: -f1)"
+sqfs_idx="$(printf '%s\n' "${g_args}" | grep -n -- '^/live/filesystem.squashfs$' | head -n1 | cut -d: -f1)"
+greplay_idx="$(printf '%s\n' "${g_args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
+if [[ -n "${kmap_idx}" && -n "${sqfs_idx}" && -n "${greplay_idx}" ]] &&
+  ((sqfs_idx < kmap_idx && kmap_idx < greplay_idx)); then
+  echo "  ok: extra maps ordered after the squashfs map, before the boot replay"
+else
+  echo "  FAIL: extra-map ordering wrong (sqfs=${sqfs_idx} kmap=${kmap_idx} replay=${greplay_idx})" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+assert_fails "odd extra map arguments rejected (must be SRC TARGET pairs)" \
+  bash -c 'source tools/iso-assemble.sh; build_write_iso_args /s /q /o /lonely'
+
+echo "test: stage_golden_home seeds the live home pointing at the MEDIUM installer"
+groot="$(mktemp -d)"
+(
+  LIVE_STORE_ROOT="/run/live/medium"
+  LIVE_INSTALLER_SUBDIR="hypr-installer"
+  chown() { :; }   # ownership needs root; the guard is exercised, not the kernel
+  stage_golden_home "${groot}"
+)
+glink="${groot}${LIVE_USER_HOME}/${LIVE_INSTALLER_ENTRY}"
+gwant="/run/live/medium/hypr-installer/${LIVE_INSTALLER_ENTRY}"
+if [[ -L "${glink}" && "$(readlink "${glink}")" == "${gwant}" ]]; then
+  echo "  ok: golden home installer symlink -> ${gwant}"
+else
+  echo "  FAIL: golden home installer symlink missing or wrong target" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+gauto="${groot}${LIVE_USER_HOME}/${LIVE_AUTOINSTALL_ENTRY}"
+if [[ -f "${gauto}" && -x "${gauto}" ]]; then
+  echo "  ok: golden home carries the autoinstall launcher"
+  assert_contains "$(cat "${gauto}")" "/run/live/medium/hypr-installer" \
+    "launcher invokes the medium-side installer"
+else
+  echo "  FAIL: golden home autoinstall launcher missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+rm -rf "${groot}"
+
 finish_test
