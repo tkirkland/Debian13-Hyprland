@@ -48,6 +48,9 @@ prune_live_artifacts() {
     apt-get autoremove --purge -y
   "
   rm -f "${TARGET}/usr/lib/live/config/2999-hypr-autologin"
+  # Live-only sshd password-auth drop-in (step_golden_session bakes it for
+  # the keyless live session); installed systems keep stock Debian policy.
+  rm -f "${TARGET}/etc/ssh/sshd_config.d/20-hypr-live.conf"
   rm -rf "${TARGET}/home/user"
 }
 

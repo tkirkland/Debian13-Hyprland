@@ -10,9 +10,11 @@ trap 'rm -rf "${tmp}"' EXIT
 
 # --- prune_live_artifacts -------------------------------------------------------
 tgt="${tmp}/target"
-mkdir -p "${tgt}/usr/lib/live/config" "${tgt}/home/user"
+mkdir -p "${tgt}/usr/lib/live/config" "${tgt}/home/user" \
+  "${tgt}/etc/ssh/sshd_config.d"
 : >"${tgt}/usr/lib/live/config/2999-hypr-autologin"
 : >"${tgt}/home/user/autoinstall.sh"
+: >"${tgt}/etc/ssh/sshd_config.d/20-hypr-live.conf"
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh
   source scripts/40-system.sh
@@ -35,6 +37,12 @@ if [[ ! -e "${tgt}/home/user" ]]; then
   echo "  ok: live user home removed defensively"
 else
   echo "  FAIL: /home/user must not survive into the installed system" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+if [[ ! -e "${tgt}/etc/ssh/sshd_config.d/20-hypr-live.conf" ]]; then
+  echo "  ok: live sshd password-auth drop-in removed"
+else
+  echo "  FAIL: the live sshd drop-in must not reach installed systems" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 

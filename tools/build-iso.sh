@@ -757,6 +757,17 @@ ExecStart=/usr/bin/ssh-keygen -A
 [Install]
 WantedBy=multi-user.target
 EOF
+  # live-config's openssh-server component force-disables password auth at
+  # live boot by editing sshd_config in place. The sshd_config.d include is
+  # read FIRST and first-obtained-value wins, so this drop-in keeps the live
+  # session reachable with the live user's password (the test lane drives
+  # installs over SSH; a keyless live medium is otherwise unreachable).
+  # prune_live_artifacts removes it — installed systems keep stock policy.
+  install -d "${GOLDEN}/etc/ssh/sshd_config.d"
+  cat >"${GOLDEN}/etc/ssh/sshd_config.d/20-hypr-live.conf" <<'EOF'
+# Live session only (removed by the installer's customize phase).
+PasswordAuthentication yes
+EOF
   in_target "
     set -e
     systemctl enable ssh.service

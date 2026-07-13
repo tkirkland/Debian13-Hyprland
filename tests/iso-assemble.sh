@@ -286,12 +286,36 @@ assert_fails "odd extra map arguments rejected (must be SRC TARGET pairs)" \
 
 echo "test: stage_golden_home seeds the live home pointing at the MEDIUM installer"
 groot="$(mktemp -d)"
+# Golden root ships skel configs; the live home must inherit them (user-setup
+# adopts a pre-seeded /home/user, so adduser never copies skel into it).
+mkdir -p "${groot}/etc/skel/.config/hypr"
+printf -- '-- skel autostart\n' >"${groot}/etc/skel/.config/hypr/autostart.lua"
 (
   LIVE_STORE_ROOT="/run/live/medium"
   LIVE_INSTALLER_SUBDIR="hypr-installer"
   chown() { :; }   # ownership needs root; the guard is exercised, not the kernel
   stage_golden_home "${groot}"
 )
+ghome="${groot}${LIVE_USER_HOME}"
+gauto_lua="${ghome}/.config/hypr/autostart.lua"
+assert_contains "$(cat "${gauto_lua}")" "-- skel autostart" \
+  "skel configs are copied into the live home"
+assert_contains "$(cat "${gauto_lua}")" "live-welcome" \
+  "live-only autostart hook appended AFTER the skel copy"
+if [[ -x "${ghome}/.local/bin/live-welcome" ]]; then
+  echo "  ok: live-welcome terminal script staged executable"
+else
+  echo "  FAIL: live-welcome script missing or not executable" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+assert_contains "$(cat "${ghome}/.local/bin/live-welcome")" "WIPES ALL DISKS" \
+  "welcome text warns before the unattended launcher"
+if ! grep -q "live-welcome" "${groot}/etc/skel/.config/hypr/autostart.lua"; then
+  echo "  ok: skel autostart.lua untouched (hook is live-home-only)"
+else
+  echo "  FAIL: live hook leaked into /etc/skel (would reach installed users)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
 glink="${groot}${LIVE_USER_HOME}/${LIVE_INSTALLER_ENTRY}"
 gwant="/run/live/medium/hypr-installer/${LIVE_INSTALLER_ENTRY}"
 if [[ -L "${glink}" && "$(readlink "${glink}")" == "${gwant}" ]]; then
