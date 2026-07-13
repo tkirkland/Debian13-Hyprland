@@ -339,17 +339,14 @@ cache_index_repo() {
   )
 }
 
-# Validate the offline apt repo that debootstrap and in-chroot apt consume.
-# Checks CACHE_REPO_DIR — which defaults to ${CACHE_DIR}/repo but preflight
-# redirects to the on-ISO store (ISO_MEDIUM_REPO) when booted from our offline
-# ISO — so the SAME gate covers both the install-from-ISO path and the legacy
-# install-populated-cache path. The repo IS the offline contract: it carries
-# the debootstrap base, the prebuilt custom stack debs (HYPR_BUILD_ORDER), and
-# the OpenZFS debs — the full closure apt resolves against. Source tarballs are
-# BUILD-TIME artifacts (produced under CACHE_DIR at ISO creation, never shipped)
-# so they are not validated here. The ZFSBootMenu EFI IS shipped inside the repo
-# (zfsbootmenu.EFI, grafted to /hypr-repo) for offline --bootloader=zbm, but it
-# is not an apt artifact, so install_zbm validates it, not this apt-repo gate.
+# Validate the medium install store the deploy/customize phases consume
+# (issue #111). Checks CACHE_REPO_DIR — preflight points it at the on-medium
+# store (ISO_MEDIUM_REPO) when booted from our ISO. The store contract is
+# NVIDIA + spares: the driver closure for both flavors and both branches, the
+# trust keyring, the bootloader debs, and the KERNEL stamp naming the image's
+# one kernel. Everything else ships baked inside the golden squashfs. The
+# ZFSBootMenu EFI also rides the store but is not an apt artifact, so
+# install_zbm validates it, not this apt-repo gate.
 cache_validate() {
   local problems=() pkg_index="" fname=""
   pkg_index="${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages"
@@ -363,57 +360,29 @@ cache_validate() {
         problems+=("deb missing from pool: ${fname}")
     done < <(awk '/^Filename: /{print $2}' "${pkg_index}")
 
-    # Offline contract (Phase 5): the store MUST carry the NVIDIA driver debs
-    # for both flavors and both branches plus the trust keyring — without them
-    # the target cannot install NVIDIA offline. Assert the key packages are
-    # indexed (their files are covered by the Filename check above).
+    # The store MUST carry the NVIDIA driver debs for both flavors and both
+    # branches plus the trust keyring — without them the target cannot
+    # install NVIDIA offline. Assert the key packages are indexed (their
+    # files are covered by the Filename check above).
     local want=""
     for want in cuda-keyring \
       "${NVIDIA_OPEN_PACKAGES[@]}" "${NVIDIA_PROP_PACKAGES[@]}" \
       "${NVIDIA_PINNING_PACKAGE[595]}" "${NVIDIA_PINNING_PACKAGE[610]}"; do
       grep -qx "Package: ${want}" "${pkg_index}" ||
-        problems+=("NVIDIA driver deb missing from pool index: ${want}")
+        problems+=("NVIDIA driver deb missing from store index: ${want}")
     done
 
-    # chezmoi (GitHub-only dotfile manager) is harvested into the pool at build
-    # time (cache_populate_chezmoi) on every populate path and installed offline
-    # by name (install_chezmoi), so it must be indexed — assert it.
-    grep -qx "Package: chezmoi" "${pkg_index}" ||
-      problems+=("chezmoi deb missing from pool index")
-
-    # Offline path installs the UPSTREAM OpenZFS debs by name from the pool
-    # (install_zfs_offline); those are built into the pool ONLY by build-iso
-    # (step_zfs). The online path builds zfs from source and the installer's own
-    # self-populate cache never pools zfs, so assert the upstream debs ONLY when
-    # this install will actually consume them from the store (offline).
-    if ! ((NETWORK_AVAILABLE)); then
-      for want in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
-        grep -qx "Package: ${want}" "${pkg_index}" ||
-          problems+=("upstream OpenZFS deb missing from pool index: ${want}")
-      done
-      # Prebuilt-kmod contract (issue #110): the store must name both kernels
-      # it was built for — KERNEL_PINNED (the live kernel, consumed by the
-      # preflight prebuilt branch) and KERNEL_TARGET (the pool metapackage's
-      # kernel, consumed by install_zfs_offline; often newer than the pin) —
-      # and carry a prebuilt module deb for each (equal when no skew).
-      [[ -f "${CACHE_REPO_DIR}/KERNEL_PINNED" ]] ||
-        problems+=("KERNEL_PINNED missing from store: ${CACHE_REPO_DIR}/KERNEL_PINNED")
-      [[ -f "${CACHE_REPO_DIR}/KERNEL_TARGET" ]] ||
-        problems+=("KERNEL_TARGET missing from store: ${CACHE_REPO_DIR}/KERNEL_TARGET")
-      local zkver=""
-      for zkver in "$(cat "${CACHE_REPO_DIR}/KERNEL_PINNED" 2>/dev/null)" \
-        "$(cat "${CACHE_REPO_DIR}/KERNEL_TARGET" 2>/dev/null)"; do
-        [[ -n "${zkver}" ]] || continue
-        grep -qx "Package: openzfs-zfs-modules-${zkver}" "${pkg_index}" ||
-          problems+=("prebuilt openzfs-zfs-modules-${zkver} deb missing from pool index")
-      done
-    fi
+    # The KERNEL stamp names the golden image's one kernel (written by
+    # build-iso step_resolve_kernel); sign_zfs_modules and the preflight pin
+    # warning read it.
+    [[ -f "${CACHE_REPO_DIR}/KERNEL" ]] ||
+      problems+=("KERNEL stamp missing from store: ${CACHE_REPO_DIR}/KERNEL")
   fi
 
   if ((${#problems[@]} > 0)); then
     local p=""
     for p in "${problems[@]}"; do warn "cache: ${p}"; done
-    fatal "Cache validation failed (${#problems[@]} problem(s))."
+    fatal "Install-store validation failed (${#problems[@]} problem(s))."
   fi
-  info "Cache repo valid: ${CACHE_REPO_DIR}"
+  info "Install store valid: ${CACHE_REPO_DIR}"
 }

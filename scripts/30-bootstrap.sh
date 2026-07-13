@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# Bootstrap: mount the target tree, debootstrap Debian (network or the on-ISO
-# repo), write the permanent Debian apt sources, and — offline — bind-mount
-# the on-ISO package store into the target with a temporary file:// apt source
-# so in-chroot apt resolves the offline packages during the install.
+# Deploy (issue #111): mount the target tree, unpack the golden rootfs — the
+# SAME squashfs the live session booted — onto the pool, and bind-mount the
+# medium's NVIDIA install store into the target with a temporary file:// apt
+# source so the customize phase's driver transaction resolves offline.
 
 # In-target path where the on-ISO package store is bind-mounted so apt's
 # file:// source resolves inside the chroot. Fixed (not derived from
@@ -130,20 +130,53 @@ ensure_target_ready() {
   mount_chroot_binds
 }
 
-run_debootstrap() {
-  if [[ -f "${TARGET}/etc/debian_version" ]]; then
-    info "Target already bootstrapped; skipping debootstrap."
+# Echo the path of the golden squashfs on the live medium. LIVE_SQUASHFS
+# overrides for tests / exotic media. The stock boot layout ships it at
+# /live/filesystem.squashfs; tolerate a renamed single squashfs (Debian point
+# releases have moved names before), but refuse ambiguity — two squashfs on
+# one medium means the layout drifted and guessing installs the wrong root.
+locate_live_squashfs() {
+  if [[ -n "${LIVE_SQUASHFS:-}" ]]; then
+    [[ -f "${LIVE_SQUASHFS}" ]] ||
+      { warn "LIVE_SQUASHFS set but missing: ${LIVE_SQUASHFS}"; return 1; }
+    printf '%s\n' "${LIVE_SQUASHFS}"
     return 0
   fi
-  if ((NETWORK_AVAILABLE)); then
-    info "debootstrap ${SUITE} from ${MIRROR}..."
-    debootstrap --arch="${ARCH}" "${SUITE}" "${TARGET}" "${MIRROR}"
-  else
-    cache_validate
-    info "debootstrap ${SUITE} from the on-ISO repo (${CACHE_REPO_DIR})..."
-    debootstrap --no-check-gpg --arch="${ARCH}" "${SUITE}" "${TARGET}" \
-      "file://${CACHE_REPO_DIR}"
+  # set-u-safe: test contexts may source this file without lib/00-config.sh.
+  local live_dir="${LIVE_MEDIUM_DIR:-/run/live/medium}/live" found=()
+  if [[ -f "${live_dir}/filesystem.squashfs" ]]; then
+    printf '%s\n' "${live_dir}/filesystem.squashfs"
+    return 0
   fi
+  mapfile -t found < <(compgen -G "${live_dir}/*.squashfs" || true)
+  if ((${#found[@]} == 1)); then
+    printf '%s\n' "${found[0]}"
+    return 0
+  fi
+  warn "No unambiguous squashfs under ${live_dir} (found ${#found[@]})."
+  return 1
+}
+
+# Unpack the PRISTINE golden image (from the medium, not the running live
+# overlay — the overlay carries live-boot's mutations) onto the mounted
+# target tree. unsquashfs writes through the mounted dataset mountpoints and
+# preserves ownership/xattrs (running as root); -f makes a resumed deploy
+# overwrite a half-unpacked tree instead of aborting on existing files. The
+# golden /boot/efi is asserted empty at build time, so the mounted ESP is
+# never written.
+unpack_golden_rootfs() {
+  local sqfs=""
+  sqfs="$(locate_live_squashfs)" ||
+    fatal "Golden rootfs squashfs not found on the live medium" \
+      "(${LIVE_MEDIUM_DIR:-/run/live/medium}/live). Booted from something other" \
+      "than the hypr-deb ISO? Set LIVE_SQUASHFS=/path/to/filesystem.squashfs to override."
+  info "Unpacking golden rootfs ${sqfs##*/} onto ${TARGET}..."
+  unsquashfs -f -no-progress -d "${TARGET}" "${sqfs}" >/dev/null ||
+    fatal "unsquashfs of ${sqfs} onto ${TARGET} failed."
+  # Sanity: the tree must be the complete baked system, not a partial write.
+  [[ -f "${TARGET}/etc/debian_version" && -x "${TARGET}/usr/bin/Hyprland" ]] ||
+    fatal "Unpacked tree at ${TARGET} is not the golden image" \
+      "(missing /etc/debian_version or /usr/bin/Hyprland)."
 }
 
 # The PERMANENT apt sources of the installed system are always the real Debian
@@ -168,18 +201,16 @@ write_target_apt_sources() {
 # Requires mount_chroot_binds to have run first (the store is bound under /run).
 setup_target_iso_repo() {
   local mnt="${TARGET}${TARGET_ISO_REPO_MNT}"
-  # The offline store must actually exist before we bind it. On a resumed run
-  # the "already bootstrapped" short-circuit in run_debootstrap returns early
-  # and never reaches cache_validate, so this is the ONLY guard against a
-  # vanished store -- e.g. /run/live/medium got unmounted after preflight set
-  # CACHE_REPO_DIR to the on-ISO repo. Without it, `mount --bind` of a missing
-  # source dies with a cryptic kernel "special device ... does not exist".
+  # The store must actually exist before we bind it: /run/live/medium can
+  # vanish between preflight and here (medium unmounted mid-install). Without
+  # this guard, `mount --bind` of a missing source dies with a cryptic kernel
+  # "special device ... does not exist".
   if [[ ! -d "${CACHE_REPO_DIR}" ||
     ! -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]; then
-    fatal "Offline package store missing or incomplete at ${CACHE_REPO_DIR}" \
+    fatal "Install store missing or incomplete at ${CACHE_REPO_DIR}" \
       "(no dists/${SUITE}/main/binary-${ARCH}/Packages). The live medium" \
-      "(/run/live/medium) may have been unmounted since preflight; re-mount it" \
-      "and re-run, or pass --online to install from the network."
+      "(${LIVE_MEDIUM_DIR:-/run/live/medium}) may have been unmounted since" \
+      "preflight; re-mount it and re-run."
   fi
   mkdir -p "${mnt}"
   if ! mountpoint -q "${mnt}"; then
@@ -231,22 +262,20 @@ EOF
   chmod 755 "${TARGET}/usr/sbin/policy-rc.d"
 }
 
-phase_bootstrap() {
+phase_deploy() {
   mount_target_tree
-  run_debootstrap
+  # The medium NVIDIA store is the customize phase's only package source;
+  # gate on it BEFORE the (long) unpack so a yanked/failed medium dies fast.
+  cache_validate
+  unpack_golden_rootfs
+  # The image ships the permanent Debian mirror sources baked in
+  # (step_finalize_golden). The install itself runs STORE-ONLY: on a
+  # networked machine the reachable mirror would outbid the store's NVIDIA
+  # candidates in the customize transaction (the issue #110 failure mode).
+  # phase_cleanup rewrites the permanent sources after the last transaction.
+  rm -f "${TARGET}/etc/apt/sources.list.d/debian.sources"
   install_policy_rc_d
   mount_chroot_binds
-  # Offline: the temporary file:// store source is the ONLY apt source for the
-  # whole install. The permanent Debian mirror sources are written by
-  # phase_cleanup, AFTER the last package transaction — writing them here made
-  # apt prefer the (reachable) mirror's newer candidates over the store on any
-  # networked machine, e.g. installing trixie-security's kernel instead of the
-  # store's KERNEL_TARGET and stranding the prebuilt zfs kmod (issue #110).
-  # Offline means store-only, not store-preferred.
-  if ((NETWORK_AVAILABLE == 0)); then
-    setup_target_iso_repo
-  else
-    write_target_apt_sources
-  fi
+  setup_target_iso_repo
   in_target "apt-get update"
 }

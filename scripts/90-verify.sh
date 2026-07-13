@@ -37,34 +37,47 @@ phase_verify() {
   done
   kver="$(printf '%s' "${vers}" | sort -V | tail -n1)"
 
-  if ((BUILD_ON_FIRSTBOOT)); then
-    vcheck "firstboot unit enabled" in_target \
-      "systemctl is-enabled hypr-deb-firstboot.service"
-    vcheck "firstboot runner staged" \
-      test -x "${TARGET}/usr/sbin/hypr-deb-firstboot"
-    vcheck "hyprland firstboot job staged" test -x \
-      "${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
-    vcheck "sources staged" \
-      test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
-    vcheck "toolchain staged for firstboot" in_target "command -v cmake"
-  else
-    # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
-    # (set by pam_systemd in real logins); provide both for the check.
-    vcheck "Hyprland binary runs" in_target "
-      set -e
-      install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
-      runuser -u '${TARGET_USERNAME}' -- \
-        env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
-        /usr/bin/Hyprland --version
-      rm -rf /tmp/hypr-verify-rt
-    "
-    vcheck "Hyprland links resolve" in_target \
-      "! ldd /usr/bin/Hyprland | grep -q 'not found'"
-    # guiutils builds every util from its root CMakeLists; if a future tag
-    # drops or renames the welcome util, fail loudly here (issue #11).
-    vcheck "welcome app installed" \
-      test -x "${TARGET}/usr/bin/hyprland-welcome"
-  fi
+  # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
+  # (set by pam_systemd in real logins); provide both for the check.
+  vcheck "Hyprland binary runs" in_target "
+    set -e
+    install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
+    runuser -u '${TARGET_USERNAME}' -- \
+      env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
+      /usr/bin/Hyprland --version
+    rm -rf /tmp/hypr-verify-rt
+  "
+  vcheck "Hyprland links resolve" in_target \
+    "! ldd /usr/bin/Hyprland | grep -q 'not found'"
+  # guiutils builds every util from its root CMakeLists; if a future tag
+  # drops or renames the welcome util, fail loudly here (issue #11).
+  vcheck "welcome app installed" \
+    test -x "${TARGET}/usr/bin/hyprland-welcome"
+
+  # Golden-image customize hygiene (issue #111): the copied tree must have
+  # shed its live identity and plumbing.
+  local live_pkg=""
+  for live_pkg in "${LIVE_PURGE_PACKAGES[@]}"; do
+    vcheck "live package purged (${live_pkg})" in_target \
+      "! dpkg -s '${live_pkg}' >/dev/null 2>&1"
+  done
+  vcheck "live autologin hook removed" bash -c \
+    "[[ ! -e '${TARGET}/usr/lib/live/config/2999-hypr-autologin' ]]"
+  vcheck "live user home absent" bash -c "[[ ! -e '${TARGET}/home/user' ]]"
+  # Fresh identity: non-empty machine-id (the image ships it EMPTY) that is
+  # not the live session's, and ssh host keys that are not the live session's.
+  vcheck "machine-id regenerated (non-empty, not the live env's)" bash -c "
+    [[ -s '${TARGET}/etc/machine-id' ]] &&
+    ! cmp -s '${TARGET}/etc/machine-id' /etc/machine-id"
+  vcheck "ssh host keys regenerated (present, not the live env's)" bash -c "
+    [[ -f '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' ]] &&
+    ! cmp -s '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' \
+      /etc/ssh/ssh_host_ed25519_key.pub"
+  # Firstboot dkms handover armed (baked dormant; customize enables it).
+  vcheck "firstboot unit enabled" in_target \
+    "systemctl is-enabled hypr-deb-firstboot.service"
+  vcheck "zfs-dkms firstboot job staged" test -f \
+    "${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh"
 
   # Screenshot/recording capture helpers + deps (epic #67, item 1). Staged
   # unconditionally by configure_session, so verified on both install paths.

@@ -1270,10 +1270,70 @@ configure_session() {
   "
 }
 
+# Per-machine session configuration (issue #111): the HALF of the old
+# configure_session that depends on THIS install's user, keymap, autologin
+# and NVIDIA choices. Everything machine-independent is already baked into
+# the golden image (stage_session_configs, run by the build with
+# SESSION_CONFIG_HOME=/etc/skel), and create_user's skel copy has populated
+# the real home before this runs.
+configure_session_local() {
+  info "Configuring the per-machine session (keymap, greeter, user config)..."
+  # Greeter keyboard layout: greetd spawns its greeter with a PAM-built env;
+  # pam_env reads /etc/environment, and cage/wlroots/libxkbcommon honor
+  # XKB_DEFAULT_*. Without this a non-us user cannot type their password at
+  # tuigreet. Values come from the target's /etc/default/keyboard
+  # (configure_keymap). Resume-safe: only the XKB_DEFAULT_ lines are ever
+  # rewritten; the image's baked content is untouched.
+  local xkb_layout="" xkb_variant="" xkb_options=""
+  xkb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  xkb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  xkb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  touch "${TARGET}/etc/environment"
+  sed -i '/^XKB_DEFAULT_/d' "${TARGET}/etc/environment"
+  {
+    printf 'XKB_DEFAULT_LAYOUT=%s\n' "${xkb_layout}"
+    if [[ -n "${xkb_variant}" ]]; then
+      printf 'XKB_DEFAULT_VARIANT=%s\n' "${xkb_variant}"
+    fi
+    if [[ -n "${xkb_options}" ]]; then
+      printf 'XKB_DEFAULT_OPTIONS=%s\n' "${xkb_options}"
+    fi
+  } >>"${TARGET}/etc/environment"
+  # --autologin: the image bakes the tuigreet greeter default; rewrite
+  # config.toml to start the session directly as the created user. Without
+  # the flag the baked greeter config stands as-is.
+  if ((HYPR_AUTOLOGIN)); then
+    cat >"${TARGET}/etc/greetd/config.toml" <<EOF
+[terminal]
+vt = 1
+
+[default_session]
+# Absolute paths are required: greetd builds the session environment from
+# PAM, and Debian's default stack provides no PATH for it.
+command = "/usr/bin/hypr-session"
+user = "${TARGET_USERNAME}"
+EOF
+  fi
+  # uwsm env: the skel copy carries the theming block only; rewrite it in the
+  # real home so the NVIDIA lines land when a driver was chosen.
+  write_uwsm_env
+  # The user config is generated against this install's keymap (it reads the
+  # target's /etc/default/keyboard), replacing the image's us-layout skel copy.
+  write_hypr_lua_config
+  install_drm_reprobe_sudoers
+  in_target "
+    set -e
+    # Fail the install if the drm-reprobe sudoers drop-in is malformed rather
+    # than shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
+  "
+}
+
 # Machine-independent session staging (issue #111): every session file that
 # does NOT depend on this install's user, keymap, or NVIDIA choice. The
-# installer reaches it through configure_session; the golden-image build
-# calls it directly with SESSION_CONFIG_HOME=/etc/skel (and the default
+# legacy installer reaches it through configure_session; the golden-image
+# build calls it directly with SESSION_CONFIG_HOME=/etc/skel (and the default
 # HYPR_AUTOLOGIN=0 tuigreet greeter) so one staged copy bakes into the image.
 stage_session_configs() {
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and

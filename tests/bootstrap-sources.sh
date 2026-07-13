@@ -113,52 +113,45 @@ assert_contains "${cleanup_body}" "kill_target_processes" \
 assert_contains "${cleanup_body}" "teardown_target_iso_repo" \
   "cleanup removes the offline temp source and repo bind"
 
-# Offline means store-ONLY, not store-preferred: on a NETWORKED machine the
-# permanent mirror sources, if present during the install, win the candidate
-# race against the store (apt installs trixie-security's newer kernel instead
-# of the store's KERNEL_TARGET, stranding the prebuilt zfs kmod — issue #110
-# VM validation failure). So phase_bootstrap must write the permanent sources
-# ONLY online; offline they are deferred to phase_cleanup, after the last
-# package transaction.
-echo "test: offline install is store-only until cleanup (no mirror mid-install)"
-run_bootstrap() { # $1=NETWORK_AVAILABLE; runs phase_bootstrap with stubs
+# The install is store-ONLY until cleanup: on a NETWORKED machine any live
+# mirror source wins the candidate race against the store (apt installs
+# trixie-security's newer kernel instead of the store's, stranding the
+# prebuilt zfs kmod — issue #110 VM validation failure). The golden image
+# ships the permanent mirror sources BAKED IN (step_finalize_golden), so
+# phase_deploy must strip them after the unpack; phase_cleanup rewrites them
+# after the last package transaction.
+echo "test: install is store-only until cleanup (no mirror mid-install)"
+run_deploy() { # runs phase_deploy with stubs; baked sources pre-seeded
   bash -c "
     set -u
     source lib/00-config.sh
     source lib/01-log.sh
     source scripts/30-bootstrap.sh
     TARGET='${tmp}/btarget'
-    NETWORK_AVAILABLE=$1
     mount_target_tree() { :; }
-    run_debootstrap() { :; }
+    cache_validate() { :; }
+    unpack_golden_rootfs() { :; }
     install_policy_rc_d() { :; }
     mount_chroot_binds() { :; }
     setup_target_iso_repo() { write_iso_temp_source; }
     in_target() { :; }
     info() { :; }
-    phase_bootstrap
+    phase_deploy
   "
 }
-rm -rf "${tmp}/btarget"; mkdir -p "${tmp}/btarget/etc/apt"
-run_bootstrap 0
+rm -rf "${tmp}/btarget"; mkdir -p "${tmp}/btarget/etc/apt/sources.list.d"
+: >"${tmp}/btarget/etc/apt/sources.list.d/debian.sources" # baked by the build
+run_deploy
 if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/debian.sources" ]]; then
-  echo "  FAIL: offline bootstrap wrote the permanent mirror sources (mirror would outbid the store mid-install)" >&2
+  echo "  FAIL: deploy left the baked mirror sources in place (mirror would outbid the store mid-install)" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 else
-  echo "  ok: offline bootstrap leaves the store as the ONLY apt source"
+  echo "  ok: deploy strips the baked mirror sources (store-only mid-install)"
 fi
 if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/hypr-iso-temp.sources" ]]; then
-  echo "  ok: offline bootstrap wires the temporary store source"
+  echo "  ok: deploy wires the temporary store source"
 else
-  echo "  FAIL: offline bootstrap did not wire the store source" >&2
-  TEST_FAILURES=$((TEST_FAILURES + 1))
-fi
-rm -rf "${tmp}/btarget"; mkdir -p "${tmp}/btarget/etc/apt"
-run_bootstrap 1
-if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/debian.sources" ]]; then
-  echo "  ok: online bootstrap writes the permanent mirror sources up front"
-else
-  echo "  FAIL: online bootstrap must write the mirror sources" >&2
+  echo "  FAIL: deploy did not wire the store source" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 

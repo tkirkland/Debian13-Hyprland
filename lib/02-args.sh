@@ -3,15 +3,16 @@
 # by lib/00-config.sh and consumed by the orchestrator and phase modules.
 # Usage text, argument parsing, and interactive prompts.
 
-VALID_PHASES="full preflight storage bootstrap system boot hyprland verify cleanup"
+VALID_PHASES="full preflight storage deploy customize boot verify cleanup"
 RUN_PHASE="full"
 
 usage() {
   cat <<'EOF'
 Usage: installer.sh [options]
 
-Installs Debian 13 (trixie) onto the fixed three-disk ZFS/mdadm layout and
-builds Hyprland from latest release tags. DESTROYS the target disks.
+Installs Debian 13 (trixie) + Hyprland onto the fixed three-disk ZFS/mdadm
+layout by unpacking the ISO's golden rootfs image (issue #111). DESTROYS the
+target disks.
 
 Options:
   --bootloader=<zbm|grub|systemd-boot>
@@ -23,8 +24,8 @@ Options:
                         the on-ISO package store is present; the default is
                         offline-from-store when that store is found)
   --phase=<name>        Run a single phase:
-                        preflight storage bootstrap system boot
-                        hyprland verify cleanup
+                        preflight storage deploy customize boot
+                        verify cleanup
   --keep-build-deps     Do not purge build dependencies after success
   --autologin           Boot straight into the Hyprland session as the
                         target user (no tuigreet console login)
@@ -92,6 +93,16 @@ parse_args() {
       --online) ONLINE=1 ;;
       --phase=*)
         RUN_PHASE="${arg#*=}"
+        # Pre-1.0 CLI break (issue #111): the golden-rootfs pivot replaced the
+        # package-install phases with unpack+configure ones. Name the successor
+        # instead of a bare "unknown phase".
+        case "${RUN_PHASE}" in
+          bootstrap) fatal "Phase 'bootstrap' no longer exists (issue #111):" \
+            "the rootfs is unpacked from the ISO squashfs. Use --phase=deploy." ;;
+          system | hyprland) fatal "Phase '${RUN_PHASE}' no longer exists" \
+            "(issue #111): the stack ships baked into the image. Per-machine" \
+            "configuration runs in --phase=customize." ;;
+        esac
         [[ " ${VALID_PHASES} " == *" ${RUN_PHASE} "* ]] ||
           fatal "Unknown phase '${RUN_PHASE}'. Valid: ${VALID_PHASES}"
         ;;

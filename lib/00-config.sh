@@ -125,9 +125,13 @@ CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
 # preflight probes this first: an in-root store cannot be shadowed by a /run bind
 # mount and does not depend on the medium staying visible mid-install.
 ISO_LIVE_REPO="${ISO_LIVE_REPO:-/opt/hypr-deb/repo}"
-# Fallback for older ISOs that shipped the store as a top-level data directory on
-# the medium (mounted at /run/live/medium) rather than embedded in the squashfs.
-ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
+# Where live-boot mounts the ISO9660 medium in the live session. The golden
+# ISO (issue #111) ships the install store AND the squashfs the deploy phase
+# unpacks under here.
+LIVE_MEDIUM_DIR="${LIVE_MEDIUM_DIR:-/run/live/medium}"
+# The medium-side install store (golden ISOs: NVIDIA + bootloader debs, ZBM
+# EFI, KERNEL stamp; older ISOs shipped the full pool here).
+ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-${LIVE_MEDIUM_DIR}/hypr-repo}"
 # Location of the apt repo (pool/ + dists/) the offline machinery installs from.
 # Defaults to the on-ISO store (ISO_LIVE_REPO) — decoupled from CACHE_DIR so an
 # offline install never depends on a second, install-time cache. preflight
@@ -143,9 +147,11 @@ CACHE_REPO_DIR="${CACHE_REPO_DIR:-${ISO_LIVE_REPO}}"
 # the live session and the image the installer copies to disk. The multi-GB
 # pool becomes a build-workspace artifact; the ISO carries only the small
 # install store (NVIDIA + bootloader debs, ZBM EFI, KERNEL stamp) on the
-# ISO9660 medium at /hypr-repo. 0 (default) keeps the legacy stock-squashfs
-# repack with the full pool embedded at /opt/hypr-deb/repo.
-HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-0}"
+# ISO9660 medium at /hypr-repo. Default since the Phase-2 installer pivot
+# (the installer consumes only golden ISOs now); 0 selects the legacy
+# stock-squashfs repack with the full pool embedded at /opt/hypr-deb/repo —
+# its ISO still boots but the current installer cannot install from it.
+HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-1}"
 
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
@@ -811,8 +817,13 @@ TARGET_BASE_PACKAGES=(
 #   openssl                 ensure_mok_key runs it in the live env
 #   NVIDIA_DKMS_BUILD_PACKAGES + linux-headers (via TARGET_BASE) bake so the
 #   conflict-free half of every NVIDIA variant is already in the image.
+# The live-only members of the golden image: baked in so the squashfs boots
+# as the live session, purged from the copied tree by prune_live_artifacts
+# (scripts/40-system.sh) so they never ship on the installed system.
+LIVE_PURGE_PACKAGES=(live-boot live-config live-config-systemd)
+
 GOLDEN_EXTRA_PACKAGES=(
-  live-boot live-config live-config-systemd
+  "${LIVE_PURGE_PACKAGES[@]}"
   git squashfs-tools gdisk parted rsync openssl
   "${NVIDIA_DKMS_BUILD_PACKAGES[@]}"
 )

@@ -39,21 +39,26 @@ assert_contains "${boot_body}" "openssl" "openssl probed by live bootstrap"
 
 sys_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f ensure_mok_key phase_system' 2>/dev/null || true)"
+  declare -f ensure_mok_key phase_customize' 2>/dev/null || true)"
 assert_contains "${sys_body}" "openssl req -new -x509" \
   "MOK keypair generated with openssl"
 assert_contains "${sys_body}" "outform DER" \
   "MOK certificate is DER (dkms/mokutil format)"
 assert_contains "${sys_body}" "chmod 600" "private key is chmod 600"
 
+# The MOK keypair must exist before its two consumers in the customize
+# phase: sign_zfs_modules (signs the prebuilt kmod with it) and
+# install_nvidia_driver (dkms postinst signs the driver modules with it).
 phase_body="$(bash -c 'source lib/00-config.sh; source lib/01-log.sh
-  source scripts/40-system.sh; declare -f phase_system' 2>/dev/null || true)"
+  source scripts/40-system.sh; declare -f phase_customize' 2>/dev/null || true)"
 mok_line="$(printf '%s\n' "${phase_body}" | grep -n 'ensure_mok_key' | cut -d: -f1 | head -n1 || true)"
-pkg_line="$(printf '%s\n' "${phase_body}" | grep -n 'install_base_packages' | cut -d: -f1 | head -n1 || true)"
-if [[ -n "${mok_line}" && -n "${pkg_line}" ]] && ((mok_line < pkg_line)); then
-  echo "  ok: ensure_mok_key runs before install_base_packages"
+sign_line="$(printf '%s\n' "${phase_body}" | grep -n 'sign_zfs_modules' | cut -d: -f1 | head -n1 || true)"
+nv_line="$(printf '%s\n' "${phase_body}" | grep -n 'install_nvidia_driver' | cut -d: -f1 | head -n1 || true)"
+if [[ -n "${mok_line}" && -n "${sign_line}" && -n "${nv_line}" ]] &&
+  ((mok_line < sign_line && mok_line < nv_line)); then
+  echo "  ok: ensure_mok_key runs before sign_zfs_modules and install_nvidia_driver"
 else
-  echo "  FAIL: ensure_mok_key must run before install_base_packages" >&2
+  echo "  FAIL: ensure_mok_key must run before sign_zfs_modules/install_nvidia_driver" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 

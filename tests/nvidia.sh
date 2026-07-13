@@ -205,16 +205,21 @@ else
   echo "  ok: exact-version install skips the branch pinning package"
 fi
 
-# Online install: keyring fetched + apt update against NVIDIA's network repo.
+# STORE-ONLY (issue #111): even with the network up, the install must never
+# fetch the keyring or refresh against NVIDIA's network repo — everything
+# resolves from the medium store the deploy phase wired.
 out="$(run_install online 'NVIDIA_DRIVER=open; NETWORK_AVAILABLE=1')"
-assert_contains "${out}" "dpkg -i /tmp/cuda-keyring.deb" \
-  "online install installs the NVIDIA repo keyring in the target"
-assert_contains "${out}" "apt-get update" "online install refreshes apt"
-if [[ -e "${tmp}/online/curl.log" ]]; then
-  echo "  ok: online install fetches the keyring via curl"
-else
-  echo "  FAIL: online install must fetch the keyring" >&2
+if printf '%s' "${out}" | grep -qE 'cuda-keyring|apt-get update'; then
+  echo "  FAIL: networked install must stay store-only (no keyring fetch/apt update)" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: networked install stays store-only"
+fi
+if [[ -e "${tmp}/online/curl.log" ]]; then
+  echo "  FAIL: install must not curl the NVIDIA keyring (store-only)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no network fetch during the NVIDIA install"
 fi
 
 finish_test

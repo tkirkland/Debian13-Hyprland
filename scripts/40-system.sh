@@ -1,6 +1,8 @@
 # shellcheck shell=bash
-# Base system: identity, locale/tz, fstab, mdadm.conf, base packages,
-# user account, ZFS boot prerequisites (hostid, cachefile, initramfs).
+# Customize (issue #111): per-machine work on the unpacked golden tree —
+# live-artifact prune, identity/hygiene regen, locale/tz/keymap, NVIDIA from
+# the medium store, user account, session config, MOK signing, ZFS boot
+# prerequisites (hostid, cachefile, initramfs).
 
 write_identity() {
   echo "${TARGET_HOSTNAME}" >"${TARGET}/etc/hostname"
@@ -28,6 +30,86 @@ write_mdadm_conf() {
     echo "HOMEHOST <ignore>"
     mdadm --detail --scan
   } >"${TARGET}/etc/mdadm/mdadm.conf"
+}
+
+# The golden image boots as the live session, so the copied tree carries the
+# live plumbing. Purge the live packages, then autoremove their orphaned
+# deps. The autologin live-config hook is NOT owned by any package (staged
+# raw by the build), so purging live-config does not remove it — explicit rm.
+# /home/user and the autoinstall launcher live in the live OVERLAY / on the
+# medium and never reach the pristine squashfs; removed defensively anyway
+# (an unexpected copy must not ship a passwordless live account).
+prune_live_artifacts() {
+  info "Pruning live-session artifacts from the target..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get purge -y ${LIVE_PURGE_PACKAGES[*]}
+    apt-get autoremove --purge -y
+  "
+  rm -f "${TARGET}/usr/lib/live/config/2999-hypr-autologin"
+  rm -rf "${TARGET}/home/user"
+}
+
+# The image ships an EMPTY /etc/machine-id (golden_hygiene_scrub); the live
+# session's generated id lives in the overlay and never reaches this tree.
+# Give the installed system its own identity now — systemd-machine-id-setup
+# is chroot-safe (it only writes the file). The dbus copy is dropped; dbus
+# recreates it from /etc/machine-id at boot.
+regen_machine_id() {
+  rm -f "${TARGET}/etc/machine-id" "${TARGET}/var/lib/dbus/machine-id"
+  in_target "systemd-machine-id-setup"
+}
+
+# The image ships NO ssh host keys (scrubbed at build; the live session
+# regenerates its own into the overlay via hypr-sshd-keygen). Generate this
+# machine's set; the rm makes a resumed run regenerate rather than keep a
+# half-written set.
+regen_ssh_host_keys() {
+  rm -f "${TARGET}"/etc/ssh/ssh_host_*
+  in_target "ssh-keygen -A"
+}
+
+# MOK-sign the prebuilt zfs modules in place (the signing tail of the former
+# install_zfs_offline, issue #111): the golden image bakes the kmod deb
+# UNSIGNED — the MOK keypair is per-machine (ensure_mok_key). Signed with the
+# kernel's sign-file exactly as dkms would (Debian dkms itself signs via
+# linux-kbuild's sign-file; there is no kmodsign on Debian), then depmod, so
+# configure_zfs_boot_support's update-initramfs captures signed, resolvable
+# modules. Re-signing on a resumed run appends a second signature — the
+# kernel validates the outermost one, so this stays idempotent in effect.
+sign_zfs_modules() {
+  local kver=""
+  kver="$(find "${TARGET}/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+    2>/dev/null | sort -V | tail -n1)"
+  [[ -n "${kver}" ]] ||
+    fatal "No kernel under ${TARGET}/lib/modules — deploy did not unpack a golden tree?"
+  info "MOK-signing the prebuilt zfs modules for ${kver}..."
+  in_target "
+    set -e
+    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${kver}' | grep '\\.ko\$' || true)\"
+    [[ -n \"\${kos}\" ]] ||
+      { echo 'openzfs-zfs-modules-${kver} installed no .ko files' >&2; exit 1; }
+    sf=\"\$(ls /usr/lib/linux-kbuild-*/scripts/sign-file 2>/dev/null | head -n1)\"
+    [[ -x \"\${sf}\" ]] ||
+      { echo 'sign-file not found under /usr/lib/linux-kbuild-*/scripts' >&2; exit 1; }
+    for ko in \${kos}; do
+      \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
+    done
+    depmod '${kver}'
+  "
+}
+
+# The golden image bakes the firstboot runner + the dormant zfs-dkms handover
+# job DISABLED (the live session must never run firstboot jobs). Arm them for
+# the installed system's first boot; the runner self-disables when no jobs
+# remain.
+enable_firstboot() {
+  [[ -x "${TARGET}/usr/sbin/hypr-deb-firstboot" ]] ||
+    fatal "Firstboot runner missing from the golden image (/usr/sbin/hypr-deb-firstboot)."
+  [[ -f "${TARGET}/usr/lib/hypr-deb/firstboot.d/40-zfs-dkms.sh" ]] ||
+    fatal "40-zfs-dkms firstboot job missing from the golden image."
+  in_target "systemctl enable hypr-deb-firstboot.service"
 }
 
 # Best-effort autodetection with the config defaults as fallback. Timezone
@@ -655,27 +737,16 @@ install_nvidia_driver() {
   # the =VERSION requests drive apt without the priority-1000 pin overriding.
   local branch_select="apt-get install -y '${pin_pkg}'"
   [[ -n "${ver}" ]] && branch_select=":  # exact version pinned: no branch pin"
-  # Online only: install the cuda-keyring and refresh against NVIDIA's repo.
-  # Offline resolves everything from the /hypr-repo file:// source already set
-  # up in the bootstrap phase (Trusted: yes), so neither step runs.
-  local online_prep=":"
-  if ((NETWORK_AVAILABLE)); then
-    curl -fsSL --retry 3 -o "${TARGET}/tmp/cuda-keyring.deb" \
-      "${NVIDIA_REPO_KEYRING_URL}" ||
-      fatal "Could not fetch NVIDIA repo keyring (${NVIDIA_REPO_KEYRING_URL})."
-    online_prep="dpkg -i /tmp/cuda-keyring.deb
-      rm -f /tmp/cuda-keyring.deb
-      apt-get update"
-  fi
-  local src="the on-ISO store (/hypr-repo)"
-  ((NETWORK_AVAILABLE)) && src="NVIDIA's CUDA repo"
+  # STORE-ONLY (issue #111): everything resolves from the medium store's
+  # file:// source the deploy phase wired up (Trusted: yes) — no network
+  # keyring fetch, no NVIDIA-repo apt update, ever. Install-time network
+  # use was removed with the golden pivot (#94: advise, never act).
   local desc="branch ${NVIDIA_BRANCH}"
   [[ -n "${ver}" ]] && desc="${desc}, version ${ver}"
-  info "Installing NVIDIA ${flavor} driver (${desc}) from ${src}..."
+  info "Installing NVIDIA ${flavor} driver (${desc}) from the install store..."
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    ${online_prep}
     # The two nvidia-driver-pinning-<branch> packages Conflict on one file;
     # purge any installed one before (re)selecting the branch.
     if dpkg-query -W 'nvidia-driver-pinning-*' >/dev/null 2>&1; then
@@ -696,32 +767,18 @@ EOF
   in_target "update-initramfs -u"
 }
 
-# Addon artifacts: things apt cannot provide, dropped into addons/.
-#   *.deb  installed via apt from the local file (dependencies resolved
-#          from the enabled sources; the chroot policy-rc.d guard blocks
-#          service starts like for every other package).
+# Addon artifacts, install-time half (issue #111): addons/*.deb and
+# addons/*.list bake into the golden image at BUILD time (build-iso
+# step_golden_rootfs); only the per-install pieces run here.
 #   *.sh   user-authored customization hooks, EXECUTED inside the target
-#          chroot as root, in lexical order, after packages and addon
-#          debs (live-build hook semantics). A failing script fails the
-#          phase by name.
+#          chroot as root, in lexical order (live-build hook semantics).
+#          A failing script fails the phase by name.
 #   *.run  staged executable at /opt/addons in the target and NOT
 #          executed: vendor runfiles (VMware etc.) compile kernel modules
 #          and start services against the RUNNING system, so they must be
 #          run manually after first boot.
-install_addon_artifacts() {
+install_addon_runtime() {
   local f="" staged=0
-  if compgen -G "addons/*.deb" >/dev/null; then
-    info "Installing addon .deb packages..."
-    rm -rf "${TARGET}/var/tmp/addon-debs"
-    install -d "${TARGET}/var/tmp/addon-debs"
-    cp addons/*.deb "${TARGET}/var/tmp/addon-debs/"
-    in_target "
-      set -e
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y /var/tmp/addon-debs/*.deb
-    "
-    rm -rf "${TARGET}/var/tmp/addon-debs"
-  fi
   if compgen -G "addons/*.sh" >/dev/null; then
     rm -rf "${TARGET}/var/tmp/addon-scripts"
     install -d "${TARGET}/var/tmp/addon-scripts"
@@ -1063,32 +1120,34 @@ i2c-dev
 EOF
 }
 
-phase_system() {
-  # Standalone offline --phase=system runs arrive with no store wired into
-  # the target (bootstrap's wiring is torn down at the end of every
-  # standalone run); mount-gated no-op on full runs. Same pairing as
-  # install_grub/install_sdboot.
+phase_customize() {
+  # Standalone offline --phase=customize runs arrive with no store wired into
+  # the target (every standalone run tears its wiring down); mount-gated
+  # no-op on full runs. Same pairing as install_grub/install_sdboot.
   wire_offline_repo
+  # Hygiene first: the pruned live hooks and fresh identity must exist before
+  # anything below reads or rebuilds against the tree.
+  prune_live_artifacts
+  regen_machine_id
+  regen_ssh_host_keys
   write_identity
   write_fstab
   write_mdadm_conf
   ensure_mok_key
-  install_base_packages
+  sign_zfs_modules
   install_nvidia_driver
-  install_addon_artifacts
-  install_chezmoi
-  install_brave
-  install_lythmono_fonts
-  install_adw_gtk3_theme
+  install_addon_runtime
   configure_locale_tz
   configure_keymap
   configure_time_sync
-  neuter_ssh_vsock_generator
   create_user
+  # After create_user: it writes into the real home the skel copy created.
+  configure_session_local
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
   # captures the modprobe.d/modules-load.d drop-ins without a second rebuild.
   configure_audio_quirks
   configure_ddcci
+  enable_firstboot
   configure_zfs_boot_support
   unwire_offline_repo
 }
