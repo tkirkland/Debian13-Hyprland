@@ -642,12 +642,29 @@ step_golden_rootfs() {
   # trick as install_base_packages, persisted into the image (the daily
   # timer indexes on the running system).
   in_target "echo 'man-db man-db/auto-update boolean false' | debconf-set-selections"
+  # shim-signed's postinst (update-secureboot-policy) inspects the HOST's
+  # Secure Boot state: mdadm's initramfs hook (Debian #962844) mounts the
+  # host's efivarfs into the chroot mid-transaction, so on an SB-enabled
+  # build host the policy script sees SecureBoot=1 + a DKMS dir (ddcci),
+  # takes the disable-SB prompt path (template default: true) and exits 1
+  # noninteractively, failing the whole transaction. Preseed "keep Secure
+  # Boot as-is" — it bakes into the image and equally protects the firstboot
+  # zfs-dkms install on SB machines (MOK signing is our own machinery).
+  in_target "echo 'shim-signed-common shim/disable_secureboot boolean false' | debconf-set-selections"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y ${pkgs[*]}
   "
+  # Drop the efivarfs mount the mdadm initramfs hook left behind (see the
+  # shim preseed above): it is the host's WRITABLE EFI NVRAM exposed inside
+  # the build chroot — exactly what HYPR_PRIVATE_RUN exists to prevent — and
+  # as an untracked child of ${TARGET}/sys it makes the teardown umount busy.
+  if mountpoint -q "${TARGET}/sys/firmware/efi/efivars"; then
+    umount "${TARGET}/sys/firmware/efi/efivars" ||
+      warn "could not unmount stray efivars in the golden chroot"
+  fi
   # Optional Qt6 ScreenCast backend — best-effort AFTER the must-succeed set,
   # exactly like the installer path (never strands the build).
   install_xdph_best_effort
