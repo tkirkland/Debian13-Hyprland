@@ -380,19 +380,19 @@ write_iso_with_squashfs() {
 # parse_live_boot_paths CFG_TEXT
 # Pure: extract the kernel and initrd ISO paths the stock boot configs
 # reference under /live/ (isolinux for BIOS, grub for EFI). The golden ISO
-# maps OUR kernel/initrd over exactly these names, so the replayed stock boot
-# equipment keeps loading a matching pair whatever the version-string in the
-# name says. Echoes "KERNEL_PATH INITRD_PATH"; nonzero unless exactly one
-# distinct token of each is found (several distinct names would mean the
-# stock layout changed — fail loudly, see issue #111 U1).
+# maps OUR kernel/initrd over ALL of these names: the stock 13.5 medium
+# legitimately uses TWO name styles for the same files — grub loads the
+# versioned pair (/live/vmlinuz-<ver>), isolinux the generic one
+# (/live/vmlinuz) — so every referenced name must resolve to our kernel
+# (issue #111 U1). Echoes two lines, kernel paths then initrd paths, each
+# space-separated; nonzero when either set is empty (a cfg with no /live
+# references means the stock layout truly changed — fail loudly).
 parse_live_boot_paths() {
   local text="$1" kpaths="" ipaths=""
   kpaths="$(grep -oE '/live/vmlinuz[^ "]*' <<<"${text}" | sort -u)"
   ipaths="$(grep -oE '/live/initrd[^ "]*' <<<"${text}" | sort -u)"
   [[ -n "${kpaths}" && -n "${ipaths}" ]] || return 1
-  (($(wc -l <<<"${kpaths}") == 1)) || return 1
-  (($(wc -l <<<"${ipaths}") == 1)) || return 1
-  printf '%s %s\n' "${kpaths}" "${ipaths}"
+  printf '%s\n%s\n' "${kpaths//$'\n'/ }" "${ipaths//$'\n'/ }"
 }
 
 # probe_stock_live_boot_paths STOCK_ISO WORKDIR
@@ -519,13 +519,15 @@ assemble_golden() {
   fi
 
   # The stock /live names the boot cfgs reference — our kernel/initrd map
-  # over exactly those (plan B on layout drift: edit the cfg text; see U1).
-  local kpath="" ipath=""
-  read -r kpath ipath < <(probe_stock_live_boot_paths "${stock_iso}" "${work}") ||
+  # over ALL of them (grub uses versioned names, isolinux generic ones; both
+  # must load the golden pair). Plan B on layout drift: edit the cfg text.
+  local kpaths="" ipaths=""
+  { read -r kpaths && read -r ipaths; } \
+    < <(probe_stock_live_boot_paths "${stock_iso}" "${work}") ||
     fatal "cannot determine the stock ISO's /live kernel/initrd paths (boot cfg layout changed?)"
-  [[ -n "${kpath}" && -n "${ipath}" ]] ||
+  [[ -n "${kpaths}" && -n "${ipaths}" ]] ||
     fatal "cannot determine the stock ISO's /live kernel/initrd paths (boot cfg layout changed?)"
-  info "iso-assemble: golden kernel ${kver} maps over ${kpath} + ${ipath}"
+  info "iso-assemble: golden kernel ${kver} maps over ${kpaths} + ${ipaths}"
 
   # Medium-side paths: the live home seed must point at the medium installer.
   LIVE_STORE_ROOT="/run/live/medium"
@@ -548,8 +550,10 @@ assemble_golden() {
     -comp "${comp}" -b "${bsize}"
 
   info "iso-assemble: writing ${out_iso} (golden squashfs + medium store)"
-  local -a extra_maps=("${kfile}" "${kpath}" "${ifile}" "${ipath}"
-    "${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
+  local -a extra_maps=() p=""
+  for p in ${kpaths}; do extra_maps+=("${kfile}" "${p}"); done
+  for p in ${ipaths}; do extra_maps+=("${ifile}" "${p}"); done
+  extra_maps+=("${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
   if [[ -n "${installer_dir}" ]]; then
     extra_maps+=("${installer_dir}" "${ISO_MEDIUM_INSTALLER_DIR}")
   fi

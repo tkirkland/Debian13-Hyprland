@@ -237,7 +237,7 @@ params="$(detect_squashfs_params /any.squashfs)"
 unset -f unsquashfs
 assert_eq "zstd 1048576" "${params}" "parses Compression + Block size from unsquashfs -s"
 
-echo "test: parse_live_boot_paths extracts the one /live kernel/initrd pair (issue #111)"
+echo "test: parse_live_boot_paths extracts ALL /live kernel/initrd names (issue #111 U1)"
 cfg_versioned='
 label live
   kernel /live/vmlinuz-6.12.41+deb13-amd64
@@ -247,14 +247,18 @@ menuentry "Live" {
   initrd /live/initrd.img-6.12.41+deb13-amd64
 }'
 pair="$(parse_live_boot_paths "${cfg_versioned}")"
-assert_eq "/live/vmlinuz-6.12.41+deb13-amd64 /live/initrd.img-6.12.41+deb13-amd64" \
+assert_eq $'/live/vmlinuz-6.12.41+deb13-amd64\n/live/initrd.img-6.12.41+deb13-amd64' \
   "${pair}" "versioned /live names parsed from isolinux + grub text"
 cfg_generic='kernel /live/vmlinuz
 append initrd=/live/initrd.img boot=live'
 pair="$(parse_live_boot_paths "${cfg_generic}")"
-assert_eq "/live/vmlinuz /live/initrd.img" "${pair}" "generic /live names parsed"
-assert_fails "two distinct kernel tokens rejected (layout drift must be loud)" \
-  parse_live_boot_paths $'kernel /live/vmlinuz-a\nkernel /live/vmlinuz-b\ninitrd /live/initrd.img'
+assert_eq $'/live/vmlinuz\n/live/initrd.img' "${pair}" "generic /live names parsed"
+# The real 13.5 medium: grub.cfg uses versioned names, isolinux/live.cfg the
+# generic ones — BOTH must come back so the golden pair maps over every name.
+cfg_mixed=$'linux /live/vmlinuz-6.12.86+deb13-amd64\ninitrd /live/initrd.img-6.12.86+deb13-amd64\nkernel /live/vmlinuz\nappend initrd=/live/initrd.img boot=live'
+pair="$(parse_live_boot_paths "${cfg_mixed}")"
+assert_eq $'/live/vmlinuz /live/vmlinuz-6.12.86+deb13-amd64\n/live/initrd.img /live/initrd.img-6.12.86+deb13-amd64' \
+  "${pair}" "mixed generic + versioned names both returned (stock 13.5 layout)"
 assert_fails "initrd-less cfg rejected" parse_live_boot_paths 'kernel /live/vmlinuz'
 assert_fails "empty cfg rejected" parse_live_boot_paths ''
 
