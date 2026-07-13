@@ -621,7 +621,8 @@ step_golden_rootfs() {
   # stamp therefore records the pool's deb filename hash (name+version+arch).
   local stamp="${ISO_WORKSPACE}/.golden-rootfs-done" poolhash=""
   poolhash="$(cd "${CACHE_DIR}/repo/pool" 2>/dev/null &&
-    ls -- *.deb 2>/dev/null | sort | sha256sum | awk '{print $1}')" || poolhash=""
+    find . -maxdepth 1 -name '*.deb' -printf '%f\n' |
+    sort | sha256sum | awk '{print $1}')" || poolhash=""
   if [[ -f "${stamp}" && -n "${poolhash}" ]] &&
     [[ "$(cat "${stamp}")" == "${poolhash}" ]] &&
     cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
