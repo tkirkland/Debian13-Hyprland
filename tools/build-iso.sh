@@ -804,6 +804,18 @@ EOF
 # Live session only (removed by the installer's customize phase).
 PasswordAuthentication yes
 EOF
+  # Persistent journal on the installed system (root-on-zfs): /var/log is a
+  # zfs dataset mounted by zfs-mount.service, which has no mount unit, so
+  # systemd-journal-flush's RequiresMountsFor=/var/log/journal cannot order
+  # against it — the flush ran before the dataset mounted, found no
+  # /var/log/journal, and every boot stayed volatile (hit live 2026-07-13:
+  # zero post-mortem for a first-login crash). Order the flush after
+  # zfs-mount; inert on the live boot (var/log is tmpfs-overlay there).
+  install -d "${GOLDEN}/etc/systemd/system/systemd-journal-flush.service.d"
+  cat >"${GOLDEN}/etc/systemd/system/systemd-journal-flush.service.d/zfs-var-log.conf" <<'EOF'
+[Unit]
+After=zfs-mount.service
+EOF
   in_target "
     set -e
     systemctl enable ssh.service
