@@ -35,6 +35,7 @@ run_install() { # $1=install fn  $2=NETWORK_AVAILABLE  $3=log  [$4=mounted] [$5=
     write_esp_sync_hook() { :; }
     run_esp_sync() { :; }
     write_grub_cfg() { :; }
+    install_efi_boot_fallback() { :; }
     write_sdboot_entries() { :; }
     install_shim() { :; }
     sign_loader() { :; }
@@ -230,5 +231,34 @@ assert_contains "${out}" "efibootmgr -b 0001 -B" "phase_boot: retires ZFSBootMen
 assert_contains "${out}" "efibootmgr -b 0003 -B" "phase_boot: retires Linux Boot Manager"
 assert_contains "${out}" "efibootmgr -o 0002,0001,0003,0004" \
   "phase_boot: puts the new loader at the head of BootOrder"
+
+# install_efi_boot_fallback: removable path so a blank-NVRAM firmware boots
+# the disk (\EFI\BOOT\BOOTX64.EFI is the only path it probes). fbx64 must
+# NOT be copied — beside shim it hijacks the boot into entry-recreation.
+fb="${tmp}/fallback-target"
+mkdir -p "${fb}/boot/efi/EFI/debian"
+for f in shimx64.efi grubx64.efi mmx64.efi fbx64.efi; do
+  echo "$f" >"${fb}/boot/efi/EFI/debian/${f}"
+done
+bash -c "
+  source lib/00-config.sh; source lib/01-log.sh; source scripts/50-boot.sh
+  TARGET='${fb}'
+  install_efi_boot_fallback"
+for f in BOOTX64.EFI grubx64.efi mmx64.efi; do
+  if [[ -f "${fb}/boot/efi/EFI/BOOT/${f}" ]]; then
+    echo "  ok: fallback ${f} present under EFI/BOOT"
+  else
+    echo "  FAIL: fallback ${f} missing from EFI/BOOT" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  fi
+done
+assert_eq "shimx64.efi" "$(cat "${fb}/boot/efi/EFI/BOOT/BOOTX64.EFI")" \
+  "BOOTX64.EFI is shim (chain-loads grubx64 beside it)"
+if [[ -e "${fb}/boot/efi/EFI/BOOT/fbx64.efi" ]]; then
+  echo "  FAIL: fbx64 copied into EFI/BOOT (shim would run it instead of grub)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: fbx64 kept out of EFI/BOOT"
+fi
 
 finish_test

@@ -407,7 +407,24 @@ install_grub() {
   write_esp_sync_hook
   run_esp_sync
   write_grub_cfg
+  install_efi_boot_fallback
   create_nvram_entry "${LOADER_LABELS[grub]}" '\EFI\debian\shimx64.efi'
+}
+
+# Removable-path fallback: firmware with blank/reset NVRAM probes ONLY
+# \EFI\BOOT\BOOTX64.EFI — without it the install is unbootable the moment
+# the boot entries are lost (hit live 2026-07-13: an NVRAM reset stranded a
+# finished install). Shim chain-loads grubx64.efi from its own directory,
+# and the Debian-signed grub reads /EFI/debian/grub.cfg via its baked-in
+# prefix, so three copies suffice. fbx64 is deliberately NOT copied: shim
+# prefers the fallback app over grubx64 when both sit beside it, and fbx64
+# wants a BOOT.CSV + reboot cycle instead of just booting the system.
+install_efi_boot_fallback() {
+  local boot="${TARGET}${ESP_MOUNT}/EFI/BOOT" deb="${TARGET}${ESP_MOUNT}/EFI/debian"
+  mkdir -p "${boot}"
+  cp "${deb}/shimx64.efi" "${boot}/BOOTX64.EFI"
+  cp "${deb}/grubx64.efi" "${boot}/grubx64.efi"
+  cp "${deb}/mmx64.efi" "${boot}/mmx64.efi"
 }
 
 # --- systemd-boot --------------------------------------------------------------
