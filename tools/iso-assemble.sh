@@ -344,10 +344,14 @@ install_live_extras() {
 # ISO's shim invoke MokManager, find nothing, and die ("import_mok_state()
 # failed"; the #50 gap, hit again live 2026-07-13). Rebuild the FAT image
 # slightly larger with mmx64.efi grafted in (sourced from the golden root's
-# shim-signed) and echo its path for a -map over /boot/grub/efi.img; echoes
-# nothing if the stock image already carries MokManager (fixed upstream).
-# CD/El-Torito boots read the mapped file; USB appended-partition boots replay
-# the imported stock bytes — the USB leg of the gap stays open (documented).
+# shim-signed) and echo its path; echoes nothing if the stock image already
+# carries MokManager (fixed upstream). The caller feeds it to
+# build_write_iso_args via ISO_EFI_APPEND_IMG — NOT as a -map over the tree
+# file: the EFI El-Torito image is a HIDDEN appended partition (the tree's
+# /boot/grub/efi.img is only the APM/GPT reference copy), and a size-changed
+# map over that file breaks APM replay outright (SORRY, seen live
+# 2026-07-13). Overriding appended partition 2 + pointing El-Torito at it is
+# how the stock ISO is built, and covers CD and USB boots alike.
 rebuild_efi_img_with_mokmanager() {
   local stock="$1" groot="$2" work="$3"
   local img="${work}/efi-stock.img" newimg="${work}/efi-mok.img"
@@ -411,6 +415,16 @@ build_write_iso_args() {
     shift 2
   done
   printf '%s\n' -boot_image any replay -compliance no_emul_toc -padding included
+  # ISO_EFI_APPEND_IMG (optional): replace the EFI boot equipment AFTER the
+  # replay — override appended partition 2 (replay re-established the stock
+  # one; a later spec for the same slot wins) and re-point the El-Torito EFI
+  # entry into it, exactly how the stock image wires its own EFI boot. The
+  # tree's /boot/grub/efi.img is deliberately untouched (APM replay breaks on
+  # a size change).
+  if [[ -n "${ISO_EFI_APPEND_IMG:-}" ]]; then
+    printf '%s\n' -append_partition 2 0xef "${ISO_EFI_APPEND_IMG}"
+    printf '%s\n' -boot_image any efi_path=--interval:appended_partition_2:all::
+  fi
   printf '%s\n' -commit
 }
 
@@ -647,16 +661,13 @@ assemble_golden() {
     -comp "${comp}" -b "${bsize}"
 
   # MokManager onto the ISO's EFI boot image (see the helper's rationale).
-  local mok_efi_img=""
-  mok_efi_img="$(rebuild_efi_img_with_mokmanager "${stock_iso}" "${GOLDEN_ROOT}" "${work}")"
+  ISO_EFI_APPEND_IMG="$(rebuild_efi_img_with_mokmanager "${stock_iso}" "${GOLDEN_ROOT}" "${work}")"
+  export ISO_EFI_APPEND_IMG
 
   info "iso-assemble: writing ${out_iso} (golden squashfs + medium store)"
   local -a extra_maps=() p=""
   for p in ${kpaths}; do extra_maps+=("${kfile}" "${p}"); done
   for p in ${ipaths}; do extra_maps+=("${ifile}" "${p}"); done
-  if [[ -n "${mok_efi_img}" ]]; then
-    extra_maps+=("${mok_efi_img}" "/boot/grub/efi.img")
-  fi
   extra_maps+=("${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
   if [[ -n "${installer_dir}" ]]; then
     extra_maps+=("${installer_dir}" "${ISO_MEDIUM_INSTALLER_DIR}")

@@ -284,6 +284,41 @@ fi
 assert_fails "odd extra map arguments rejected (must be SRC TARGET pairs)" \
   bash -c 'source tools/iso-assemble.sh; build_write_iso_args /s /q /o /lonely'
 
+echo "test: ISO_EFI_APPEND_IMG replaces the EFI boot equipment AFTER the replay"
+# The mmx64-bearing image must ride as appended partition 2 with the
+# El-Torito EFI entry pointed into it — never as a -map over the tree's
+# /boot/grub/efi.img (a size change there breaks APM replay; hit live
+# 2026-07-13, xorriso SORRY "Cannot make proposal to produce APM").
+e_args="$(ISO_EFI_APPEND_IMG=/ws/efi-mok.img \
+  build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+assert_contains "${e_args}" "-append_partition" "EFI image rides as an appended partition"
+assert_contains "${e_args}" "/ws/efi-mok.img" "appended partition carries the rebuilt image"
+assert_contains "${e_args}" \
+  "efi_path=--interval:appended_partition_2:all::" \
+  "El-Torito EFI entry points into appended partition 2"
+if printf '%s\n' "${e_args}" | grep -q "^/boot/grub/efi.img$"; then
+  echo "  FAIL: tree /boot/grub/efi.img mapped (breaks APM replay)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: tree /boot/grub/efi.img left untouched"
+fi
+ereplay_idx="$(printf '%s\n' "${e_args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
+eapp_idx="$(printf '%s\n' "${e_args}" | grep -n -- '^-append_partition$' | head -n1 | cut -d: -f1)"
+if [[ -n "${ereplay_idx}" && -n "${eapp_idx}" ]] && ((eapp_idx > ereplay_idx)); then
+  echo "  ok: appended-partition override ordered after the replay (later spec wins)"
+else
+  echo "  FAIL: -append_partition must come after replay (replay=${ereplay_idx} app=${eapp_idx})" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# Without the env the argv is byte-identical to before (no EFI override).
+p_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+if printf '%s\n' "${p_args}" | grep -q "append_partition"; then
+  echo "  FAIL: EFI override emitted without ISO_EFI_APPEND_IMG" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: no EFI override without ISO_EFI_APPEND_IMG"
+fi
+
 echo "test: stage_golden_home seeds the live home pointing at the MEDIUM installer"
 groot="$(mktemp -d)"
 # Golden root ships skel configs; the live home must inherit them (user-setup
