@@ -337,6 +337,50 @@ install_live_extras() {
   ((rc == 0)) || fatal "live-extras install failed (rc=${rc})"
 }
 
+# rebuild_efi_img_with_mokmanager STOCK_ISO GOLDEN_ROOT WORK
+# The stock ISO's EFI boot image carries shim+grub but NO MokManager, and is
+# packed full (22K free). A boot with a PENDING MOK request — the installer
+# stages one, then the user reboots with the medium still inserted — makes the
+# ISO's shim invoke MokManager, find nothing, and die ("import_mok_state()
+# failed"; the #50 gap, hit again live 2026-07-13). Rebuild the FAT image
+# slightly larger with mmx64.efi grafted in (sourced from the golden root's
+# shim-signed) and echo its path for a -map over /boot/grub/efi.img; echoes
+# nothing if the stock image already carries MokManager (fixed upstream).
+# CD/El-Torito boots read the mapped file; USB appended-partition boots replay
+# the imported stock bytes — the USB leg of the gap stays open (documented).
+rebuild_efi_img_with_mokmanager() {
+  local stock="$1" groot="$2" work="$3"
+  local img="${work}/efi-stock.img" newimg="${work}/efi-mok.img"
+  local mnt="${work}/efi-stock-mnt" newmnt="${work}/efi-mok-mnt"
+  local mm="${groot}/usr/lib/shim/mmx64.efi.signed"
+  [[ -f "${mm}" ]] || fatal "mmx64.efi.signed not in the golden root (shim-signed not baked?)"
+  command -v mkfs.vfat >/dev/null 2>&1 ||
+    DEBIAN_FRONTEND=noninteractive apt-get install -y dosfstools >&2 ||
+    fatal "mkfs.vfat unavailable and dosfstools install failed"
+  rm -f "${img}" "${newimg}"
+  xorriso -osirrox on -indev "${stock}" -extract /boot/grub/efi.img "${img}" \
+    >/dev/null 2>&1 || fatal "cannot extract /boot/grub/efi.img from ${stock}"
+  mkdir -p "${mnt}" "${newmnt}"
+  mount -o loop,ro "${img}" "${mnt}" || fatal "cannot loop-mount the stock efi.img"
+  if [[ -f "${mnt}/EFI/boot/mmx64.efi" ]]; then
+    umount "${mnt}"
+    return 0
+  fi
+  # Size: stock image + MokManager + 1 MiB FAT slack, rounded up to a MiB.
+  local bytes=0
+  bytes=$(($(stat -c%s "${img}") + $(stat -c%s "${mm}") + 1048576))
+  bytes=$(((bytes + 1048575) / 1048576 * 1048576))
+  truncate -s "${bytes}" "${newimg}"
+  mkfs.vfat "${newimg}" >/dev/null 2>&1 || { umount "${mnt}"; fatal "mkfs.vfat failed"; }
+  mount -o loop "${newimg}" "${newmnt}" || { umount "${mnt}"; fatal "cannot mount the rebuilt efi.img"; }
+  if ! { cp -a "${mnt}/." "${newmnt}/" && cp "${mm}" "${newmnt}/EFI/boot/mmx64.efi"; }; then
+    umount "${newmnt}" "${mnt}"
+    fatal "populating the rebuilt efi.img failed"
+  fi
+  umount "${newmnt}" "${mnt}"
+  printf '%s\n' "${newimg}"
+}
+
 # build_write_iso_args STOCK_ISO NEW_SQUASHFS OUT_ISO [SRC TARGET]...
 # Emit (one per line) the native-xorriso argv that writes OUT_ISO = STOCK_ISO
 # with the live squashfs replaced by NEW_SQUASHFS and the d-i pool stripped,
@@ -440,6 +484,12 @@ stage_golden_home() {
     "${home}/${LIVE_INSTALLER_ENTRY}"
   stage_autoinstall_launcher "${home}"
   stage_live_welcome "${home}"
+  # The live session's entry point is the kitty banner terminal above — the
+  # graphical first-login welcome dialog is redundant noise there (seen live
+  # 2026-07-13). Pre-seed its done-marker; installed users still get it
+  # (create_user copies skel, which never carries the marker).
+  install -d "${home}/.config/hypr"
+  : >"${home}/.config/hypr/.welcome-shown"
   chown -R 1000:1000 "${home}" 2>/dev/null || true
 }
 
@@ -596,10 +646,17 @@ assemble_golden() {
   mksquashfs "${GOLDEN_ROOT}" "${new_sqfs}" -noappend -no-progress -no-recovery \
     -comp "${comp}" -b "${bsize}"
 
+  # MokManager onto the ISO's EFI boot image (see the helper's rationale).
+  local mok_efi_img=""
+  mok_efi_img="$(rebuild_efi_img_with_mokmanager "${stock_iso}" "${GOLDEN_ROOT}" "${work}")"
+
   info "iso-assemble: writing ${out_iso} (golden squashfs + medium store)"
   local -a extra_maps=() p=""
   for p in ${kpaths}; do extra_maps+=("${kfile}" "${p}"); done
   for p in ${ipaths}; do extra_maps+=("${ifile}" "${p}"); done
+  if [[ -n "${mok_efi_img}" ]]; then
+    extra_maps+=("${mok_efi_img}" "/boot/grub/efi.img")
+  fi
   extra_maps+=("${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
   if [[ -n "${installer_dir}" ]]; then
     extra_maps+=("${installer_dir}" "${ISO_MEDIUM_INSTALLER_DIR}")

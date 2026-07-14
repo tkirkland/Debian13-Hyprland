@@ -316,6 +316,21 @@ else
   echo "  FAIL: live hook leaked into /etc/skel (would reach installed users)" >&2
   TEST_FAILURES=$((TEST_FAILURES+1))
 fi
+# The banner terminal is the live entry point; the graphical welcome dialog
+# is suppressed there via its pre-seeded done-marker — but ONLY there
+# (installed users get theirs from skel, which must stay marker-free).
+if [[ -f "${ghome}/.config/hypr/.welcome-shown" ]]; then
+  echo "  ok: live home pre-seeds .welcome-shown (no dialog in the live demo)"
+else
+  echo "  FAIL: live home lacks .welcome-shown; dialog pops over the banner terminal" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+if [[ -e "${groot}/etc/skel/.config/hypr/.welcome-shown" ]]; then
+  echo "  FAIL: .welcome-shown leaked into skel (installed users lose the welcome)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: skel stays marker-free (installed users still get the welcome)"
+fi
 glink="${groot}${LIVE_USER_HOME}/${LIVE_INSTALLER_ENTRY}"
 gwant="/run/live/medium/hypr-installer/${LIVE_INSTALLER_ENTRY}"
 if [[ -L "${glink}" && "$(readlink "${glink}")" == "${gwant}" ]]; then
