@@ -804,11 +804,21 @@ if ! swww query >/dev/null 2>&1; then
   swww-daemon >/dev/null 2>&1 &
   for _ in $(seq 1 20); do swww query >/dev/null 2>&1 && break; sleep 0.2; done
 fi
-mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
-[ "${#outputs[@]}" -gt 0 ] || exit 0
+# Outputs register with the daemon a beat after the compositor starts (first
+# login races this; virtio even flaps the output once) — wait, don't shrug.
+# Exit NONZERO when nothing was applied: the first-login hook gates its
+# done-marker on this rc, and an exit-0 no-op wrote the marker with no
+# wallpaper ever set (hit live 2026-07-13 — gray desktop on every login).
+outputs=()
+for _ in $(seq 1 20); do
+  mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
+  [ "${#outputs[@]}" -gt 0 ] && break
+  sleep 0.5
+done
+[ "${#outputs[@]}" -gt 0 ] || { echo "swww-cycle: no outputs registered" >&2; exit 1; }
 mapfile -t imgs < <(find "$dir" -type f \
   \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) | shuf)
-[ "${#imgs[@]}" -gt 0 ] || exit 0
+[ "${#imgs[@]}" -gt 0 ] || { echo "swww-cycle: no wallpapers under $dir" >&2; exit 1; }
 i=0
 for out in "${outputs[@]}"; do
   swww img -o "$out" "${imgs[$(( i % ${#imgs[@]} ))]}" --transition-type "$transition"
@@ -1270,10 +1280,70 @@ configure_session() {
   "
 }
 
+# Per-machine session configuration (issue #111): the HALF of the old
+# configure_session that depends on THIS install's user, keymap, autologin
+# and NVIDIA choices. Everything machine-independent is already baked into
+# the golden image (stage_session_configs, run by the build with
+# SESSION_CONFIG_HOME=/etc/skel), and create_user's skel copy has populated
+# the real home before this runs.
+configure_session_local() {
+  info "Configuring the per-machine session (keymap, greeter, user config)..."
+  # Greeter keyboard layout: greetd spawns its greeter with a PAM-built env;
+  # pam_env reads /etc/environment, and cage/wlroots/libxkbcommon honor
+  # XKB_DEFAULT_*. Without this a non-us user cannot type their password at
+  # tuigreet. Values come from the target's /etc/default/keyboard
+  # (configure_keymap). Resume-safe: only the XKB_DEFAULT_ lines are ever
+  # rewritten; the image's baked content is untouched.
+  local xkb_layout="" xkb_variant="" xkb_options=""
+  xkb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  xkb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  xkb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  touch "${TARGET}/etc/environment"
+  sed -i '/^XKB_DEFAULT_/d' "${TARGET}/etc/environment"
+  {
+    printf 'XKB_DEFAULT_LAYOUT=%s\n' "${xkb_layout}"
+    if [[ -n "${xkb_variant}" ]]; then
+      printf 'XKB_DEFAULT_VARIANT=%s\n' "${xkb_variant}"
+    fi
+    if [[ -n "${xkb_options}" ]]; then
+      printf 'XKB_DEFAULT_OPTIONS=%s\n' "${xkb_options}"
+    fi
+  } >>"${TARGET}/etc/environment"
+  # --autologin: the image bakes the tuigreet greeter default; rewrite
+  # config.toml to start the session directly as the created user. Without
+  # the flag the baked greeter config stands as-is.
+  if ((HYPR_AUTOLOGIN)); then
+    cat >"${TARGET}/etc/greetd/config.toml" <<EOF
+[terminal]
+vt = 1
+
+[default_session]
+# Absolute paths are required: greetd builds the session environment from
+# PAM, and Debian's default stack provides no PATH for it.
+command = "/usr/bin/hypr-session"
+user = "${TARGET_USERNAME}"
+EOF
+  fi
+  # uwsm env: the skel copy carries the theming block only; rewrite it in the
+  # real home so the NVIDIA lines land when a driver was chosen.
+  write_uwsm_env
+  # The user config is generated against this install's keymap (it reads the
+  # target's /etc/default/keyboard), replacing the image's us-layout skel copy.
+  write_hypr_lua_config
+  install_drm_reprobe_sudoers
+  in_target "
+    set -e
+    # Fail the install if the drm-reprobe sudoers drop-in is malformed rather
+    # than shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
+  "
+}
+
 # Machine-independent session staging (issue #111): every session file that
 # does NOT depend on this install's user, keymap, or NVIDIA choice. The
-# installer reaches it through configure_session; the golden-image build
-# calls it directly with SESSION_CONFIG_HOME=/etc/skel (and the default
+# legacy installer reaches it through configure_session; the golden-image
+# build calls it directly with SESSION_CONFIG_HOME=/etc/skel (and the default
 # HYPR_AUTOLOGIN=0 tuigreet greeter) so one staged copy bakes into the image.
 stage_session_configs() {
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
@@ -1650,6 +1720,10 @@ _dpms_set() {  # ACTION(disable|enable) WHICH(internal|external) -> DPMS matchin
         hyprctl dispatch "hl.dsp.dpms({ action = \"$_act\", monitor = \"$_c\" })" >/dev/null 2>&1 || true
     done
 }
+_has_internal() {  # true when any connected display is internal (eDP/LVDS/DSI)
+    for _c in $(connected_connectors); do _is_internal "$_c" && return 0; done
+    return 1
+}
 
 cmd="${1:-}"
 case "$cmd" in
@@ -1672,11 +1746,15 @@ case "$cmd" in
                # lock surface to come up (else powering the external off races startup and
                # leaves it on-black), then power off non-internal displays. On unlock
                # (hyprlock exits) power them back on. Used as hypridle's lock_cmd.
+               # NO internal display (VM, desktop): every display is "external" and
+               # the off would black the whole seat with nothing re-powering it
+               # until unlock — leave all displays to hyprlock (hit live 2026-07-13
+               # on virtio: locked session wedged to "no output detected").
                pidof hyprlock >/dev/null 2>&1 && exit 0
                hyprlock & _h=$!
                _i=0; while [ "$_i" -lt 40 ] && ! pidof hyprlock >/dev/null 2>&1; do _i=$((_i+1)); sleep 0.05; done
                sleep 0.5
-               _dpms_set disable external
+               if _has_internal; then _dpms_set disable external; fi
                wait "$_h" || true
                _dpms_set enable external ;;
     externals-off) _dpms_set disable external ;;   # power off non-internal displays
@@ -1791,6 +1869,15 @@ write_firstboot_runner() {
 set -uo pipefail
 dir=/usr/lib/hypr-deb/firstboot.d
 shopt -s nullglob
+# Bounded clock-settle wait: on an RTC-mode mismatch (e.g. --rtc=local on a
+# UTC-RTC machine) timesyncd steps the clock by hours shortly after boot; a
+# backwards jump mid-dkms-build fails every kbuild conftest (seen live
+# 2026-07-13). Wait for NTP sync — or 60s, so offline machines (stable
+# clock, no step coming) proceed unharmed.
+for _ in $(seq 1 30); do
+  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] && break
+  sleep 2
+done
 for job in "${dir}"/*.sh; do
   echo "hypr-deb-firstboot: running ${job##*/}" >&2
   if bash "${job}"; then

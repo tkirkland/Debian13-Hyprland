@@ -237,7 +237,7 @@ params="$(detect_squashfs_params /any.squashfs)"
 unset -f unsquashfs
 assert_eq "zstd 1048576" "${params}" "parses Compression + Block size from unsquashfs -s"
 
-echo "test: parse_live_boot_paths extracts the one /live kernel/initrd pair (issue #111)"
+echo "test: parse_live_boot_paths extracts ALL /live kernel/initrd names (issue #111 U1)"
 cfg_versioned='
 label live
   kernel /live/vmlinuz-6.12.41+deb13-amd64
@@ -247,14 +247,18 @@ menuentry "Live" {
   initrd /live/initrd.img-6.12.41+deb13-amd64
 }'
 pair="$(parse_live_boot_paths "${cfg_versioned}")"
-assert_eq "/live/vmlinuz-6.12.41+deb13-amd64 /live/initrd.img-6.12.41+deb13-amd64" \
+assert_eq $'/live/vmlinuz-6.12.41+deb13-amd64\n/live/initrd.img-6.12.41+deb13-amd64' \
   "${pair}" "versioned /live names parsed from isolinux + grub text"
 cfg_generic='kernel /live/vmlinuz
 append initrd=/live/initrd.img boot=live'
 pair="$(parse_live_boot_paths "${cfg_generic}")"
-assert_eq "/live/vmlinuz /live/initrd.img" "${pair}" "generic /live names parsed"
-assert_fails "two distinct kernel tokens rejected (layout drift must be loud)" \
-  parse_live_boot_paths $'kernel /live/vmlinuz-a\nkernel /live/vmlinuz-b\ninitrd /live/initrd.img'
+assert_eq $'/live/vmlinuz\n/live/initrd.img' "${pair}" "generic /live names parsed"
+# The real 13.5 medium: grub.cfg uses versioned names, isolinux/live.cfg the
+# generic ones — BOTH must come back so the golden pair maps over every name.
+cfg_mixed=$'linux /live/vmlinuz-6.12.86+deb13-amd64\ninitrd /live/initrd.img-6.12.86+deb13-amd64\nkernel /live/vmlinuz\nappend initrd=/live/initrd.img boot=live'
+pair="$(parse_live_boot_paths "${cfg_mixed}")"
+assert_eq $'/live/vmlinuz /live/vmlinuz-6.12.86+deb13-amd64\n/live/initrd.img /live/initrd.img-6.12.86+deb13-amd64' \
+  "${pair}" "mixed generic + versioned names both returned (stock 13.5 layout)"
 assert_fails "initrd-less cfg rejected" parse_live_boot_paths 'kernel /live/vmlinuz'
 assert_fails "empty cfg rejected" parse_live_boot_paths ''
 
@@ -280,14 +284,108 @@ fi
 assert_fails "odd extra map arguments rejected (must be SRC TARGET pairs)" \
   bash -c 'source tools/iso-assemble.sh; build_write_iso_args /s /q /o /lonely'
 
+echo "test: patch_boot_menu_timeouts gives both stock forever-menus a 5s auto-boot"
+mtmp="$(mktemp -d)"
+# Stub xorriso: "extract" fixture configs mirroring the stock image (grub:
+# no timeout line at all; isolinux: timeout 0), read-only like osirrox.
+# shellcheck disable=SC2317  # invoked indirectly by patch_boot_menu_timeouts
+xorriso() {
+  printf 'set default=0\nterminal_output gfxterm\n' >"${mtmp}/menu-config.cfg"
+  printf 'default vesamenu.c32\ntimeout 0\n' >"${mtmp}/menu-isolinux.cfg"
+  chmod 444 "${mtmp}/menu-config.cfg" "${mtmp}/menu-isolinux.cfg"
+}
+pairs="$(patch_boot_menu_timeouts /stock.iso "${mtmp}")"
+assert_contains "$(cat "${mtmp}/menu-config.cfg")" "set timeout=5" \
+  "grub config gains a 5s timeout (stock has none — menu waits forever)"
+assert_contains "$(cat "${mtmp}/menu-isolinux.cfg")" "timeout 50" \
+  "isolinux timeout 0 becomes 50 (5s in 1/10s units)"
+assert_contains "${pairs}" "/boot/grub/config.cfg" "emits the grub map target"
+assert_contains "${pairs}" "/isolinux/isolinux.cfg" "emits the isolinux map target"
+unset -f xorriso
+rm -rf "${mtmp}"
+
+echo "test: ISO_EFI_APPEND_IMG replaces the EFI boot equipment AFTER the replay"
+# The mmx64-bearing image must ride as appended partition 2 with the
+# El-Torito EFI entry pointed into it — never as a -map over the tree's
+# /boot/grub/efi.img (a size change there breaks APM replay; hit live
+# 2026-07-13, xorriso SORRY "Cannot make proposal to produce APM").
+e_args="$(ISO_EFI_APPEND_IMG=/ws/efi-mok.img \
+  build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+assert_contains "${e_args}" "-append_partition" "EFI image rides as an appended partition"
+assert_contains "${e_args}" "/ws/efi-mok.img" "appended partition carries the rebuilt image"
+assert_contains "${e_args}" \
+  "efi_path=--interval:appended_partition_2:all::" \
+  "El-Torito EFI entry points into appended partition 2"
+if printf '%s\n' "${e_args}" | grep -q "^/boot/grub/efi.img$"; then
+  echo "  FAIL: tree /boot/grub/efi.img mapped (breaks APM replay)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: tree /boot/grub/efi.img left untouched"
+fi
+ereplay_idx="$(printf '%s\n' "${e_args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
+eapp_idx="$(printf '%s\n' "${e_args}" | grep -n -- '^-append_partition$' | head -n1 | cut -d: -f1)"
+if [[ -n "${ereplay_idx}" && -n "${eapp_idx}" ]] && ((eapp_idx > ereplay_idx)); then
+  echo "  ok: appended-partition override ordered after the replay (later spec wins)"
+else
+  echo "  FAIL: -append_partition must come after replay (replay=${ereplay_idx} app=${eapp_idx})" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# Without the env the argv is byte-identical to before (no EFI override).
+p_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+if printf '%s\n' "${p_args}" | grep -q "append_partition"; then
+  echo "  FAIL: EFI override emitted without ISO_EFI_APPEND_IMG" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: no EFI override without ISO_EFI_APPEND_IMG"
+fi
+
 echo "test: stage_golden_home seeds the live home pointing at the MEDIUM installer"
 groot="$(mktemp -d)"
+# Golden root ships skel configs; the live home must inherit them (user-setup
+# adopts a pre-seeded /home/user, so adduser never copies skel into it).
+mkdir -p "${groot}/etc/skel/.config/hypr"
+printf -- '-- skel autostart\n' >"${groot}/etc/skel/.config/hypr/autostart.lua"
 (
   LIVE_STORE_ROOT="/run/live/medium"
   LIVE_INSTALLER_SUBDIR="hypr-installer"
   chown() { :; }   # ownership needs root; the guard is exercised, not the kernel
   stage_golden_home "${groot}"
 )
+ghome="${groot}${LIVE_USER_HOME}"
+gauto_lua="${ghome}/.config/hypr/autostart.lua"
+assert_contains "$(cat "${gauto_lua}")" "-- skel autostart" \
+  "skel configs are copied into the live home"
+assert_contains "$(cat "${gauto_lua}")" "live-welcome" \
+  "live-only autostart hook appended AFTER the skel copy"
+if [[ -x "${ghome}/.local/bin/live-welcome" ]]; then
+  echo "  ok: live-welcome terminal script staged executable"
+else
+  echo "  FAIL: live-welcome script missing or not executable" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+assert_contains "$(cat "${ghome}/.local/bin/live-welcome")" "WIPES ALL DISKS" \
+  "welcome text warns before the unattended launcher"
+if ! grep -q "live-welcome" "${groot}/etc/skel/.config/hypr/autostart.lua"; then
+  echo "  ok: skel autostart.lua untouched (hook is live-home-only)"
+else
+  echo "  FAIL: live hook leaked into /etc/skel (would reach installed users)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# The banner terminal is the live entry point; the graphical welcome dialog
+# is suppressed there via its pre-seeded done-marker — but ONLY there
+# (installed users get theirs from skel, which must stay marker-free).
+if [[ -f "${ghome}/.config/hypr/.welcome-shown" ]]; then
+  echo "  ok: live home pre-seeds .welcome-shown (no dialog in the live demo)"
+else
+  echo "  FAIL: live home lacks .welcome-shown; dialog pops over the banner terminal" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+if [[ -e "${groot}/etc/skel/.config/hypr/.welcome-shown" ]]; then
+  echo "  FAIL: .welcome-shown leaked into skel (installed users lose the welcome)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: skel stays marker-free (installed users still get the welcome)"
+fi
 glink="${groot}${LIVE_USER_HOME}/${LIVE_INSTALLER_ENTRY}"
 gwant="/run/live/medium/hypr-installer/${LIVE_INSTALLER_ENTRY}"
 if [[ -L "${glink}" && "$(readlink "${glink}")" == "${gwant}" ]]; then

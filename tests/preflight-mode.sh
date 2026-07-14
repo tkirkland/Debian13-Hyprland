@@ -102,7 +102,9 @@ out="$(PATH="${fakedir}:${PATH}" ISO_LIVE_REPO="${empty}" ISO_MEDIUM_REPO="${emp
 assert_eq "0|${empty}|1" "${out}" \
   "no store: CACHE_REPO_DIR unchanged (its on-ISO-store default), online by probe"
 
-# Embedded in-root store takes precedence over a medium store when BOTH exist.
+# The medium store takes precedence over an embedded in-root store when BOTH
+# exist (issue #111: golden ISOs ship the install store on the medium and
+# embed nothing; the in-root probe is the legacy fallback).
 medrepo="$(mktemp -d)"
 mkdir -p "${medrepo}/dists/trixie/main/binary-amd64"
 : >"${medrepo}/dists/trixie/main/binary-amd64/Packages"
@@ -111,8 +113,8 @@ out="$(ISO_LIVE_REPO="${repo}" ISO_MEDIUM_REPO="${medrepo}" bash -c '
   source scripts/00-preflight.sh
   discover_iso_repo
   echo "${ISO_STORE_PRESENT}|${CACHE_REPO_DIR}"' 2>/dev/null | tail -n1)"
-assert_eq "1|${repo}" "${out}" \
-  "embedded in-root store wins over the medium store"
+assert_eq "1|${medrepo}" "${out}" \
+  "medium store wins over the embedded in-root store"
 rm -rf "${medrepo}"
 
 finish_test

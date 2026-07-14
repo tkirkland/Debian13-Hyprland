@@ -22,9 +22,9 @@ assert_contains "${ts_fn}" "in_target" \
 assert_contains "${ts_fn}" "NTP=" \
   "drop-in uses the NTP= directive (not Servers=)"
 
-# phase_system must actually call it.
-assert_contains "$(declare -f phase_system)" "configure_time_sync" \
-  "configure_time_sync wired into the system phase"
+# phase_customize must actually call it.
+assert_contains "$(declare -f phase_customize)" "configure_time_sync" \
+  "configure_time_sync wired into the customize phase"
 
 # Behavioral: the drop-in is written ONLY when NTP_SERVERS is non-empty, and
 # carries exactly the [Time] / NTP=<servers> stanza. Fake in_target so the test

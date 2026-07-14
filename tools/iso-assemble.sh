@@ -337,6 +337,74 @@ install_live_extras() {
   ((rc == 0)) || fatal "live-extras install failed (rc=${rc})"
 }
 
+# rebuild_efi_img_with_mokmanager STOCK_ISO GOLDEN_ROOT WORK
+# The stock ISO's EFI boot image carries shim+grub but NO MokManager, and is
+# packed full (22K free). A boot with a PENDING MOK request — the installer
+# stages one, then the user reboots with the medium still inserted — makes the
+# ISO's shim invoke MokManager, find nothing, and die ("import_mok_state()
+# failed"; the #50 gap, hit again live 2026-07-13). Rebuild the FAT image
+# slightly larger with mmx64.efi grafted in (sourced from the golden root's
+# shim-signed) and echo its path; echoes nothing if the stock image already
+# carries MokManager (fixed upstream). The caller feeds it to
+# build_write_iso_args via ISO_EFI_APPEND_IMG — NOT as a -map over the tree
+# file: the EFI El-Torito image is a HIDDEN appended partition (the tree's
+# /boot/grub/efi.img is only the APM/GPT reference copy), and a size-changed
+# map over that file breaks APM replay outright (SORRY, seen live
+# 2026-07-13). Overriding appended partition 2 + pointing El-Torito at it is
+# how the stock ISO is built, and covers CD and USB boots alike.
+rebuild_efi_img_with_mokmanager() {
+  local stock="$1" groot="$2" work="$3"
+  local img="${work}/efi-stock.img" newimg="${work}/efi-mok.img"
+  local mnt="${work}/efi-stock-mnt" newmnt="${work}/efi-mok-mnt"
+  local mm="${groot}/usr/lib/shim/mmx64.efi.signed"
+  [[ -f "${mm}" ]] || fatal "mmx64.efi.signed not in the golden root (shim-signed not baked?)"
+  command -v mkfs.vfat >/dev/null 2>&1 ||
+    DEBIAN_FRONTEND=noninteractive apt-get install -y dosfstools >&2 ||
+    fatal "mkfs.vfat unavailable and dosfstools install failed"
+  rm -f "${img}" "${newimg}"
+  xorriso -osirrox on -indev "${stock}" -extract /boot/grub/efi.img "${img}" \
+    >/dev/null 2>&1 || fatal "cannot extract /boot/grub/efi.img from ${stock}"
+  mkdir -p "${mnt}" "${newmnt}"
+  mount -o loop,ro "${img}" "${mnt}" || fatal "cannot loop-mount the stock efi.img"
+  if [[ -f "${mnt}/EFI/boot/mmx64.efi" ]]; then
+    umount "${mnt}"
+    return 0
+  fi
+  # Size: stock image + MokManager + 1 MiB FAT slack, rounded up to a MiB.
+  local bytes=0
+  bytes=$(($(stat -c%s "${img}") + $(stat -c%s "${mm}") + 1048576))
+  bytes=$(((bytes + 1048575) / 1048576 * 1048576))
+  truncate -s "${bytes}" "${newimg}"
+  mkfs.vfat "${newimg}" >/dev/null 2>&1 || { umount "${mnt}"; fatal "mkfs.vfat failed"; }
+  mount -o loop "${newimg}" "${newmnt}" || { umount "${mnt}"; fatal "cannot mount the rebuilt efi.img"; }
+  if ! { cp -a "${mnt}/." "${newmnt}/" && cp "${mm}" "${newmnt}/EFI/boot/mmx64.efi"; }; then
+    umount "${newmnt}" "${mnt}"
+    fatal "populating the rebuilt efi.img failed"
+  fi
+  umount "${newmnt}" "${mnt}"
+  printf '%s\n' "${newimg}"
+}
+
+# patch_boot_menu_timeouts STOCK_ISO WORK
+# The stock live image's boot menus WAIT FOREVER — grub's config.cfg sets no
+# timeout at all and isolinux ships `timeout 0` — so an untouched boot never
+# reaches the live session (hit live 2026-07-13: every "unattended" run had
+# a human picking the entry). Patch a 5s auto-boot into both menus and emit
+# SRC TARGET lines (two per file) for build_write_iso_args map pairs.
+patch_boot_menu_timeouts() {
+  local stock="$1" work="$2"
+  local gcfg="${work}/menu-config.cfg" icfg="${work}/menu-isolinux.cfg"
+  rm -f "${gcfg}" "${icfg}"
+  xorriso -osirrox on -indev "${stock}" \
+    -extract /boot/grub/config.cfg "${gcfg}" \
+    -extract /isolinux/isolinux.cfg "${icfg}" >/dev/null 2>&1 ||
+    fatal "cannot extract the boot menu configs from ${stock}"
+  chmod +w "${gcfg}" "${icfg}" # osirrox preserves the ISO's read-only mode
+  grep -q '^set timeout' "${gcfg}" || printf 'set timeout=5\n' >>"${gcfg}"
+  sed -i 's/^timeout 0$/timeout 50/' "${icfg}" # isolinux units: 1/10 s
+  printf '%s\n' "${gcfg}" /boot/grub/config.cfg "${icfg}" /isolinux/isolinux.cfg
+}
+
 # build_write_iso_args STOCK_ISO NEW_SQUASHFS OUT_ISO [SRC TARGET]...
 # Emit (one per line) the native-xorriso argv that writes OUT_ISO = STOCK_ISO
 # with the live squashfs replaced by NEW_SQUASHFS and the d-i pool stripped,
@@ -367,6 +435,16 @@ build_write_iso_args() {
     shift 2
   done
   printf '%s\n' -boot_image any replay -compliance no_emul_toc -padding included
+  # ISO_EFI_APPEND_IMG (optional): replace the EFI boot equipment AFTER the
+  # replay — override appended partition 2 (replay re-established the stock
+  # one; a later spec for the same slot wins) and re-point the El-Torito EFI
+  # entry into it, exactly how the stock image wires its own EFI boot. The
+  # tree's /boot/grub/efi.img is deliberately untouched (APM replay breaks on
+  # a size change).
+  if [[ -n "${ISO_EFI_APPEND_IMG:-}" ]]; then
+    printf '%s\n' -append_partition 2 0xef "${ISO_EFI_APPEND_IMG}"
+    printf '%s\n' -boot_image any efi_path=--interval:appended_partition_2:all::
+  fi
   printf '%s\n' -commit
 }
 
@@ -380,19 +458,19 @@ write_iso_with_squashfs() {
 # parse_live_boot_paths CFG_TEXT
 # Pure: extract the kernel and initrd ISO paths the stock boot configs
 # reference under /live/ (isolinux for BIOS, grub for EFI). The golden ISO
-# maps OUR kernel/initrd over exactly these names, so the replayed stock boot
-# equipment keeps loading a matching pair whatever the version-string in the
-# name says. Echoes "KERNEL_PATH INITRD_PATH"; nonzero unless exactly one
-# distinct token of each is found (several distinct names would mean the
-# stock layout changed — fail loudly, see issue #111 U1).
+# maps OUR kernel/initrd over ALL of these names: the stock 13.5 medium
+# legitimately uses TWO name styles for the same files — grub loads the
+# versioned pair (/live/vmlinuz-<ver>), isolinux the generic one
+# (/live/vmlinuz) — so every referenced name must resolve to our kernel
+# (issue #111 U1). Echoes two lines, kernel paths then initrd paths, each
+# space-separated; nonzero when either set is empty (a cfg with no /live
+# references means the stock layout truly changed — fail loudly).
 parse_live_boot_paths() {
   local text="$1" kpaths="" ipaths=""
   kpaths="$(grep -oE '/live/vmlinuz[^ "]*' <<<"${text}" | sort -u)"
   ipaths="$(grep -oE '/live/initrd[^ "]*' <<<"${text}" | sort -u)"
   [[ -n "${kpaths}" && -n "${ipaths}" ]] || return 1
-  (($(wc -l <<<"${kpaths}") == 1)) || return 1
-  (($(wc -l <<<"${ipaths}") == 1)) || return 1
-  printf '%s %s\n' "${kpaths}" "${ipaths}"
+  printf '%s\n%s\n' "${kpaths//$'\n'/ }" "${ipaths//$'\n'/ }"
 }
 
 # probe_stock_live_boot_paths STOCK_ISO WORKDIR
@@ -428,10 +506,63 @@ stage_golden_home() {
   local root="${1:?golden root}"
   local home="${root%/}${LIVE_USER_HOME}"
   mkdir -p "${home}"
+  # user-setup ADOPTS a pre-existing /home/user, and adduser copies /etc/skel
+  # only into homes it creates itself — so seeding files here means the live
+  # user would otherwise get NO skel configs at all (bare-default Hyprland,
+  # no keybinds/launcher/session hooks; seen live 2026-07-13). Copy skel in
+  # ourselves before adding the live-only files.
+  if [[ -d "${root%/}/etc/skel" ]]; then
+    cp -a "${root%/}/etc/skel/." "${home}/"
+  fi
   ln -sfn "${LIVE_STORE_ROOT}/${LIVE_INSTALLER_SUBDIR}/${LIVE_INSTALLER_ENTRY}" \
     "${home}/${LIVE_INSTALLER_ENTRY}"
   stage_autoinstall_launcher "${home}"
+  stage_live_welcome "${home}"
+  # The live session's entry point is the kitty banner terminal above — the
+  # graphical first-login welcome dialog is redundant noise there (seen live
+  # 2026-07-13). Pre-seed its done-marker; installed users still get it
+  # (create_user copies skel, which never carries the marker).
+  install -d "${home}/.config/hypr"
+  : >"${home}/.config/hypr/.welcome-shown"
   chown -R 1000:1000 "${home}" 2>/dev/null || true
+}
+
+# stage_live_welcome HOME_DIR
+# Live-only desktop entry point: an autostart hook (appended to the live
+# user's own copy of autostart.lua, never to /etc/skel) opens a kitty window
+# running a welcome script with the install instructions. Informational only —
+# the unattended launcher wipes disks and must never self-execute; the user
+# runs it (or the interactive installer) from this terminal. customize deletes
+# /home/user wholesale, so none of this reaches installed systems.
+stage_live_welcome() {
+  local home="${1:?home dir}"
+  install -d "${home}/.local/bin" "${home}/.config/hypr"
+  cat >"${home}/.local/bin/live-welcome" <<EOF
+#!/bin/sh
+# Generated by iso-assemble.sh — live-session installer terminal.
+cat <<'BANNER'
+Debian13-Hyprland live session
+==============================
+This is a full demo of the installed desktop. To install:
+
+  ./${LIVE_AUTOINSTALL_ENTRY}     unattended install (WIPES ALL DISKS)
+  sudo ./${LIVE_INSTALLER_ENTRY}  interactive install
+
+Both run from the ISO medium; no network needed.
+BANNER
+cd "\${HOME}"
+exec bash -i
+EOF
+  chmod 0755 "${home}/.local/bin/live-welcome"
+  cat >>"${home}/.config/hypr/autostart.lua" <<'EOF'
+
+-- LIVE SESSION ONLY (appended by iso-assemble.sh to the live user's copy;
+-- customize removes /home/user): open the installer terminal on the desktop
+-- so the medium is actionable without hunting for a shell.
+hl.on("hyprland.start", function()
+  hl.exec_cmd("kitty --title live-installer -e /home/user/.local/bin/live-welcome")
+end)
+EOF
 }
 
 # assemble STOCK_ISO REPO_DIR OUT_ISO
@@ -519,13 +650,15 @@ assemble_golden() {
   fi
 
   # The stock /live names the boot cfgs reference — our kernel/initrd map
-  # over exactly those (plan B on layout drift: edit the cfg text; see U1).
-  local kpath="" ipath=""
-  read -r kpath ipath < <(probe_stock_live_boot_paths "${stock_iso}" "${work}") ||
+  # over ALL of them (grub uses versioned names, isolinux generic ones; both
+  # must load the golden pair). Plan B on layout drift: edit the cfg text.
+  local kpaths="" ipaths=""
+  { read -r kpaths && read -r ipaths; } \
+    < <(probe_stock_live_boot_paths "${stock_iso}" "${work}") ||
     fatal "cannot determine the stock ISO's /live kernel/initrd paths (boot cfg layout changed?)"
-  [[ -n "${kpath}" && -n "${ipath}" ]] ||
+  [[ -n "${kpaths}" && -n "${ipaths}" ]] ||
     fatal "cannot determine the stock ISO's /live kernel/initrd paths (boot cfg layout changed?)"
-  info "iso-assemble: golden kernel ${kver} maps over ${kpath} + ${ipath}"
+  info "iso-assemble: golden kernel ${kver} maps over ${kpaths} + ${ipaths}"
 
   # Medium-side paths: the live home seed must point at the medium installer.
   LIVE_STORE_ROOT="/run/live/medium"
@@ -547,9 +680,18 @@ assemble_golden() {
   mksquashfs "${GOLDEN_ROOT}" "${new_sqfs}" -noappend -no-progress -no-recovery \
     -comp "${comp}" -b "${bsize}"
 
+  # MokManager onto the ISO's EFI boot image (see the helper's rationale).
+  ISO_EFI_APPEND_IMG="$(rebuild_efi_img_with_mokmanager "${stock_iso}" "${GOLDEN_ROOT}" "${work}")"
+  export ISO_EFI_APPEND_IMG
+
   info "iso-assemble: writing ${out_iso} (golden squashfs + medium store)"
-  local -a extra_maps=("${kfile}" "${kpath}" "${ifile}" "${ipath}"
-    "${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
+  local -a extra_maps=() p=""
+  for p in ${kpaths}; do extra_maps+=("${kfile}" "${p}"); done
+  for p in ${ipaths}; do extra_maps+=("${ifile}" "${p}"); done
+  # 5s auto-boot for both boot menus (stock waits forever, see the helper).
+  mapfile -t -O "${#extra_maps[@]}" extra_maps \
+    < <(patch_boot_menu_timeouts "${stock_iso}" "${work}")
+  extra_maps+=("${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
   if [[ -n "${installer_dir}" ]]; then
     extra_maps+=("${installer_dir}" "${ISO_MEDIUM_INSTALLER_DIR}")
   fi

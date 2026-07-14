@@ -83,7 +83,8 @@ EOF
 }
 
 # --- System identity ---------------------------------------------------------
-TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
+# Generic default (env-overridable): "precision" was reference-machine leak.
+TARGET_HOSTNAME="${TARGET_HOSTNAME:-hyprland}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
@@ -125,9 +126,13 @@ CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
 # preflight probes this first: an in-root store cannot be shadowed by a /run bind
 # mount and does not depend on the medium staying visible mid-install.
 ISO_LIVE_REPO="${ISO_LIVE_REPO:-/opt/hypr-deb/repo}"
-# Fallback for older ISOs that shipped the store as a top-level data directory on
-# the medium (mounted at /run/live/medium) rather than embedded in the squashfs.
-ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
+# Where live-boot mounts the ISO9660 medium in the live session. The golden
+# ISO (issue #111) ships the install store AND the squashfs the deploy phase
+# unpacks under here.
+LIVE_MEDIUM_DIR="${LIVE_MEDIUM_DIR:-/run/live/medium}"
+# The medium-side install store (golden ISOs: NVIDIA + bootloader debs, ZBM
+# EFI, KERNEL stamp; older ISOs shipped the full pool here).
+ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-${LIVE_MEDIUM_DIR}/hypr-repo}"
 # Location of the apt repo (pool/ + dists/) the offline machinery installs from.
 # Defaults to the on-ISO store (ISO_LIVE_REPO) — decoupled from CACHE_DIR so an
 # offline install never depends on a second, install-time cache. preflight
@@ -143,9 +148,16 @@ CACHE_REPO_DIR="${CACHE_REPO_DIR:-${ISO_LIVE_REPO}}"
 # the live session and the image the installer copies to disk. The multi-GB
 # pool becomes a build-workspace artifact; the ISO carries only the small
 # install store (NVIDIA + bootloader debs, ZBM EFI, KERNEL stamp) on the
-# ISO9660 medium at /hypr-repo. 0 (default) keeps the legacy stock-squashfs
-# repack with the full pool embedded at /opt/hypr-deb/repo.
-HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-0}"
+# ISO9660 medium at /hypr-repo. Default since the Phase-2 installer pivot
+# (the installer consumes only golden ISOs now); 0 selects the legacy
+# stock-squashfs repack with the full pool embedded at /opt/hypr-deb/repo —
+# its ISO still boots but the current installer cannot install from it.
+HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-1}"
+
+# Upstream kitty deb source (daily repackage of kovidgoyal's official
+# binaries; Debian's 0.41 has the false NVIDIA sRGB warning, fixed >= 0.47).
+# step_stage_kitty pulls the latest release deb into the build pool.
+KITTY_DEB_REPO_URL="${KITTY_DEB_REPO_URL:-https://github.com/tkirkland/kitty-deb}"
 
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
@@ -679,13 +691,13 @@ ADW_GTK3_STORE_SUBDIR="${ADW_GTK3_STORE_SUBDIR:-adw-gtk3}"
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
-# Upstream OpenZFS packages the OFFLINE path consumes from the on-ISO pool
-# (built by build-iso step_zfs), so the offline default ships the SAME upstream
-# OpenZFS the online source build produces — not Debian's 2.3.x. All four must
-# be POOLED (cache_validate), but install_zfs_offline installs only the
-# userland three plus the prebuilt openzfs-zfs-modules-<kver> kmod deb: the
-# dkms deb is staged for firstboot instead (issue #110, no install-time
-# compile). The online path builds these from source (install_zfs_from_source).
+# Upstream OpenZFS packages consumed from the on-ISO pool (built by build-iso
+# step_zfs), so every install ships the SAME upstream OpenZFS the online
+# source build produces — not Debian's 2.3.x. All four (dkms included) bake
+# into the golden image at ISO-build time, module compiled and signed there —
+# installs and first boots never build modules (issue #111). The legacy
+# offline path (install_zfs_offline) installs the same set in the chroot; the
+# online path builds from source (install_zfs_from_source).
 ZFS_UPSTREAM_PACKAGES=(
   openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed
 )
@@ -811,8 +823,13 @@ TARGET_BASE_PACKAGES=(
 #   openssl                 ensure_mok_key runs it in the live env
 #   NVIDIA_DKMS_BUILD_PACKAGES + linux-headers (via TARGET_BASE) bake so the
 #   conflict-free half of every NVIDIA variant is already in the image.
+# The live-only members of the golden image: baked in so the squashfs boots
+# as the live session, purged from the copied tree by prune_live_artifacts
+# (scripts/40-system.sh) so they never ship on the installed system.
+LIVE_PURGE_PACKAGES=(live-boot live-config live-config-systemd)
+
 GOLDEN_EXTRA_PACKAGES=(
-  live-boot live-config live-config-systemd
+  "${LIVE_PURGE_PACKAGES[@]}"
   git squashfs-tools gdisk parted rsync openssl
   "${NVIDIA_DKMS_BUILD_PACKAGES[@]}"
 )

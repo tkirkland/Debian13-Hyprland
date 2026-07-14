@@ -85,7 +85,10 @@ teardown_chroot_binds() {
   local i=0
   for ((i = ${#CHROOT_MOUNTS[@]} - 1; i >= 0; i--)); do
     if mountpoint -q "${CHROOT_MOUNTS[i]}"; then
-      umount "${CHROOT_MOUNTS[i]}" ||
+      # -R: maintainer scripts can mount UNTRACKED children under a tracked
+      # mount (e.g. mdadm's initramfs hook mounts efivarfs under /sys,
+      # Debian #962844); a plain umount of the parent then fails EBUSY.
+      umount -R "${CHROOT_MOUNTS[i]}" ||
         umount -l "${CHROOT_MOUNTS[i]}" ||
         warn "Could not unmount ${CHROOT_MOUNTS[i]}"
     fi

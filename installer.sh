@@ -95,7 +95,7 @@ main() {
   # driver need the package choice settled (and non-free enabled) first.
   detect_nvidia_gpu
   case "${RUN_PHASE}" in
-    full | system | hyprland | verify) require_nvidia_choice ;;
+    full | customize | verify) require_nvidia_choice ;;
   esac
   # Debian's non-free component is only needed for the "debian"/package
   # modes; "open" installs from NVIDIA's own repository.
@@ -111,7 +111,7 @@ main() {
   # /etc/adjtime in the system phase; settle it before preflight so an
   # unattended run without --rtc fails fast instead of mid-install.
   case "${RUN_PHASE}" in
-    full | system) require_rtc_choice ;;
+    full | customize) require_rtc_choice ;;
   esac
 
   # --yes promises an unattended run, but create_user would still block on
@@ -121,8 +121,8 @@ main() {
   # stamped done.
   if ((ASSUME_YES)) && [[ -z "${USER_PASSWORD}" ]]; then
     case "${RUN_PHASE}" in
-      full | system)
-        phase_done system ||
+      full | customize)
+        phase_done customize ||
           fatal "--yes requires USER_PASSWORD to be set (the password" \
             "prompt would block an unattended run, and sudo needs one)."
         ;;
@@ -130,7 +130,7 @@ main() {
   fi
   if ((!IS_INTERACTIVE)) && ((!HYPR_AUTOLOGIN)) &&
     [[ -z "${USER_PASSWORD}" ]] &&
-    [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "system" ]]; then
+    [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "customize" ]]; then
     fatal "Non-interactive run with no USER_PASSWORD and no --autologin:" \
       "the installed console would not support a login. Set USER_PASSWORD=... " \
       "or pass --autologin."
@@ -147,7 +147,7 @@ main() {
   if [[ "${RUN_PHASE}" != "full" ]]; then
     current_phase="${RUN_PHASE}"
     case "${RUN_PHASE}" in
-      system | boot | hyprland | verify) ensure_target_ready ;;
+      deploy | customize | boot | verify) ensure_target_ready ;;
     esac
     activity_start "Phase: ${RUN_PHASE}"
     "phase_${RUN_PHASE//-/_}"
@@ -174,7 +174,7 @@ main() {
 
   ensure_target_ready
   local name="" idx=0
-  local -a phases=(storage bootstrap system boot hyprland verify)
+  local -a phases=(storage deploy customize boot verify)
   for name in "${phases[@]}"; do
     idx=$((idx + 1))
     current_phase="${name}"

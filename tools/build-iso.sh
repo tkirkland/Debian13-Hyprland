@@ -491,6 +491,29 @@ step_runtime_closure() {
 }
 
 # 5) Re-index after the source stack + ZFS landed new .debs.
+# 4k) Stage the upstream kitty deb (github.com/tkirkland/kitty-deb: official
+# kovidgoyal binaries repackaged) into the pool. Debian ships kitty 0.41,
+# which prints a false sRGB warning on NVIDIA (fixed upstream >= 0.47); the
+# repackaged deb versions higher (e.g. 0.47.4-0gh1), so apt resolves it over
+# Debian's during the golden install with no pin needed. Reuse any staged
+# copy; fetch failure is fatal (a silent fallback to 0.41 would ship the bug).
+step_stage_kitty() {
+  local dest="${CACHE_DIR}/repo/pool" api="" url=""
+  if compgen -G "${dest}/kitty_*gh*_amd64.deb" >/dev/null; then
+    info "[build] reusing staged upstream kitty deb"
+    return 0
+  fi
+  api="${KITTY_DEB_REPO_URL/github.com/api.github.com\/repos}/releases/latest"
+  url="$(curl -fsSL --retry 3 "${api}" 2>/dev/null |
+    grep -oE '"browser_download_url": *"[^"]+"' | cut -d'"' -f4 |
+    grep -E '/kitty_[^/]+_amd64\.deb$' | head -n1 || true)"
+  [[ -n "${url}" ]] || fatal "no kitty deb asset found at ${api}"
+  info "[build] staging upstream kitty deb: ${url##*/}"
+  mkdir -p "${dest}"
+  curl -fsSL --retry 5 --retry-all-errors -o "${dest}/${url##*/}" "${url}" ||
+    fatal "kitty deb download failed: ${url}"
+}
+
 step_reindex() {
   cache_index_repo
 }
@@ -588,11 +611,24 @@ step_golden_rootfs() {
     || fatal "unsafe golden sandbox config."
 
   # Resume support: a fully-populated golden root from a prior run is reused
-  # only while the pool's package sets are unchanged; anything else (partial
-  # transaction, stale stamp) is rebuilt from scratch — a half-installed
-  # golden image must never ship.
-  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done"
-  if [[ -f "${stamp}" ]] && cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
+  # only while the pool's package sets AND the pool's actual deb contents are
+  # unchanged; anything else (partial transaction, stale stamp) is rebuilt
+  # from scratch — a half-installed golden image must never ship. The name-set
+  # hash (cache_pkgset_fresh) alone is NOT enough: a newer deb staged into the
+  # pool under the same package name (step_stage_kitty) changes what the
+  # golden transaction installs without touching any name list — reusing then
+  # ships the old version (hit live 2026-07-13, kitty 0.41 vs 0.47). The
+  # stamp therefore records the pool's deb filename hash (name+version+arch).
+  # The recipe rev salts the stamp: bump it whenever the golden TRANSACTION
+  # changes with the pool unchanged (e.g. r2: dkms-baked zfs replaced the
+  # prebuilt kmod deb), else the stale flavor is silently reused.
+  local stamp="${ISO_WORKSPACE}/.golden-rootfs-done" poolhash="" recipe_rev="r2"
+  poolhash="$(cd "${CACHE_DIR}/repo/pool" 2>/dev/null &&
+    find . -maxdepth 1 -name '*.deb' -printf '%f\n' |
+    sort | sha256sum | awk '{print $1}')" || poolhash=""
+  if [[ -f "${stamp}" && -n "${poolhash}" ]] &&
+    [[ "$(cat "${stamp}")" == "${recipe_rev}:${poolhash}" ]] &&
+    cache_pkgset_fresh && [[ -e "${GOLDEN}/etc/os-release" ]]; then
     info "[build] reusing existing golden rootfs ${GOLDEN}"
     install_policy_rc_d
     export HYPR_PRIVATE_RUN=1
@@ -625,29 +661,42 @@ step_golden_rootfs() {
   fi
   # The one transaction: full target base (both microcodes — the image is
   # CPU-agnostic), golden extras, the source-built stack, upstream OpenZFS
-  # (prebuilt kmod for the ONE kernel; dkms deb stays dormant for firstboot),
-  # chezmoi + brave, and the dkms-dep tail that must be resident before
-  # firstboot (file/lsb-release/libc6-dev — the store is gone by then).
-  local -a pkgs=() p=""
+  # INCLUDING the dkms deb (the module compiles + signs right here, at build
+  # time — neither the install nor first boot ever builds a module), and
+  # chezmoi + brave.
+  local -a pkgs=()
   mapfile -t pkgs < <(filter_zfs_debian_packages "${TARGET_BASE_PACKAGES[@]}")
   pkgs+=("${GOLDEN_EXTRA_PACKAGES[@]}" "${HYPR_BUILD_ORDER[@]}")
   pkgs+=(chezmoi brave-browser)
-  pkgs+=("openzfs-zfs-modules-${KERNEL_TARGET}")
-  for p in "${ZFS_UPSTREAM_PACKAGES[@]}"; do
-    [[ "${p}" == "openzfs-zfs-dkms" ]] || pkgs+=("${p}")
-  done
-  pkgs+=(file lsb-release libc6-dev)
+  pkgs+=("${ZFS_UPSTREAM_PACKAGES[@]}")
   info "[build] installing the golden system (${#pkgs[@]} package names, pool only)"
   # man-db's per-transaction reindex is minutes of dead CPU; same debconf
   # trick as install_base_packages, persisted into the image (the daily
   # timer indexes on the running system).
   in_target "echo 'man-db man-db/auto-update boolean false' | debconf-set-selections"
+  # shim-signed's postinst (update-secureboot-policy) inspects the HOST's
+  # Secure Boot state: mdadm's initramfs hook (Debian #962844) mounts the
+  # host's efivarfs into the chroot mid-transaction, so on an SB-enabled
+  # build host the policy script sees SecureBoot=1 + a DKMS dir (ddcci),
+  # takes the disable-SB prompt path (template default: true) and exits 1
+  # noninteractively, failing the whole transaction. Preseed "keep Secure
+  # Boot as-is" — it bakes into the image and equally protects any later
+  # in-image dkms transaction on SB machines (MOK signing is our own machinery).
+  in_target "echo 'shim-signed-common shim/disable_secureboot boolean false' | debconf-set-selections"
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y ${pkgs[*]}
   "
+  # Drop the efivarfs mount the mdadm initramfs hook left behind (see the
+  # shim preseed above): it is the host's WRITABLE EFI NVRAM exposed inside
+  # the build chroot — exactly what HYPR_PRIVATE_RUN exists to prevent — and
+  # as an untracked child of ${TARGET}/sys it makes the teardown umount busy.
+  if mountpoint -q "${TARGET}/sys/firmware/efi/efivars"; then
+    umount "${TARGET}/sys/firmware/efi/efivars" ||
+      warn "could not unmount stray efivars in the golden chroot"
+  fi
   # Optional Qt6 ScreenCast backend — best-effort AFTER the must-succeed set,
   # exactly like the installer path (never strands the build).
   install_xdph_best_effort
@@ -666,10 +715,17 @@ step_golden_rootfs() {
     "
     rm -rf "${GOLDEN}/var/tmp/addon-debs"
   fi
-  # Upstream-OpenZFS install tail, mirrored from install_zfs_offline MINUS the
-  # MOK signing (the key is per-machine; customize signs the .ko in place) —
-  # assert the prebuilt module landed, keep the pam module out, pin the
-  # metapackages manual, and depmod so the module resolves in the live boot.
+  # Upstream-OpenZFS bake tail. The dkms postinst may configure before the
+  # kernel headers in the one big transaction and silently skip the build, so
+  # the explicit autoinstall for KERNEL_TARGET is load-bearing (it also
+  # catches ddcci and any other dkms module the base set carries). Keep the
+  # pam module out and pin the metapackages manual, then assert the module
+  # resolves for the live boot. Finally SCRUB the dkms-generated MOK keypair:
+  # it is per-machine, and an image-baked private key would be shared by
+  # every install. The baked modules keep that throwaway key's signature
+  # (harmless — nothing enforces it before enrollment); customize re-signs
+  # them in place with the fresh per-install key (sign_dkms_modules; the
+  # kernel validates the outermost signature).
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -678,15 +734,13 @@ step_golden_rootfs() {
     fi
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
-    apt-mark manual openzfs-zfs-modules-${KERNEL_TARGET} openzfs-zfsutils \
-      openzfs-zfs-initramfs openzfs-zfs-zed file lsb-release libc6-dev >/dev/null
-    kos=\"\$(dpkg-query -L 'openzfs-zfs-modules-${KERNEL_TARGET}' | grep '\\.ko\$' || true)\"
-    [[ -n \"\${kos}\" ]] ||
-      { echo 'openzfs-zfs-modules-${KERNEL_TARGET} installed no .ko files' >&2; exit 1; }
+    apt-mark manual ${ZFS_UPSTREAM_PACKAGES[*]} >/dev/null
+    dkms autoinstall -k '${KERNEL_TARGET}'
     depmod '${KERNEL_TARGET}'
     modinfo -k '${KERNEL_TARGET}' zfs >/dev/null
+    rm -f /var/lib/dkms/mok.key /var/lib/dkms/mok.pub
   "
-  : >"${stamp}"
+  printf '%s\n' "${recipe_rev}:${poolhash}" >"${stamp}"
 }
 
 # 6g-2) Session + identity staging inside the golden root: the machine-
@@ -695,7 +749,7 @@ step_golden_rootfs() {
 # adduser), the harvested vendor artifacts, the dormant firstboot machinery,
 # the live-only autologin hook, and the image manifest.
 step_golden_session() {
-  # install_lythmono_fonts/stage_brave_apt_source/stage_zfs_dkms_job/... live
+  # install_lythmono_fonts/stage_brave_apt_source/stage_live_autologin_hook/... live
   # in scripts/40-system.sh, outside the critical top-level source order —
   # lazy-source + re-assert, exactly like step_zfs.
   if ! declare -f install_lythmono_fonts >/dev/null 2>&1; then
@@ -715,11 +769,10 @@ step_golden_session() {
   install_lythmono_fonts
   install_adw_gtk3_theme
   stage_brave_apt_source
-  # Dormant firstboot: runner + unit + the zfs-dkms handover job bake in
-  # DISABLED — the live session must never run firstboot jobs; customize
-  # enables the unit on the installed system.
+  # Dormant firstboot: runner + unit bake in DISABLED with no jobs — zfs-dkms
+  # is fully baked above, so a standard install has nothing left for first
+  # boot; customize enables the unit only if some path stages a job.
   write_firstboot_runner
-  stage_zfs_dkms_job
   stage_live_autologin_hook
   # ssh-over-vsock generator noise fix (was a live-extras bake).
   neuter_ssh_vsock_generator
@@ -739,6 +792,29 @@ ExecStart=/usr/bin/ssh-keygen -A
 
 [Install]
 WantedBy=multi-user.target
+EOF
+  # live-config's openssh-server component force-disables password auth at
+  # live boot by editing sshd_config in place. The sshd_config.d include is
+  # read FIRST and first-obtained-value wins, so this drop-in keeps the live
+  # session reachable with the live user's password (the test lane drives
+  # installs over SSH; a keyless live medium is otherwise unreachable).
+  # prune_live_artifacts removes it — installed systems keep stock policy.
+  install -d "${GOLDEN}/etc/ssh/sshd_config.d"
+  cat >"${GOLDEN}/etc/ssh/sshd_config.d/20-hypr-live.conf" <<'EOF'
+# Live session only (removed by the installer's customize phase).
+PasswordAuthentication yes
+EOF
+  # Persistent journal on the installed system (root-on-zfs): /var/log is a
+  # zfs dataset mounted by zfs-mount.service, which has no mount unit, so
+  # systemd-journal-flush's RequiresMountsFor=/var/log/journal cannot order
+  # against it — the flush ran before the dataset mounted, found no
+  # /var/log/journal, and every boot stayed volatile (hit live 2026-07-13:
+  # zero post-mortem for a first-login crash). Order the flush after
+  # zfs-mount; inert on the live boot (var/log is tmpfs-overlay there).
+  install -d "${GOLDEN}/etc/systemd/system/systemd-journal-flush.service.d"
+  cat >"${GOLDEN}/etc/systemd/system/systemd-journal-flush.service.d/zfs-var-log.conf" <<'EOF'
+[Unit]
+After=zfs-mount.service
 EOF
   in_target "
     set -e
@@ -990,7 +1066,7 @@ step_assemble() {
     HYPR_INSTALLER_DIR="${payload}" \
     LIVE_AUTOINSTALL_PASSWORD="${LIVE_AUTOINSTALL_PASSWORD:-}" \
     LIVE_AUTOINSTALL_BOOTLOADER="${LIVE_AUTOINSTALL_BOOTLOADER:-grub}" \
-    LIVE_AUTOINSTALL_RTC="${LIVE_AUTOINSTALL_RTC:-local}" \
+    LIVE_AUTOINSTALL_RTC="${LIVE_AUTOINSTALL_RTC:-utc}" \
     LIVE_AUTOINSTALL_USERNAME="${LIVE_AUTOINSTALL_USERNAME:-me}" \
     bash "${TOOLS_DIR}/iso-assemble.sh" "${STOCK_ISO}" "${repo_arg}" "${OUT_ISO}" \
     || fatal "iso-assemble failed"
@@ -1127,6 +1203,7 @@ run_heavy_build() {
   step_build_portal         # 3b: OPTIONAL xdph screencast backend (non-fatal)
   step_zfs                  # 4 (golden: pin == target, so ONE kmod builds)
   step_runtime_closure      # 4.5: pool the runtime deps the built debs declare
+  step_stage_kitty          # 4k: upstream kitty deb outbids Debian's in the pool
   step_reindex              # 5
   if ((HYPR_ISO_GOLDEN)); then
     step_stage_fonts        # harvests feed the golden image, not the medium

@@ -37,34 +37,49 @@ phase_verify() {
   done
   kver="$(printf '%s' "${vers}" | sort -V | tail -n1)"
 
-  if ((BUILD_ON_FIRSTBOOT)); then
-    vcheck "firstboot unit enabled" in_target \
-      "systemctl is-enabled hypr-deb-firstboot.service"
-    vcheck "firstboot runner staged" \
-      test -x "${TARGET}/usr/sbin/hypr-deb-firstboot"
-    vcheck "hyprland firstboot job staged" test -x \
-      "${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
-    vcheck "sources staged" \
-      test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
-    vcheck "toolchain staged for firstboot" in_target "command -v cmake"
-  else
-    # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
-    # (set by pam_systemd in real logins); provide both for the check.
-    vcheck "Hyprland binary runs" in_target "
-      set -e
-      install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
-      runuser -u '${TARGET_USERNAME}' -- \
-        env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
-        /usr/bin/Hyprland --version
-      rm -rf /tmp/hypr-verify-rt
-    "
-    vcheck "Hyprland links resolve" in_target \
-      "! ldd /usr/bin/Hyprland | grep -q 'not found'"
-    # guiutils builds every util from its root CMakeLists; if a future tag
-    # drops or renames the welcome util, fail loudly here (issue #11).
-    vcheck "welcome app installed" \
-      test -x "${TARGET}/usr/bin/hyprland-welcome"
-  fi
+  # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
+  # (set by pam_systemd in real logins); provide both for the check.
+  vcheck "Hyprland binary runs" in_target "
+    set -e
+    install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
+    runuser -u '${TARGET_USERNAME}' -- \
+      env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
+      /usr/bin/Hyprland --version
+    rm -rf /tmp/hypr-verify-rt
+  "
+  vcheck "Hyprland links resolve" in_target \
+    "! ldd /usr/bin/Hyprland | grep -q 'not found'"
+  # guiutils builds every util from its root CMakeLists; if a future tag
+  # drops or renames the welcome util, fail loudly here (issue #11).
+  vcheck "welcome app installed" \
+    test -x "${TARGET}/usr/bin/hyprland-welcome"
+
+  # Golden-image customize hygiene (issue #111): the copied tree must have
+  # shed its live identity and plumbing.
+  local live_pkg=""
+  for live_pkg in "${LIVE_PURGE_PACKAGES[@]}"; do
+    vcheck "live package purged (${live_pkg})" in_target \
+      "! dpkg -s '${live_pkg}' >/dev/null 2>&1"
+  done
+  vcheck "live autologin hook removed" bash -c \
+    "[[ ! -e '${TARGET}/usr/lib/live/config/2999-hypr-autologin' ]]"
+  vcheck "live user home absent" bash -c "[[ ! -e '${TARGET}/home/user' ]]"
+  # Fresh identity: non-empty machine-id (the image ships it EMPTY) that is
+  # not the live session's, and ssh host keys that are not the live session's.
+  vcheck "machine-id regenerated (non-empty, not the live env's)" bash -c "
+    [[ -s '${TARGET}/etc/machine-id' ]] &&
+    ! cmp -s '${TARGET}/etc/machine-id' /etc/machine-id"
+  vcheck "ssh host keys regenerated (present, not the live env's)" bash -c "
+    [[ -f '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' ]] &&
+    ! cmp -s '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' \
+      /etc/ssh/ssh_host_ed25519_key.pub"
+  # The install is COMPLETE at reboot: zfs is dkms-owned with its module
+  # already built (baked at image-build time), and no deferred install work
+  # is queued for the user's first boot.
+  vcheck "zfs module owned by dkms (baked, no firstboot build)" in_target \
+    "dkms status zfs | grep -q installed"
+  vcheck "no firstboot jobs pending" bash -c \
+    "! compgen -G '${TARGET}/usr/lib/hypr-deb/firstboot.d/*.sh' >/dev/null"
 
   # Screenshot/recording capture helpers + deps (epic #67, item 1). Staged
   # unconditionally by configure_session, so verified on both install paths.
@@ -255,9 +270,10 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
-  # BOTH paths replace Debian's zfs with the upstream build (online from source,
-  # offline from the on-ISO pool via install_zfs_offline), so the upstream package
-  # must be present regardless of network — verify it unconditionally.
+  # Every path replaces Debian's zfs with the upstream build (baked into the
+  # golden image; legacy paths install it from source or the on-ISO pool), so
+  # the upstream package must be present regardless of network — verify it
+  # unconditionally.
   vcheck "upstream openzfs installed" in_target \
     "dpkg -s openzfs-zfsutils >/dev/null"
   vcheck "pool bootfs set" bash -c \
