@@ -385,6 +385,26 @@ rebuild_efi_img_with_mokmanager() {
   printf '%s\n' "${newimg}"
 }
 
+# patch_boot_menu_timeouts STOCK_ISO WORK
+# The stock live image's boot menus WAIT FOREVER — grub's config.cfg sets no
+# timeout at all and isolinux ships `timeout 0` — so an untouched boot never
+# reaches the live session (hit live 2026-07-13: every "unattended" run had
+# a human picking the entry). Patch a 5s auto-boot into both menus and emit
+# SRC TARGET lines (two per file) for build_write_iso_args map pairs.
+patch_boot_menu_timeouts() {
+  local stock="$1" work="$2"
+  local gcfg="${work}/menu-config.cfg" icfg="${work}/menu-isolinux.cfg"
+  rm -f "${gcfg}" "${icfg}"
+  xorriso -osirrox on -indev "${stock}" \
+    -extract /boot/grub/config.cfg "${gcfg}" \
+    -extract /isolinux/isolinux.cfg "${icfg}" >/dev/null 2>&1 ||
+    fatal "cannot extract the boot menu configs from ${stock}"
+  chmod +w "${gcfg}" "${icfg}" # osirrox preserves the ISO's read-only mode
+  grep -q '^set timeout' "${gcfg}" || printf 'set timeout=5\n' >>"${gcfg}"
+  sed -i 's/^timeout 0$/timeout 50/' "${icfg}" # isolinux units: 1/10 s
+  printf '%s\n' "${gcfg}" /boot/grub/config.cfg "${icfg}" /isolinux/isolinux.cfg
+}
+
 # build_write_iso_args STOCK_ISO NEW_SQUASHFS OUT_ISO [SRC TARGET]...
 # Emit (one per line) the native-xorriso argv that writes OUT_ISO = STOCK_ISO
 # with the live squashfs replaced by NEW_SQUASHFS and the d-i pool stripped,
@@ -668,6 +688,9 @@ assemble_golden() {
   local -a extra_maps=() p=""
   for p in ${kpaths}; do extra_maps+=("${kfile}" "${p}"); done
   for p in ${ipaths}; do extra_maps+=("${ifile}" "${p}"); done
+  # 5s auto-boot for both boot menus (stock waits forever, see the helper).
+  mapfile -t -O "${#extra_maps[@]}" extra_maps \
+    < <(patch_boot_menu_timeouts "${stock_iso}" "${work}")
   extra_maps+=("${store_dir}" "${ISO_MEDIUM_STORE_DIR}")
   if [[ -n "${installer_dir}" ]]; then
     extra_maps+=("${installer_dir}" "${ISO_MEDIUM_INSTALLER_DIR}")

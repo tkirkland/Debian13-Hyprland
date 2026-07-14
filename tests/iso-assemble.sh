@@ -284,6 +284,26 @@ fi
 assert_fails "odd extra map arguments rejected (must be SRC TARGET pairs)" \
   bash -c 'source tools/iso-assemble.sh; build_write_iso_args /s /q /o /lonely'
 
+echo "test: patch_boot_menu_timeouts gives both stock forever-menus a 5s auto-boot"
+mtmp="$(mktemp -d)"
+# Stub xorriso: "extract" fixture configs mirroring the stock image (grub:
+# no timeout line at all; isolinux: timeout 0), read-only like osirrox.
+# shellcheck disable=SC2317  # invoked indirectly by patch_boot_menu_timeouts
+xorriso() {
+  printf 'set default=0\nterminal_output gfxterm\n' >"${mtmp}/menu-config.cfg"
+  printf 'default vesamenu.c32\ntimeout 0\n' >"${mtmp}/menu-isolinux.cfg"
+  chmod 444 "${mtmp}/menu-config.cfg" "${mtmp}/menu-isolinux.cfg"
+}
+pairs="$(patch_boot_menu_timeouts /stock.iso "${mtmp}")"
+assert_contains "$(cat "${mtmp}/menu-config.cfg")" "set timeout=5" \
+  "grub config gains a 5s timeout (stock has none — menu waits forever)"
+assert_contains "$(cat "${mtmp}/menu-isolinux.cfg")" "timeout 50" \
+  "isolinux timeout 0 becomes 50 (5s in 1/10s units)"
+assert_contains "${pairs}" "/boot/grub/config.cfg" "emits the grub map target"
+assert_contains "${pairs}" "/isolinux/isolinux.cfg" "emits the isolinux map target"
+unset -f xorriso
+rm -rf "${mtmp}"
+
 echo "test: ISO_EFI_APPEND_IMG replaces the EFI boot equipment AFTER the replay"
 # The mmx64-bearing image must ride as appended partition 2 with the
 # El-Torito EFI entry pointed into it — never as a -map over the tree's
