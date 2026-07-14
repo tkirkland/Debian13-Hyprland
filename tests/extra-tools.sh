@@ -130,13 +130,13 @@ in_target() { printf '%s\n' "$*" >>"${lintgt_log}"; }
 install_lythmono_fonts
 unset -f curl
 
-if compgen -G "${TARGET}/usr/local/share/fonts/LythMono/*.ttf" >/dev/null; then
+if compgen -G "${TARGET}/usr/share/fonts/LythMono/*.ttf" >/dev/null; then
   echo "  ok: LythMono TTFs copied from the offline store into the font path"
 else
   echo "  FAIL: LythMono TTFs not installed from the offline store" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
-assert_contains "$(<"${lintgt_log}")" "fc-cache -f /usr/local/share/fonts/LythMono" \
+assert_contains "$(<"${lintgt_log}")" "fc-cache -f /usr/share/fonts/LythMono" \
   "font cache refreshed after the offline install"
 lcurl_txt="$(<"${lcurl_log}")"
 if [[ -z "${lcurl_txt}" ]]; then

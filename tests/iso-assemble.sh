@@ -111,7 +111,7 @@ assert_contains "${with_ssh}" "apt-get install -y --no-install-recommends git op
 assert_contains "${with_ssh}" "Dir::Etc::SourceList=/etc/apt/sources.list.d/zz-live-extras-build.list" \
   "live-extras apt uses an explicit online source list, not the build-absent live medium"
 assert_contains "${with_ssh}" "deb http://deb.debian.org/debian trixie main" \
-  "live-extras installs from the online Debian mirror at build time"
+  "live-extras source uses main (zfs comes from the staged store, not contrib)"
 if [[ "${with_ssh}" != *"/run/live/medium"* ]]; then
   echo "  ok: live-extras install does not reference the build-absent live medium"
 else
@@ -132,6 +132,76 @@ if bash -n <(printf '%s\n' "${with_ssh}"); then
 else
   echo "  FAIL: chroot payload is not valid shell" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
 fi
+
+echo "test: live_extras_chroot_script bakes the PREBUILT upstream zfs debs (issue #110)"
+kv="6.12.38+deb13-amd64"
+zfs_bake="$(live_extras_chroot_script "git" "${kv}")"
+# The live env runs the same upstream OpenZFS as the target: the kmod deb for
+# the live kernel plus the userland debs come from the staged store — no dkms,
+# no headers, no compile in the chroot.
+assert_contains "${zfs_bake}" "/opt/hypr-deb/repo/pool/openzfs-zfs-modules-${kv}_*.deb" \
+  "installs the prebuilt kmod deb for the live kernel from the staged store"
+assert_contains "${zfs_bake}" "/opt/hypr-deb/repo/pool/openzfs-zfsutils_*.deb" \
+  "installs the upstream userland from the staged store"
+assert_contains "${zfs_bake}" "/opt/hypr-deb/repo/pool/openzfs-libzfs7_*.deb" \
+  "installs the upstream zfs libs from the staged store"
+for gone in zfs-dkms "linux-headers-${kv}" "apt-get purge"; do
+  if [[ "${zfs_bake}" == *"${gone}"* ]]; then
+    echo "  FAIL: bake still carries '${gone}' (dkms compile path must be gone)" >&2
+    TEST_FAILURES=$((TEST_FAILURES+1))
+  else
+    echo "  ok: no '${gone}' in the bake (no compile machinery)"
+  fi
+done
+assert_contains "${zfs_bake}" "depmod ${kv}" "runs depmod for the baked module"
+assert_contains "${zfs_bake}" "modinfo -k ${kv} zfs" \
+  "asserts the prebuilt module is resolvable after depmod"
+if bash -n <(printf '%s\n' "${zfs_bake}"); then
+  echo "  ok: zfs-bake chroot payload is valid shell"
+else
+  echo "  FAIL: zfs-bake chroot payload is not valid shell" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# Without a kernel version the payload must not grow any zfs machinery.
+no_kv="$(live_extras_chroot_script "git")"
+if [[ "${no_kv}" != *openzfs* && "${no_kv}" != *depmod* ]]; then
+  echo "  ok: no kver -> no zfs bake in the payload"
+else
+  echo "  FAIL: zfs bake emitted without a kernel version" >&2; TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+
+echo "test: install_live_extras wires the detected kernel into the payload call (issue #110)"
+# Wiring-level: the payload builder is stubbed to capture its argv, so this
+# fails if install_live_extras ever stops passing the detected kver (which
+# would silently drop the whole zfs bake while every payload test stays green).
+# shellcheck disable=SC2317  # stubs invoked indirectly by install_live_extras
+(
+  root="$(mktemp -d)"
+  mkdir -p "${root}/etc" "${root}/lib/modules/${kv}"
+  cap="$(mktemp)"
+  mount() { :; }
+  umount() { :; }
+  chroot() { :; }
+  info() { :; }
+  live_extras_chroot_script() { printf '%s:%s\n' "$#" "${2:-}" >"${cap}"; echo :; }
+  install_live_extras "${root}"
+  got="$(cat "${cap}")"
+  rm -rf "${root}"; rm -f "${cap}"
+  [[ "${got}" == "2:${kv}" ]] || {
+    echo "  FAIL: payload called with '${got}' (want packages + kver '${kv}')" >&2
+    exit 1
+  }
+  echo "  ok: detected kernel passed as the payload's kver argument"
+) || TEST_FAILURES=$((TEST_FAILURES + 1))
+
+echo "test: detect_live_root_kernel expects exactly one kernel in the live root"
+kroot="$(mktemp -d)"
+mkdir -p "${kroot}/lib/modules/${kv}"
+got_kv="$(detect_live_root_kernel "${kroot}")"
+assert_eq "${kv}" "${got_kv}" "single /lib/modules entry echoed"
+mkdir -p "${kroot}/lib/modules/6.13.0-amd64"
+assert_fails "two kernels rejected" detect_live_root_kernel "${kroot}"
+assert_fails "kernel-less root rejected" detect_live_root_kernel "$(mktemp -d)"
+rm -rf "${kroot}"
 
 echo "test: build_write_iso_args replaces the live squashfs and strips d-i"
 iso_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
@@ -166,5 +236,173 @@ unsquashfs() { printf 'Found a valid SQUASHFS superblock\nCompression zstd\nBloc
 params="$(detect_squashfs_params /any.squashfs)"
 unset -f unsquashfs
 assert_eq "zstd 1048576" "${params}" "parses Compression + Block size from unsquashfs -s"
+
+echo "test: parse_live_boot_paths extracts ALL /live kernel/initrd names (issue #111 U1)"
+cfg_versioned='
+label live
+  kernel /live/vmlinuz-6.12.41+deb13-amd64
+  append initrd=/live/initrd.img-6.12.41+deb13-amd64 boot=live
+menuentry "Live" {
+  linux  /live/vmlinuz-6.12.41+deb13-amd64 boot=live
+  initrd /live/initrd.img-6.12.41+deb13-amd64
+}'
+pair="$(parse_live_boot_paths "${cfg_versioned}")"
+assert_eq $'/live/vmlinuz-6.12.41+deb13-amd64\n/live/initrd.img-6.12.41+deb13-amd64' \
+  "${pair}" "versioned /live names parsed from isolinux + grub text"
+cfg_generic='kernel /live/vmlinuz
+append initrd=/live/initrd.img boot=live'
+pair="$(parse_live_boot_paths "${cfg_generic}")"
+assert_eq $'/live/vmlinuz\n/live/initrd.img' "${pair}" "generic /live names parsed"
+# The real 13.5 medium: grub.cfg uses versioned names, isolinux/live.cfg the
+# generic ones — BOTH must come back so the golden pair maps over every name.
+cfg_mixed=$'linux /live/vmlinuz-6.12.86+deb13-amd64\ninitrd /live/initrd.img-6.12.86+deb13-amd64\nkernel /live/vmlinuz\nappend initrd=/live/initrd.img boot=live'
+pair="$(parse_live_boot_paths "${cfg_mixed}")"
+assert_eq $'/live/vmlinuz /live/vmlinuz-6.12.86+deb13-amd64\n/live/initrd.img /live/initrd.img-6.12.86+deb13-amd64' \
+  "${pair}" "mixed generic + versioned names both returned (stock 13.5 layout)"
+assert_fails "initrd-less cfg rejected" parse_live_boot_paths 'kernel /live/vmlinuz'
+assert_fails "empty cfg rejected" parse_live_boot_paths ''
+
+echo "test: build_write_iso_args extra map pairs ride between the tree edits and the replay"
+g_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso \
+  /ws/golden/boot/vmlinuz-6.12.41 /live/vmlinuz \
+  /ws/golden/boot/initrd.img-6.12.41 /live/initrd.img \
+  /ws/install-store /hypr-repo \
+  /ws/installer-payload /hypr-installer)"
+for tgt in /live/vmlinuz /live/initrd.img /hypr-repo /hypr-installer; do
+  assert_contains "${g_args}" "${tgt}" "extra map targets ${tgt}"
+done
+kmap_idx="$(printf '%s\n' "${g_args}" | grep -n -- '^/live/vmlinuz$' | head -n1 | cut -d: -f1)"
+sqfs_idx="$(printf '%s\n' "${g_args}" | grep -n -- '^/live/filesystem.squashfs$' | head -n1 | cut -d: -f1)"
+greplay_idx="$(printf '%s\n' "${g_args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
+if [[ -n "${kmap_idx}" && -n "${sqfs_idx}" && -n "${greplay_idx}" ]] &&
+  ((sqfs_idx < kmap_idx && kmap_idx < greplay_idx)); then
+  echo "  ok: extra maps ordered after the squashfs map, before the boot replay"
+else
+  echo "  FAIL: extra-map ordering wrong (sqfs=${sqfs_idx} kmap=${kmap_idx} replay=${greplay_idx})" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+assert_fails "odd extra map arguments rejected (must be SRC TARGET pairs)" \
+  bash -c 'source tools/iso-assemble.sh; build_write_iso_args /s /q /o /lonely'
+
+echo "test: patch_boot_menu_timeouts gives both stock forever-menus a 5s auto-boot"
+mtmp="$(mktemp -d)"
+# Stub xorriso: "extract" fixture configs mirroring the stock image (grub:
+# no timeout line at all; isolinux: timeout 0), read-only like osirrox.
+# shellcheck disable=SC2317  # invoked indirectly by patch_boot_menu_timeouts
+xorriso() {
+  printf 'set default=0\nterminal_output gfxterm\n' >"${mtmp}/menu-config.cfg"
+  printf 'default vesamenu.c32\ntimeout 0\n' >"${mtmp}/menu-isolinux.cfg"
+  chmod 444 "${mtmp}/menu-config.cfg" "${mtmp}/menu-isolinux.cfg"
+}
+pairs="$(patch_boot_menu_timeouts /stock.iso "${mtmp}")"
+assert_contains "$(cat "${mtmp}/menu-config.cfg")" "set timeout=5" \
+  "grub config gains a 5s timeout (stock has none — menu waits forever)"
+assert_contains "$(cat "${mtmp}/menu-isolinux.cfg")" "timeout 50" \
+  "isolinux timeout 0 becomes 50 (5s in 1/10s units)"
+assert_contains "${pairs}" "/boot/grub/config.cfg" "emits the grub map target"
+assert_contains "${pairs}" "/isolinux/isolinux.cfg" "emits the isolinux map target"
+unset -f xorriso
+rm -rf "${mtmp}"
+
+echo "test: ISO_EFI_APPEND_IMG replaces the EFI boot equipment AFTER the replay"
+# The mmx64-bearing image must ride as appended partition 2 with the
+# El-Torito EFI entry pointed into it — never as a -map over the tree's
+# /boot/grub/efi.img (a size change there breaks APM replay; hit live
+# 2026-07-13, xorriso SORRY "Cannot make proposal to produce APM").
+e_args="$(ISO_EFI_APPEND_IMG=/ws/efi-mok.img \
+  build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+assert_contains "${e_args}" "-append_partition" "EFI image rides as an appended partition"
+assert_contains "${e_args}" "/ws/efi-mok.img" "appended partition carries the rebuilt image"
+assert_contains "${e_args}" \
+  "efi_path=--interval:appended_partition_2:all::" \
+  "El-Torito EFI entry points into appended partition 2"
+if printf '%s\n' "${e_args}" | grep -q "^/boot/grub/efi.img$"; then
+  echo "  FAIL: tree /boot/grub/efi.img mapped (breaks APM replay)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: tree /boot/grub/efi.img left untouched"
+fi
+ereplay_idx="$(printf '%s\n' "${e_args}" | grep -n -- '^replay$' | head -n1 | cut -d: -f1)"
+eapp_idx="$(printf '%s\n' "${e_args}" | grep -n -- '^-append_partition$' | head -n1 | cut -d: -f1)"
+if [[ -n "${ereplay_idx}" && -n "${eapp_idx}" ]] && ((eapp_idx > ereplay_idx)); then
+  echo "  ok: appended-partition override ordered after the replay (later spec wins)"
+else
+  echo "  FAIL: -append_partition must come after replay (replay=${ereplay_idx} app=${eapp_idx})" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# Without the env the argv is byte-identical to before (no EFI override).
+p_args="$(build_write_iso_args /s.iso /tmp/new.squashfs /o.iso)"
+if printf '%s\n' "${p_args}" | grep -q "append_partition"; then
+  echo "  FAIL: EFI override emitted without ISO_EFI_APPEND_IMG" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: no EFI override without ISO_EFI_APPEND_IMG"
+fi
+
+echo "test: stage_golden_home seeds the live home pointing at the MEDIUM installer"
+groot="$(mktemp -d)"
+# Golden root ships skel configs; the live home must inherit them (user-setup
+# adopts a pre-seeded /home/user, so adduser never copies skel into it).
+mkdir -p "${groot}/etc/skel/.config/hypr"
+printf -- '-- skel autostart\n' >"${groot}/etc/skel/.config/hypr/autostart.lua"
+(
+  LIVE_STORE_ROOT="/run/live/medium"
+  LIVE_INSTALLER_SUBDIR="hypr-installer"
+  chown() { :; }   # ownership needs root; the guard is exercised, not the kernel
+  stage_golden_home "${groot}"
+)
+ghome="${groot}${LIVE_USER_HOME}"
+gauto_lua="${ghome}/.config/hypr/autostart.lua"
+assert_contains "$(cat "${gauto_lua}")" "-- skel autostart" \
+  "skel configs are copied into the live home"
+assert_contains "$(cat "${gauto_lua}")" "live-welcome" \
+  "live-only autostart hook appended AFTER the skel copy"
+if [[ -x "${ghome}/.local/bin/live-welcome" ]]; then
+  echo "  ok: live-welcome terminal script staged executable"
+else
+  echo "  FAIL: live-welcome script missing or not executable" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+assert_contains "$(cat "${ghome}/.local/bin/live-welcome")" "WIPES ALL DISKS" \
+  "welcome text warns before the unattended launcher"
+if ! grep -q "live-welcome" "${groot}/etc/skel/.config/hypr/autostart.lua"; then
+  echo "  ok: skel autostart.lua untouched (hook is live-home-only)"
+else
+  echo "  FAIL: live hook leaked into /etc/skel (would reach installed users)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+# The banner terminal is the live entry point; the graphical welcome dialog
+# is suppressed there via its pre-seeded done-marker — but ONLY there
+# (installed users get theirs from skel, which must stay marker-free).
+if [[ -f "${ghome}/.config/hypr/.welcome-shown" ]]; then
+  echo "  ok: live home pre-seeds .welcome-shown (no dialog in the live demo)"
+else
+  echo "  FAIL: live home lacks .welcome-shown; dialog pops over the banner terminal" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+if [[ -e "${groot}/etc/skel/.config/hypr/.welcome-shown" ]]; then
+  echo "  FAIL: .welcome-shown leaked into skel (installed users lose the welcome)" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+else
+  echo "  ok: skel stays marker-free (installed users still get the welcome)"
+fi
+glink="${groot}${LIVE_USER_HOME}/${LIVE_INSTALLER_ENTRY}"
+gwant="/run/live/medium/hypr-installer/${LIVE_INSTALLER_ENTRY}"
+if [[ -L "${glink}" && "$(readlink "${glink}")" == "${gwant}" ]]; then
+  echo "  ok: golden home installer symlink -> ${gwant}"
+else
+  echo "  FAIL: golden home installer symlink missing or wrong target" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+gauto="${groot}${LIVE_USER_HOME}/${LIVE_AUTOINSTALL_ENTRY}"
+if [[ -f "${gauto}" && -x "${gauto}" ]]; then
+  echo "  ok: golden home carries the autoinstall launcher"
+  assert_contains "$(cat "${gauto}")" "/run/live/medium/hypr-installer" \
+    "launcher invokes the medium-side installer"
+else
+  echo "  FAIL: golden home autoinstall launcher missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES+1))
+fi
+rm -rf "${groot}"
 
 finish_test

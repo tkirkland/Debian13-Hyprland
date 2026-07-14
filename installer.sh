@@ -44,30 +44,23 @@ on_error() {
   if [[ "${current_phase:-}" == "storage" ]]; then
     report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
   fi
-  # policy-rc.d is intentionally NOT removed here: it must keep guarding
-  # apt runs on resumed installations. Only phase_cleanup removes it.
-  kill_target_processes
-  teardown_chroot_binds
-  if mountpoint -q "${TARGET}${ESP_MOUNT}" 2>/dev/null; then
-    umount "${TARGET}${ESP_MOUNT}" 2>/dev/null || true
-  fi
-  zfs unmount -a 2>/dev/null || true
-  if zpool list "${POOL_NAME}" >/dev/null 2>&1; then
-    if ! zpool export "${POOL_NAME}" 2>/dev/null; then
-      warn "Could not export ${POOL_NAME}; export manually before reboot."
-      report_disk_holders "${DISK1}" "${DISK2}" "${DISK3}" || true
-    fi
-  fi
-  release_target_propagation
+  # Same teardown as cleanup/standalone runs (it preserves policy-rc.d,
+  # which must keep guarding apt on resumed installations, and removes the
+  # temporary on-ISO repo wiring a failed offline phase would otherwise
+  # leak onto the installed system).
+  teardown_target_tree
   exit "${exit_code}"
 }
 
 # EXIT trap: fatal() exits without tripping the ERR trap, so binds must
 # also be torn down here on any nonzero exit (spec: every failure path).
+# The on-ISO repo wiring goes first: it is bound under /run, which
+# teardown_chroot_binds unmounts.
 on_exit() {
   local exit_code=$?
   activity_abort
   if ((exit_code != 0)); then
+    teardown_target_iso_repo
     teardown_chroot_binds
   fi
 }
@@ -102,7 +95,7 @@ main() {
   # driver need the package choice settled (and non-free enabled) first.
   detect_nvidia_gpu
   case "${RUN_PHASE}" in
-    full | system | hyprland | verify) require_nvidia_choice ;;
+    full | customize | verify) require_nvidia_choice ;;
   esac
   # Debian's non-free component is only needed for the "debian"/package
   # modes; "open" installs from NVIDIA's own repository.
@@ -118,7 +111,7 @@ main() {
   # /etc/adjtime in the system phase; settle it before preflight so an
   # unattended run without --rtc fails fast instead of mid-install.
   case "${RUN_PHASE}" in
-    full | system) require_rtc_choice ;;
+    full | customize) require_rtc_choice ;;
   esac
 
   # --yes promises an unattended run, but create_user would still block on
@@ -128,8 +121,8 @@ main() {
   # stamped done.
   if ((ASSUME_YES)) && [[ -z "${USER_PASSWORD}" ]]; then
     case "${RUN_PHASE}" in
-      full | system)
-        phase_done system ||
+      full | customize)
+        phase_done customize ||
           fatal "--yes requires USER_PASSWORD to be set (the password" \
             "prompt would block an unattended run, and sudo needs one)."
         ;;
@@ -137,7 +130,7 @@ main() {
   fi
   if ((!IS_INTERACTIVE)) && ((!HYPR_AUTOLOGIN)) &&
     [[ -z "${USER_PASSWORD}" ]] &&
-    [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "system" ]]; then
+    [[ "${RUN_PHASE}" == "full" || "${RUN_PHASE}" == "customize" ]]; then
     fatal "Non-interactive run with no USER_PASSWORD and no --autologin:" \
       "the installed console would not support a login. Set USER_PASSWORD=... " \
       "or pass --autologin."
@@ -154,19 +147,38 @@ main() {
   if [[ "${RUN_PHASE}" != "full" ]]; then
     current_phase="${RUN_PHASE}"
     case "${RUN_PHASE}" in
-      system | boot | hyprland | verify) ensure_target_ready ;;
+      deploy | customize | boot | verify) ensure_target_ready ;;
     esac
     activity_start "Phase: ${RUN_PHASE}"
     "phase_${RUN_PHASE//-/_}"
     activity_success
+    # A standalone run must hand the disks back bootable: a pool left
+    # imported stays stamped with the live env's hostid and the installed
+    # system's next boot drops to the initramfs shell (issue #50). Same
+    # teardown as the cleanup phase minus the service guard (mid-install
+    # resumes still need it); a later phase re-imports via
+    # ensure_target_ready.
+    # Exclusion, not an allowlist: a future pool-touching phase must fall
+    # into the teardown by default or it recreates issue #50. Only
+    # preflight mounts nothing (cleanup returned early above and owns its
+    # own teardown).
+    case "${RUN_PHASE}" in
+      preflight) ;;
+      *)
+        info "Releasing the target (unmount + pool export)..."
+        teardown_target_tree
+        ;;
+    esac
     return 0
   fi
 
   ensure_target_ready
-  local name=""
-  for name in storage bootstrap system boot hyprland verify; do
+  local name="" idx=0
+  local -a phases=(storage deploy customize boot verify)
+  for name in "${phases[@]}"; do
+    idx=$((idx + 1))
     current_phase="${name}"
-    run_phase "${name}" "phase_${name}"
+    run_phase "${name}" "phase_${name}" "${idx}" "${#phases[@]}"
   done
   current_phase="cleanup"
   activity_start "Phase: cleanup"

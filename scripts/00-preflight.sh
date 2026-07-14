@@ -53,6 +53,14 @@ validate_identity_settings() {
     fatal "Invalid LOCALE '${LOCALE}'."
   [[ "${TARGET_HOSTNAME}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ||
     fatal "Invalid TARGET_HOSTNAME '${TARGET_HOSTNAME}'."
+  [[ "${XKB_LAYOUT}" =~ ^[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*$ ]] ||
+    fatal "Invalid XKB_LAYOUT '${XKB_LAYOUT}'."
+  [[ "${XKB_VARIANT}" =~ ^[A-Za-z0-9_,:-]*$ ]] ||
+    fatal "Invalid XKB_VARIANT '${XKB_VARIANT}'."
+  [[ "${XKB_MODEL}" =~ ^[a-zA-Z0-9_-]+$ ]] ||
+    fatal "Invalid XKB_MODEL '${XKB_MODEL}'."
+  [[ "${XKB_OPTIONS}" =~ ^[A-Za-z0-9_:,-]*$ ]] ||
+    fatal "Invalid XKB_OPTIONS '${XKB_OPTIONS}'."
 }
 
 detect_virt() {
@@ -204,18 +212,19 @@ select_disks() {
 # Whether the on-ISO package store was found (set by discover_iso_repo).
 ISO_STORE_PRESENT=0
 
-# Discover the on-ISO package store. When booted from our offline ISO the store
-# is an apt-ftparchive repo (dists/ + pool/) shipped either embedded in the live
-# root (ISO_LIVE_REPO, current ISOs) or as a top-level directory on the medium
-# (ISO_MEDIUM_REPO, older ISOs). Probe the in-root path first. Its presence — a
-# Packages index under dists/ — points the offline machinery at it (CACHE_REPO_DIR)
-# and makes offline-from-store the DEFAULT mode (see check_network). This runs
-# regardless of the --offline/--online flags so a forced-offline install also
-# installs from the store.
+# Discover the on-ISO package store. When booted from our ISO the store is an
+# apt-ftparchive repo (dists/ + pool/) shipped as a top-level directory on the
+# ISO9660 medium (ISO_MEDIUM_REPO — golden ISOs' NVIDIA install store, issue
+# #111) or embedded in the live root (ISO_LIVE_REPO, legacy full-pool ISOs).
+# Probe the medium first: the golden squashfs deliberately embeds nothing.
+# Its presence — a Packages index under dists/ — points the offline machinery
+# at it (CACHE_REPO_DIR) and makes offline-from-store the DEFAULT mode (see
+# check_network). This runs regardless of the --offline/--online flags so a
+# forced-offline install also installs from the store.
 discover_iso_repo() {
   ISO_STORE_PRESENT=0
   local root="" idx=""
-  for root in "${ISO_LIVE_REPO}" "${ISO_MEDIUM_REPO}"; do
+  for root in "${ISO_MEDIUM_REPO}" "${ISO_LIVE_REPO}"; do
     [[ -n "${root}" ]] || continue
     idx="$(find "${root}/dists" -type f -name Packages -print -quit \
       2>/dev/null || true)"
@@ -308,11 +317,31 @@ detect_live_environment() {
 }
 
 bootstrap_live_tools() {
-  local missing=() pkg="" need_zfs_build=0 running_kernel=""
+  local missing=() pkg="" need_zfs_build=0 running_kernel="" kernel_pin=""
+  local prebuilt_kmod=0
   running_kernel="$(uname -r)"
+  # The kernel stamp names the kernel the store's prebuilt zfs artifacts were
+  # built for: KERNEL on golden media (one build kernel, step_resolve_kernel),
+  # KERNEL_PINNED on legacy media (step_pin_kernel). A mismatch is loud but
+  # NOT fatal: the module baked into the live squashfs keeps this session
+  # working; only the offline zfs fallback below is degraded.
+  if cache_repo_exists; then
+    if [[ -f "${CACHE_REPO_DIR}/KERNEL" ]]; then
+      kernel_pin="$(<"${CACHE_REPO_DIR}/KERNEL")"
+    elif [[ -f "${CACHE_REPO_DIR}/KERNEL_PINNED" ]]; then
+      kernel_pin="$(<"${CACHE_REPO_DIR}/KERNEL_PINNED")"
+    fi
+    [[ -z "${kernel_pin}" || "${kernel_pin}" == "${running_kernel}" ]] ||
+      warn "This medium was built for kernel ${kernel_pin} but" \
+        "${running_kernel} is running — the offline zfs path may be degraded."
+  fi
+  # debootstrap/apt-ftparchive left this set with the golden pivot (issue
+  # #111): nothing debootstraps at install time, and the NVIDIA store cannot
+  # supply them anyway. unsquashfs is the deploy phase's one hard tool.
   local -A pkg_probe=(
-    [debootstrap]=debootstrap [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
-    [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool [apt-utils]=apt-ftparchive
+    [gdisk]=sgdisk [parted]=partprobe [mdadm]=mdadm
+    [dosfstools]=mkfs.vfat [zfsutils-linux]=zpool
+    [squashfs-tools]=unsquashfs
     [git]=git [curl]=curl [efibootmgr]=efibootmgr [rsync]=rsync
     [psmisc]=fuser [openssl]=openssl
   )
@@ -320,11 +349,21 @@ bootstrap_live_tools() {
     command -v "${pkg_probe[${pkg}]}" >/dev/null 2>&1 || missing+=("${pkg}")
   done
   # zfs-dkms has no binary probe of its own: a loadable module for the
-  # RUNNING kernel is the requirement. Headers must match the running
-  # kernel, not the archive's newest (see LIVE_KERNEL_HEADERS).
+  # RUNNING kernel is the requirement (normally short-circuited: our ISOs
+  # bake the module into the live squashfs at build time). Headers must match
+  # the running kernel, not the archive's newest (see LIVE_KERNEL_HEADERS).
   if ! modinfo zfs >/dev/null 2>&1; then
     need_zfs_build=1
-    missing+=(zfs-dkms "${LIVE_KERNEL_HEADERS}")
+    # Offline store whose pin matches the running kernel: install the PREBUILT
+    # upstream kmod deb from the pool — no compile. Any other case (no store,
+    # pin mismatch, online) keeps the dkms path.
+    if [[ -n "${kernel_pin}" && "${kernel_pin}" == "${running_kernel}" ]] &&
+      ! ((NETWORK_AVAILABLE)); then
+      missing+=("openzfs-zfs-modules-${running_kernel}")
+      prebuilt_kmod=1
+    else
+      missing+=(zfs-dkms "${LIVE_KERNEL_HEADERS}")
+    fi
   fi
   ((${#missing[@]} == 0)) && {
     info "All live tools present."
@@ -346,6 +385,13 @@ bootstrap_live_tools() {
     install_from_cache_repo "${missing[@]}"
   else
     fatal "No network and no cache; cannot install: ${missing[*]}"
+  fi
+
+  # The prebuilt kmod deb drops files under /lib/modules but runs no depmod
+  # of its own — refresh the index before the modprobe below (mirrors
+  # install_zfs_offline's explicit depmod).
+  if ((prebuilt_kmod)); then
+    depmod "${running_kernel}"
   fi
 
   if ! modprobe zfs 2>/dev/null; then

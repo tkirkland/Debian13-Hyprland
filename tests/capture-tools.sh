@@ -30,8 +30,8 @@ TARGET="${tmp}/target"
 
 stage_capture_helpers
 
-shot="${TARGET}/usr/local/bin/linux-screenshot"
-rec="${TARGET}/usr/local/bin/linux-screen-record"
+shot="${TARGET}/usr/bin/linux-screenshot"
+rec="${TARGET}/usr/bin/linux-screen-record"
 
 [[ -x "${shot}" ]] || { echo "  FAIL: linux-screenshot not staged executable" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
 [[ -x "${rec}"  ]] || { echo "  FAIL: linux-screen-record not staged executable" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
@@ -68,7 +68,7 @@ trap 'rm -rf "${tmp}" "${nv_tmp}"' EXIT
   NVIDIA_DRIVER="nvidia-open"
   stage_capture_helpers
 )
-nv_rec_txt="$(<"${nv_tmp}/target/usr/local/bin/linux-screen-record")"
+nv_rec_txt="$(<"${nv_tmp}/target/usr/bin/linux-screen-record")"
 assert_contains "${nv_rec_txt}" 'SCREEN_RECORD_CODEC:-h264_nvenc' \
   "linux-screen-record defaults to h264_nvenc when NVIDIA driver selected"
 if printf '%s' "${nv_rec_txt}" | grep -q 'SCREEN_RECORD_CODEC:-libx264'; then

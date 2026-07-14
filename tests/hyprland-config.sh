@@ -47,7 +47,23 @@ local mainMod = "SUPER"
 ------------------
 hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))
 hl.bind(mainMod .. " + C", hl.dsp.window.close())
+
+---------------
+---- INPUT ----
+---------------
+hl.input({
+    kb_layout = "us",
+    kb_variant = "",
+    kb_options = "",
+})
 EOF
+
+# Keyboard layout: the generated config must carry the layout the system
+# phase wrote to the target's /etc/default/keyboard (pins the upstream
+# kb_layout assignment format the installer's sed patch targets).
+mkdir -p "${TARGET}/etc/default"
+printf 'XKBMODEL="pc105"\nXKBLAYOUT="de"\nXKBVARIANT="nodeadkeys"\nXKBOPTIONS=""\n' \
+  >"${TARGET}/etc/default/keyboard"
 
 configure_session
 
@@ -120,11 +136,11 @@ fi
 # marker lands only when the app exits cleanly — app first, && touch after).
 if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
   deb="$(<"${hypr_dir}/hypr-deb.lua")"
-  assert_contains "${deb}" "/usr/local/bin/hyprland-welcome" \
+  assert_contains "${deb}" "/usr/bin/hyprland-welcome" \
     "welcome app launched by absolute path"
   # shellcheck disable=SC2016  # literal needle; $marker expands at login
   assert_contains "${deb}" \
-    '/usr/local/bin/hyprland-welcome && touch "$marker"' \
+    '/usr/bin/hyprland-welcome && touch "$marker"' \
     "marker touched only after the app is acknowledged"
   # The exec must run on the hyprland.start event — a bare top-level
   # hl.exec_cmd fires at config-parse time, before the compositor is up,
@@ -138,7 +154,7 @@ if [[ -f "${hypr_dir}/hypr-deb.lua" ]]; then
     "swww-daemon autostarts on session start"
   assert_contains "${deb}" "loginctl lock-session" \
     "SUPER+L locks the session (hyprlock via hypridle)"
-  assert_contains "${deb}" "/usr/local/bin/swww-cycle" \
+  assert_contains "${deb}" "/usr/bin/swww-cycle" \
     "SUPER+SHIFT+W cycles wallpapers"
   assert_contains "${deb}" 'hl.bind("Print", hl.dsp.exec_cmd("linux-screenshot region"))' \
     "Print captures a region via linux-screenshot"
@@ -164,9 +180,42 @@ else
   echo "  ok: legacy hyprland.conf is not generated"
 fi
 
+# Keyboard layout: the input module's kb_layout/kb_variant assignments are
+# repointed at the target's /etc/default/keyboard values, and the greeter
+# reads XKB_DEFAULT_* from /etc/environment via pam_env (a non-us user must
+# be able to type their password at tuigreet).
+if [[ -f "${hypr_dir}/input.lua" ]]; then
+  input_txt="$(<"${hypr_dir}/input.lua")"
+  assert_contains "${input_txt}" 'kb_layout = "de"' \
+    "kb_layout repointed at the configured layout"
+  assert_contains "${input_txt}" 'kb_variant = "nodeadkeys"' \
+    "kb_variant repointed at the configured variant"
+else
+  echo "  FAIL: input.lua module missing" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+env_file="${TARGET}/etc/environment"
+if [[ -f "${env_file}" ]]; then
+  assert_contains "$(<"${env_file}")" "XKB_DEFAULT_LAYOUT=de" \
+    "greeter XKB layout staged in /etc/environment"
+  assert_contains "$(<"${env_file}")" "XKB_DEFAULT_VARIANT=nodeadkeys" \
+    "greeter XKB variant staged in /etc/environment"
+else
+  echo "  FAIL: /etc/environment not staged" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+# Resume safety: a second run must not duplicate the XKB_DEFAULT_ lines.
+configure_session
+if [[ "$(grep -c '^XKB_DEFAULT_LAYOUT=' "${env_file}")" == "1" ]]; then
+  echo "  ok: re-run keeps a single XKB_DEFAULT_LAYOUT line (resume-safe)"
+else
+  echo "  FAIL: re-run duplicated XKB_DEFAULT_ lines in /etc/environment" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
 # Quiet VT handoff (issue #12): the session must launch through the
 # journal-routing wrapper so uwsm/Hyprland chatter never paints VT1.
-wrapper="${TARGET}/usr/local/bin/hypr-session"
+wrapper="${TARGET}/usr/bin/hypr-session"
 if [[ -x "${wrapper}" ]]; then
   echo "  ok: hypr-session wrapper staged executable"
   assert_contains "$(<"${wrapper}")" "systemd-cat" \
@@ -192,16 +241,17 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 greetd_cfg="$(<"${TARGET}/etc/greetd/config.toml")"
-assert_contains "${greetd_cfg}" '/usr/local/bin/hypr-session' \
+assert_contains "${greetd_cfg}" '/usr/bin/hypr-session' \
   "greetd session command uses the wrapper"
 
-# hyprdim.service (issue #66): the unit FILE is installer glue and stays under
-# /usr/local, but its ExecStart points at the COMPILED binary, which Phase 2
-# moved to /usr (shipped as a .deb). It must therefore exec /usr/bin/hyprdim,
-# never the pre-move /usr/local/bin/hyprdim.
-dim_unit="${TARGET}/usr/local/lib/systemd/user/hyprdim.service"
+# hyprdim.service (issue #66): the unit FILE is installer glue, now placed
+# unpackaged at /usr/lib/systemd/user next to the packaged units. Its
+# ExecStart points at the COMPILED binary, which Phase 2 moved to /usr
+# (shipped as a .deb) — it must exec /usr/bin/hyprdim, never the pre-move
+# /usr/local/bin/hyprdim.
+dim_unit="${TARGET}/usr/lib/systemd/user/hyprdim.service"
 if [[ -f "${dim_unit}" ]]; then
-  echo "  ok: hyprdim.service unit staged under /usr/local (installer glue)"
+  echo "  ok: hyprdim.service unit staged at /usr/lib/systemd/user (installer glue)"
   dim_txt="$(<"${dim_unit}")"
   assert_contains "${dim_txt}" "ExecStart=/usr/bin/hyprdim" \
     "hyprdim.service execs the compiled binary at its /usr prefix"
@@ -216,15 +266,22 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
-# Hand-written glue scripts stay in /usr/local (NOT owned by any .deb): the
-# compiled-binary /usr migration must not have dragged these along.
-for glue in usr/local/bin/swww-cycle usr/local/bin/drm-reprobe \
-  usr/local/bin/brightness-sync usr/local/bin/hypr-session; do
+# Hand-written glue scripts now live in /usr/bin alongside the compiled
+# stack (still NOT owned by any .deb): the glue migration must stage them
+# there, and nothing may still write the pre-move /usr/local copies.
+for glue in usr/bin/swww-cycle usr/bin/drm-reprobe \
+  usr/bin/brightness-sync usr/bin/hypr-session; do
   if [[ -f "${TARGET}/${glue}" ]]; then
-    echo "  ok: glue script ${glue##*/} staged under /usr/local"
+    echo "  ok: glue script ${glue##*/} staged under /usr/bin"
   else
-    echo "  FAIL: glue script ${glue} missing from /usr/local" >&2
+    echo "  FAIL: glue script ${glue} missing from /usr/bin" >&2
     TEST_FAILURES=$((TEST_FAILURES + 1))
+  fi
+  if [[ -e "${TARGET}/usr/local/${glue#usr/}" ]]; then
+    echo "  FAIL: stale pre-move copy at usr/local/${glue#usr/}" >&2
+    TEST_FAILURES=$((TEST_FAILURES + 1))
+  else
+    echo "  ok: no stale pre-move copy of ${glue##*/} under /usr/local"
   fi
 done
 
@@ -301,7 +358,7 @@ if [[ -f "${greeter_entry}" ]]; then
   entry_txt="$(<"${greeter_entry}")"
   assert_contains "${entry_txt}" 'Name=Hyprland' \
     "curated session is named Hyprland"
-  assert_contains "${entry_txt}" 'Exec=/usr/local/bin/hypr-session' \
+  assert_contains "${entry_txt}" 'Exec=/usr/bin/hypr-session' \
     "curated session launches the silent wrapper"
   # The bypassing upstream names must NOT be reintroduced here.
   if [[ "${entry_txt}" == *"uwsm start"* ]]; then
@@ -358,6 +415,7 @@ cp "${tmp}/target${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
   "${offline_target}/usr/share/hypr/hyprland.lua"
 (
   in_target() { :; }
+  # shellcheck disable=SC2030  # deliberately subshell-local retarget
   TARGET="${offline_target}"
   HYPR_AUTOLOGIN=1
   configure_session
@@ -368,5 +426,47 @@ else
   echo "  FAIL: offline config not generated from /usr/share/hypr/hyprland.lua" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
+
+# swww-cycle honesty (first-login marker gates on its rc): applying nothing
+# must exit NONZERO — an exit-0 no-op wrote the done-marker with no wallpaper
+# ever set (hit live 2026-07-13). Stub swww (daemon up, zero outputs) and
+# sleep (the output-wait loop must not stall the suite).
+sc_bin="$(mktemp -d)"
+cat >"${sc_bin}/swww" <<'EOF'
+#!/bin/sh
+[ "$1" = query ] && exit 0
+exit 0
+EOF
+cat >"${sc_bin}/sleep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "${sc_bin}/swww" "${sc_bin}/sleep"
+rc=0
+# shellcheck disable=SC2031  # top-level TARGET; the earlier (…) copy is unrelated
+PATH="${sc_bin}:${PATH}" "${TARGET}/usr/bin/swww-cycle" >/dev/null 2>&1 || rc=$?
+if ((rc != 0)); then
+  echo "  ok: swww-cycle exits nonzero when no output got a wallpaper"
+else
+  echo "  FAIL: swww-cycle exit-0 with no outputs re-breaks the first-login marker" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+# With an output but an empty wallpaper dir: still an honest failure.
+cat >"${sc_bin}/swww" <<'EOF'
+#!/bin/sh
+if [ "$1" = query ]; then echo "eDP-1: 1920x1080"; fi
+exit 0
+EOF
+rc=0
+# shellcheck disable=SC2031  # top-level TARGET; the earlier (…) copy is unrelated
+SWWW_WALLPAPER_DIR="${sc_bin}/nowhere" PATH="${sc_bin}:${PATH}" \
+  "${TARGET}/usr/bin/swww-cycle" >/dev/null 2>&1 || rc=$?
+if ((rc != 0)); then
+  echo "  ok: swww-cycle exits nonzero with no wallpapers to apply"
+else
+  echo "  FAIL: swww-cycle exit-0 with no images re-breaks the first-login marker" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+rm -rf "${sc_bin}"
 
 finish_test

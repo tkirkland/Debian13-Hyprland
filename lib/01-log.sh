@@ -12,6 +12,8 @@ ACTIVITY_PAUSED="${ACTIVITY_PAUSED:-0}"
 ACTIVITY_LABEL="${ACTIVITY_LABEL:-}"
 ACTIVITY_PID="${ACTIVITY_PID:-}"
 ACTIVITY_START="${ACTIVITY_START:-0}"
+# Seconds of log silence before the spinner flags a probable hang.
+ACTIVITY_STALL_SECS="${ACTIVITY_STALL_SECS:-30}"
 
 info() {
   if ((CONSOLE_READY)) && [[ "${CONSOLE_MODE}" != "verbose" ]] &&
@@ -125,6 +127,7 @@ with_console() {
 activity_spawn_renderer() {
   (
     local frames=$'|/-\\' frame=0 tick=0 elapsed cols last="" line
+    local size="" grown="" fresh=${SECONDS} stall=0
     cols="$(stty size <&3 2>/dev/null | cut -d' ' -f2)" || cols=""
     [[ "${cols}" =~ ^[0-9]+$ ]] || cols=100
     trap 'exit 0' HUP INT TERM
@@ -134,10 +137,21 @@ activity_spawn_renderer() {
       # stays cheap even across a long build.
       if ((tick % 5 == 0)) && [[ -n "${LOG_FILE:-}" && -r "${LOG_FILE}" ]]; then
         last="$(tail -n1 "${LOG_FILE}" 2>/dev/null | tr -d '\r')" || last=""
+        # Log growth is the liveness signal: a size static past the
+        # threshold flags a probable hang until output resumes.
+        grown="$(stat -c %s "${LOG_FILE}" 2>/dev/null)" || grown="${size}"
+        if [[ "${grown}" != "${size}" ]]; then
+          size="${grown}"
+          fresh=${SECONDS}
+        fi
       fi
       elapsed=$((SECONDS - ACTIVITY_START))
+      stall=$((SECONDS - fresh))
       line="[${frames:frame:1}] ${ACTIVITY_LABEL} (${elapsed}s)"
-      [[ -n "${last}" ]] && line="${line}  ${last}"
+      ((stall > ACTIVITY_STALL_SECS)) && line="${line} (no output for ${stall}s)"
+      # "last:" keeps a tool's own completion banner reading as context,
+      # never as the installer finishing.
+      [[ -n "${last}" ]] && line="${line}  last: ${last}"
       printf '\r\033[K%s' "${line:0:cols}" >&3 || true
       frame=$(((frame + 1) % 4))
       tick=$((tick + 1))

@@ -1,6 +1,8 @@
 # shellcheck shell=bash
-# Base system: identity, locale/tz, fstab, mdadm.conf, base packages,
-# user account, ZFS boot prerequisites (hostid, cachefile, initramfs).
+# Customize (issue #111): per-machine work on the unpacked golden tree —
+# live-artifact prune, identity/hygiene regen, locale/tz/keymap, NVIDIA from
+# the medium store, user account, session config, MOK signing, ZFS boot
+# prerequisites (hostid, cachefile, initramfs).
 
 write_identity() {
   echo "${TARGET_HOSTNAME}" >"${TARGET}/etc/hostname"
@@ -26,8 +28,112 @@ write_mdadm_conf() {
   mkdir -p "${TARGET}/etc/mdadm"
   {
     echo "HOMEHOST <ignore>"
+    # mdmonitor exits 1 ("not monitoring") without a mail target; root is
+    # the Debian-postinst default the golden bake skips.
+    echo "MAILADDR root"
     mdadm --detail --scan
   } >"${TARGET}/etc/mdadm/mdadm.conf"
+}
+
+# The golden image boots as the live session, so the copied tree carries the
+# live plumbing. Purge the live packages, then autoremove their orphaned
+# deps. The autologin live-config hook is NOT owned by any package (staged
+# raw by the build), so purging live-config does not remove it — explicit rm.
+# /home/user and the autoinstall launcher live in the live OVERLAY / on the
+# medium and never reach the pristine squashfs; removed defensively anyway
+# (an unexpected copy must not ship a passwordless live account).
+prune_live_artifacts() {
+  info "Pruning live-session artifacts from the target..."
+  in_target "
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get purge -y ${LIVE_PURGE_PACKAGES[*]}
+    apt-get autoremove --purge -y
+  "
+  rm -f "${TARGET}/usr/lib/live/config/2999-hypr-autologin"
+  # Live-only sshd password-auth drop-in (step_golden_session bakes it for
+  # the keyless live session); installed systems keep stock Debian policy.
+  rm -f "${TARGET}/etc/ssh/sshd_config.d/20-hypr-live.conf"
+  rm -rf "${TARGET}/home/user"
+}
+
+# The image ships an EMPTY /etc/machine-id (golden_hygiene_scrub); the live
+# session's generated id lives in the overlay and never reaches this tree.
+# Give the installed system its own identity now — systemd-machine-id-setup
+# is chroot-safe (it only writes the file). The dbus copy is dropped; dbus
+# recreates it from /etc/machine-id at boot.
+regen_machine_id() {
+  rm -f "${TARGET}/etc/machine-id" "${TARGET}/var/lib/dbus/machine-id"
+  in_target "systemd-machine-id-setup"
+}
+
+# The image ships NO ssh host keys (scrubbed at build; the live session
+# regenerates its own into the overlay via hypr-sshd-keygen). Generate this
+# machine's set; the rm makes a resumed run regenerate rather than keep a
+# half-written set.
+regen_ssh_host_keys() {
+  rm -f "${TARGET}"/etc/ssh/ssh_host_*
+  in_target "ssh-keygen -A"
+}
+
+# Re-sign the golden image's dkms-built modules (zfs/spl, ddcci, ...) with
+# the per-machine MOK key (ensure_mok_key). The image bakes them signed by a
+# throwaway build-chroot key that was scrubbed from the image — the fresh
+# signature is appended and the kernel validates the outermost one, which
+# also keeps a resumed run idempotent in effect. Signed with the kernel's
+# sign-file exactly as dkms itself does (via linux-kbuild; there is no
+# kmodsign on Debian), then depmod, so configure_zfs_boot_support's
+# update-initramfs captures signed, resolvable modules. dkms 3.x ships the
+# modules xz-compressed; sign-file only signs the raw .ko, so unpack/repack
+# around it. The repack MUST use --check=crc32 (dkms's own compress_xz_opts):
+# module decompression happens IN THE KERNEL (finit_module), whose xz decoder
+# supports only CRC32/none — a default-check (CRC64) repack boots to
+# "decompression failed" and an initramfs prompt (hit live 2026-07-13).
+sign_dkms_modules() {
+  local kver=""
+  kver="$(find "${TARGET}/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+    2>/dev/null | sort -V | tail -n1)"
+  [[ -n "${kver}" ]] ||
+    fatal "No kernel under ${TARGET}/lib/modules — deploy did not unpack a golden tree?"
+  info "MOK-signing the dkms-built modules for ${kver}..."
+  in_target "
+    set -e
+    kos=\"\$(find /lib/modules/${kver}/updates/dkms \\
+      \\( -name '*.ko' -o -name '*.ko.xz' \\) 2>/dev/null || true)\"
+    [[ -n \"\${kos}\" ]] ||
+      { echo 'no dkms-built modules under /lib/modules/${kver}/updates/dkms' >&2; exit 1; }
+    sf=\"\$(ls /usr/lib/linux-kbuild-*/scripts/sign-file 2>/dev/null | head -n1)\"
+    [[ -x \"\${sf}\" ]] ||
+      { echo 'sign-file not found under /usr/lib/linux-kbuild-*/scripts' >&2; exit 1; }
+    for ko in \${kos}; do
+      case \"\${ko}\" in
+        *.ko.xz)
+          unxz \"\${ko}\"
+          \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko%.xz}\"
+          xz --check=crc32 --lzma2=dict=1MiB -f \"\${ko%.xz}\"
+          ;;
+        *)
+          \"\${sf}\" sha512 '${MOK_KEY}' '${MOK_CRT}' \"\${ko}\"
+          ;;
+      esac
+    done
+    depmod '${kver}'
+  "
+}
+
+# The golden image bakes the firstboot runner DISABLED with no jobs — a
+# standard install is COMPLETE at reboot (module builds and signing all
+# happen at image-build or install time, never on the user's first boot).
+# Arm the runner only when some path actually staged a job; it self-disables
+# once no jobs remain.
+enable_firstboot() {
+  if ! compgen -G "${TARGET}/usr/lib/hypr-deb/firstboot.d/*.sh" >/dev/null; then
+    info "No firstboot jobs staged; leaving the runner dormant."
+    return 0
+  fi
+  [[ -x "${TARGET}/usr/sbin/hypr-deb-firstboot" ]] ||
+    fatal "Firstboot runner missing from the golden image (/usr/sbin/hypr-deb-firstboot)."
+  in_target "systemctl enable hypr-deb-firstboot.service"
 }
 
 # Best-effort autodetection with the config defaults as fallback. Timezone
@@ -91,6 +197,88 @@ configure_locale_tz() {
       ;;
     *) fatal "RTC_MODE not set (preflight require_rtc_choice should have ensured this)." ;;
   esac
+}
+
+# Best-effort keyboard autodetection, mirroring autodetect_locale_tz: only
+# members the operator did NOT set (per-member *_EXPLICIT markers) are
+# replaced. Source is the live session's /etc/default/keyboard — present on
+# stock Debian live media and reflecting the operator's live-boot choice;
+# localectl would need a running systemd-localed, which a TTY/chroot lacks.
+# Candidates are validated against the TARGET's xkb rules (evdev.lst, from
+# xkb-data in TARGET_BASE_PACKAGES) so a garbage live config can never
+# produce a broken target, AND re-checked against the preflight regexes:
+# autodetect runs after validate_identity_settings, and these values are
+# host-interpolated into a root chroot command string — this re-validation
+# is the injection guard.
+autodetect_keymap() {
+  [[ -z "${XKB_LAYOUT_EXPLICIT}" ]] || return 0
+  local src="${XKB_DETECT_SRC:-/etc/default/keyboard}" rules_lst=""
+  rules_lst="${TARGET}/usr/share/X11/xkb/rules/evdev.lst"
+  local layout="" variant="" options="" comp="" comps=() ok=1
+  layout="$(sed -n 's/^XKBLAYOUT="\?\([^"]*\)"\?$/\1/p' "${src}" 2>/dev/null)"
+  variant="$(sed -n 's/^XKBVARIANT="\?\([^"]*\)"\?$/\1/p' "${src}" 2>/dev/null)"
+  options="$(sed -n 's/^XKBOPTIONS="\?\([^"]*\)"\?$/\1/p' "${src}" 2>/dev/null)"
+  if [[ -z "${layout}" || ! -f "${rules_lst}" ]] ||
+    ! [[ "${layout}" =~ ^[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*$ ]]; then
+    info "Keyboard autodetect unavailable; using fallback ${XKB_LAYOUT}."
+    return 0
+  fi
+  # Every comma component must exist in the target's '! layout' section.
+  IFS=',' read -ra comps <<<"${layout}"
+  for comp in "${comps[@]}"; do
+    awk '/^! layout/{f=1;next}/^!/{f=0}f{print $1}' "${rules_lst}" |
+      grep -qx "${comp}" || ok=0
+  done
+  if ((!ok)); then
+    info "Keyboard autodetect unavailable; using fallback ${XKB_LAYOUT}."
+    return 0
+  fi
+  XKB_LAYOUT="${layout}"
+  # Variant/options only replace members the operator left unset. Variants
+  # are validated against the first layout component only (variants are
+  # per-layout; exotic comma-aligned variant lists are dropped, not guessed).
+  if [[ -z "${XKB_VARIANT_EXPLICIT}" ]]; then
+    XKB_VARIANT=""
+    if [[ -n "${variant}" && "${variant}" =~ ^[A-Za-z0-9_-]+$ ]] &&
+      awk '/^! variant/{f=1;next}/^!/{f=0}f{print $1, $2}' "${rules_lst}" |
+      grep -q "^${variant} ${layout%%,*}:"; then
+      XKB_VARIANT="${variant}"
+    fi
+  fi
+  if [[ -z "${XKB_OPTIONS_EXPLICIT}" ]]; then
+    XKB_OPTIONS=""
+    [[ "${options}" =~ ^[A-Za-z0-9_:,-]+$ ]] && XKB_OPTIONS="${options}"
+  fi
+  info "Keyboard layout autodetected from live ${src}:" \
+    "${XKB_LAYOUT}${XKB_VARIANT:+ (${XKB_VARIANT})}"
+}
+
+# Writes the Debian-idiomatic keyboard config and lets the packages consume
+# it. Needs keyboard-configuration/console-setup and xkb-data installed, so
+# it must run after install_base_packages (same constraint as locale).
+configure_keymap() {
+  autodetect_keymap
+  cat >"${TARGET}/etc/default/keyboard" <<EOF
+# Managed by hypr-deb (installer.sh). Consult keyboard(5).
+XKBMODEL="${XKB_MODEL}"
+XKBLAYOUT="${XKB_LAYOUT}"
+XKBVARIANT="${XKB_VARIANT}"
+XKBOPTIONS="${XKB_OPTIONS}"
+BACKSPACE="guess"
+EOF
+  # dpkg-reconfigure syncs the debconf DB from the file (upgrades keep the
+  # choice instead of reverting to us) and console-setup's postinst runs
+  # setupcon --save-only, prebuilding /etc/console-setup/cached_* which
+  # keyboard-setup.service applies at early boot — the VT has the layout
+  # from the first console. Chroot-safe: --save-only only writes files.
+  in_target "
+    set -e
+    dpkg -s keyboard-configuration >/dev/null 2>&1 ||
+      { echo 'keyboard-configuration package missing' >&2; exit 1; }
+    export DEBIAN_FRONTEND=noninteractive
+    dpkg-reconfigure -f noninteractive keyboard-configuration console-setup
+  "
+  info "Keyboard layout: ${XKB_LAYOUT}${XKB_VARIANT:+ (${XKB_VARIANT})}"
 }
 
 # systemd-timesyncd (in TARGET_BASE_PACKAGES) keeps the installed system's
@@ -159,6 +347,21 @@ detect_cpu_vendor() {
   grep -m1 '^vendor_id' /proc/cpuinfo 2>/dev/null | awk '{print $NF}'
 }
 
+# Echo the given package names minus Debian's zfs-* set (one per line).
+# Upstream OpenZFS replaces Debian's zfs-* on every path — installing them
+# first would only churn (and dkms-build) packages immediately replaced — so
+# both the installer's base install and the golden-image build (issue #111)
+# filter them through this one helper.
+filter_zfs_debian_packages() {
+  local p=""
+  for p in "$@"; do
+    case " ${ZFS_DEBIAN_PACKAGES[*]} " in
+      *" ${p} "*) continue ;;
+    esac
+    printf '%s\n' "${p}"
+  done
+}
+
 install_base_packages() {
   local pkgs=("${TARGET_BASE_PACKAGES[@]}") p="" filtered=()
   # VMware guest integration (display resize, clipboard, time sync,
@@ -167,18 +370,7 @@ install_base_packages() {
   if [[ "${VIRT_TYPE}" == "vmware" ]]; then
     pkgs+=(open-vm-tools open-vm-tools-desktop)
   fi
-  # Upstream OpenZFS replaces Debian's zfs-* on BOTH paths: online builds it from
-  # source (install_zfs_from_source), offline installs the prebuilt upstream debs
-  # from the on-ISO pool (install_zfs_offline). Either way, installing Debian's
-  # zfs-* first would only churn (and dkms-build) packages we immediately replace,
-  # so filter them out of the base set unconditionally.
-  for p in "${pkgs[@]}"; do
-    case " ${ZFS_DEBIAN_PACKAGES[*]} " in
-      *" ${p} "*) continue ;;
-    esac
-    filtered+=("${p}")
-  done
-  pkgs=("${filtered[@]}")
+  mapfile -t pkgs < <(filter_zfs_debian_packages "${pkgs[@]}")
   # Microcode is CPU-vendor-specific: the other vendor's blob is dead weight on
   # the installed system. Install ONLY the microcode matching this CPU. BOTH debs
   # stay in the offline pool (TARGET_BASE_PACKAGES is unchanged, so the ISO still
@@ -221,13 +413,30 @@ install_base_packages() {
 # Offline counterpart to install_zfs_from_source: the upstream OpenZFS debs were
 # already built into the on-ISO pool at build time (tools/build-iso.sh step_zfs),
 # so install them BY NAME from the file:// store the bootstrap phase set up,
-# replacing Debian's 2.3.x — NO network, NO source build. Mirrors the source
-# path's install tail: keep the pam module out (the build filter never pools it,
-# but purge defensively if a prior attempt pulled it, then regenerate the PAM
-# stack from clean profiles), and apt-mark the metapackages manual so the later
-# Hyprland build-dep autoremove cannot reap them.
+# replacing Debian's 2.3.x — NO network, NO source build. The dkms deb IS part
+# of the set: its build for the target kernel happens right here in the chroot
+# (headers are present via linux-headers-amd64), because the install must be
+# COMPLETE at reboot — no module builds on the user's first boot. dkms signs
+# with the MOK key at /var/lib/dkms/mok.key (generating it if ensure_mok_key
+# has not run yet) and depmods; the explicit autoinstall below is load-bearing:
+# the postinst can configure before the headers in one transaction and
+# silently skip the build.
+# Mirrors the source path's install tail: keep the pam module out (the build
+# filter never pools it, but purge defensively if a prior attempt pulled it,
+# then regenerate the PAM stack from clean profiles), and apt-mark the
+# packages manual so the later Hyprland build-dep autoremove cannot reap
+# them.
 install_zfs_offline() {
   info "Installing upstream OpenZFS from the offline store (replaces Debian's zfs-*)..."
+  # The target boots the kernel the pool's linux-image-amd64 resolves to —
+  # KERNEL_TARGET, written by build-iso step_pin_kernel. That is often NEWER
+  # than KERNEL_PINNED (the live kernel): security-suite kernels move between
+  # point releases. Build the module for the TARGET kernel.
+  local ktarget=""
+  ktarget="$(cat "${CACHE_REPO_DIR}/KERNEL_TARGET" 2>/dev/null)" || true
+  [[ -n "${ktarget}" ]] ||
+    fatal "Offline store carries no KERNEL_TARGET (${CACHE_REPO_DIR}) —" \
+      "rebuild the ISO (tools/build-iso.sh writes it)."
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -238,6 +447,9 @@ install_zfs_offline() {
     rm -f /usr/share/pam-configs/*zfs*
     pam-auth-update --package
     apt-mark manual ${ZFS_UPSTREAM_PACKAGES[*]} >/dev/null
+    dkms autoinstall -k '${ktarget}'
+    depmod '${ktarget}'
+    modinfo -k '${ktarget}' zfs >/dev/null
   "
   in_target "zfs version" || true
 }
@@ -250,16 +462,40 @@ install_zfs_offline() {
 # Debian's 2.3.x. dkms signs the modules with the MOK key generated by
 # ensure_mok_key — enrollment at the first-boot MokManager screen only
 # matters once secure boot is switched on, so nothing is deferred. ONLY
-# native-deb-utils is built: that set includes openzfs-zfs-dkms (whose
-# postinst builds for the TARGET's kernels — headers are already
-# installed). native-deb-kmod is deliberately avoided: it compiles modules
-# for the RUNNING (live) kernel and its package dependency drags that
-# kernel image into the target. Upstream's deb recipes swallow
+# native-deb-utils is INSTALLED here: that set includes openzfs-zfs-dkms
+# (whose postinst builds for the TARGET's kernels — headers are already
+# installed). native-deb-kmod is avoided on this in-target path: it compiles
+# modules for one fixed kernel and its package dependency drags that kernel
+# image into the target. On the BUILD path (ZFS_DEB_POOL set, issue #110)
+# native-deb-kmod IS additionally built — against the pinned kernel's headers
+# (KERNEL_PINNED, asserted by build-iso step_pin_kernel to match the pool's
+# linux-image) — and pooled, never installed: the offline target installs
+# that prebuilt kmod deb instead of compiling. Upstream's deb recipes swallow
 # dpkg-buildpackage failures (the lock-file rm masks the exit code), so
 # the required packages are asserted by name.
 install_zfs_from_source() {
   local tag="" jobs="${HYPR_BUILD_JOBS:-}"
   [[ -n "${jobs}" ]] || jobs="\$(nproc)"
+  # Build path only: point configure at the PINNED kernel's headers so the
+  # kmod deb is built for exactly the live/target kernel — never whatever
+  # configure's uname-r-based default would find in the buildroot. Empty on
+  # the install path, keeping that script byte-identical.
+  #
+  # Debian SPLITS headers: generic files (incl. linux/objtool.h) live in
+  # linux-headers-<ver>-common, arch/config files in linux-headers-<ver>-<arch>.
+  # configure must get src=common + obj=arch (what the /lib/modules/<ver>/
+  # {source,build} symlinks encode). Passing the arch dir as --with-linux makes
+  # zfs's objtool asm-macro check grep a nonexistent $LINUX/include/linux/
+  # objtool.h, silently unset HAVE_STACK_FRAME_NON_STANDARD_ASM, and define a
+  # duplicate .macro that breaks every icp .S assembly.
+  local cfg_flags="" ksrc_common=""
+  if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
+    [[ -n "${KERNEL_PINNED:-}" ]] ||
+      fatal "ZFS_DEB_POOL set but KERNEL_PINNED unset (step_pin_kernel must run first)."
+    ksrc_common="/usr/src/linux-headers-${KERNEL_PINNED%-*}-common"
+    cfg_flags=" --with-linux=${ksrc_common}"
+    cfg_flags+=" --with-linux-obj=/usr/src/linux-headers-${KERNEL_PINNED}"
+  fi
   # Tags include dev-cycle markers (zfs-X.Y.99) that outrank real releases
   # in a version sort; the GitHub API names the actual latest release.
   tag="$(curl -fsSL --retry 3 \
@@ -295,13 +531,56 @@ install_zfs_from_source() {
     apt-get install -y ${ZFS_BUILD_PACKAGES[*]}
     cd /var/tmp/openzfs
     ./autogen.sh
-    ./configure
+    ./configure${cfg_flags}
     make -j\"${jobs}\" native-deb-utils
     for p in openzfs-zfs-dkms openzfs-zfsutils openzfs-zfs-initramfs \
       openzfs-zfs-zed; do
       ls /var/tmp/\${p}_*.deb >/dev/null 2>&1 ||
         { echo \"required package not built: \${p}\" >&2; exit 1; }
     done"
+  if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
+    # Also build the prebuilt kernel-module debs (issue #110): one for the
+    # PINNED live kernel (the squashfs bake / live preflight consume it) and,
+    # when the pool's linux-image-amd64 resolves newer (security suite moved
+    # past the stock ISO), one for the TARGET kernel the installed system
+    # boots (install_zfs_offline consumes that one). Pooled only — the
+    # throwaway buildroot never installs them.
+    # KVERS/KSRC/KOBJ must be passed EXPLICITLY: upstream debian/rules
+    # defaults KVERS to the build host's 'uname -r', and its module build
+    # re-runs ./configure with --with-linux=$(KSRC) --with-linux-obj=$(KOBJ),
+    # clobbering cfg_flags' pin. KSRC/KOBJ carry the same common/arch header
+    # split as cfg_flags above (see that comment for why).
+    # Two hard guards per build: the ls (a wrong-kernel build produces a
+    # differently-named deb) and a vermagic check on the packaged .ko (a
+    # back-to-back rebuild that failed to reconfigure would package stale
+    # objects under the right name).
+    [[ -n "${KERNEL_TARGET:-}" ]] ||
+      fatal "ZFS_DEB_POOL set but KERNEL_TARGET unset (step_pin_kernel must run first)."
+    local kv="" kmod_kvers=("${KERNEL_PINNED}")
+    [[ "${KERNEL_TARGET}" != "${KERNEL_PINNED}" ]] && kmod_kvers+=("${KERNEL_TARGET}")
+    for kv in "${kmod_kvers[@]}"; do
+      # Two resets between kmod builds, both proven necessary live by the
+      # vermagic guard below:
+      #  - make clean: kbuild keeps the previous kernel's module objects and
+      #    dh_builddeb packages them under the new name;
+      #  - rm the rules' configure stamp (override_dh_configure_modules is
+      #    stamped in the tree root): with the stamp present the 2nd run
+      #    skips the reconfigure and compiles FRESH objects against the 1st
+      #    kernel's config — right mtime, wrong vermagic.
+      zfs_script+="
+    make -s clean >/dev/null 2>&1 || true
+    rm -f override_dh_configure_modules_stamp
+    make -j\"${jobs}\" native-deb-kmod KVERS='${kv}' KSRC='/usr/src/linux-headers-${kv%-*}-common' KOBJ='/usr/src/linux-headers-${kv}'
+    ls /var/tmp/openzfs-zfs-modules-${kv}_*.deb >/dev/null 2>&1 ||
+      { echo 'required package not built: openzfs-zfs-modules-${kv}' >&2; exit 1; }
+    rm -rf /var/tmp/kmodchk
+    dpkg-deb -x /var/tmp/openzfs-zfs-modules-${kv}_*.deb /var/tmp/kmodchk
+    kmod_vm=\"\$(modinfo -F vermagic \"\$(find /var/tmp/kmodchk -name 'zfs.ko*' | head -n1)\" | awk '{print \$1}')\"
+    [[ \"\${kmod_vm}\" == '${kv}' ]] ||
+      { echo \"kmod deb for ${kv} packages vermagic \${kmod_vm}\" >&2; exit 1; }
+    rm -rf /var/tmp/kmodchk"
+    done
+  fi
   if [[ -z "${ZFS_DEB_POOL:-}" ]]; then
     zfs_script+="
     debs=\"\$(ls /var/tmp/*.deb |
@@ -323,13 +602,15 @@ install_zfs_from_source() {
   fi
   in_target "${zfs_script}"
   # Optionally seed an offline pool with the same filtered .debs (copy, so
-  # the in-target install above is unaffected). Resolved host-side.
+  # the in-target install above is unaffected). Resolved host-side. The kmod
+  # deb (zfs-modules) is deliberately IN the pool set (issue #110): the
+  # offline target installs it prebuilt instead of dkms-compiling.
   if [[ -n "${ZFS_DEB_POOL:-}" ]]; then
     mkdir -p "${ZFS_DEB_POOL}"
     local deb
     for deb in "${TARGET}"/var/tmp/*.deb; do
       [[ -e "${deb}" ]] || continue
-      [[ "${deb##*/}" =~ zfs-modules|test|dracut|dbg|-dev|pam ]] && continue
+      [[ "${deb##*/}" =~ test|dracut|dbg|-dev|pam ]] && continue
       cp "${deb}" "${ZFS_DEB_POOL}/"
     done
   fi
@@ -394,27 +675,16 @@ install_nvidia_driver() {
   # the =VERSION requests drive apt without the priority-1000 pin overriding.
   local branch_select="apt-get install -y '${pin_pkg}'"
   [[ -n "${ver}" ]] && branch_select=":  # exact version pinned: no branch pin"
-  # Online only: install the cuda-keyring and refresh against NVIDIA's repo.
-  # Offline resolves everything from the /hypr-repo file:// source already set
-  # up in the bootstrap phase (Trusted: yes), so neither step runs.
-  local online_prep=":"
-  if ((NETWORK_AVAILABLE)); then
-    curl -fsSL --retry 3 -o "${TARGET}/tmp/cuda-keyring.deb" \
-      "${NVIDIA_REPO_KEYRING_URL}" ||
-      fatal "Could not fetch NVIDIA repo keyring (${NVIDIA_REPO_KEYRING_URL})."
-    online_prep="dpkg -i /tmp/cuda-keyring.deb
-      rm -f /tmp/cuda-keyring.deb
-      apt-get update"
-  fi
-  local src="the on-ISO store (/hypr-repo)"
-  ((NETWORK_AVAILABLE)) && src="NVIDIA's CUDA repo"
+  # STORE-ONLY (issue #111): everything resolves from the medium store's
+  # file:// source the deploy phase wired up (Trusted: yes) — no network
+  # keyring fetch, no NVIDIA-repo apt update, ever. Install-time network
+  # use was removed with the golden pivot (#94: advise, never act).
   local desc="branch ${NVIDIA_BRANCH}"
   [[ -n "${ver}" ]] && desc="${desc}, version ${ver}"
-  info "Installing NVIDIA ${flavor} driver (${desc}) from ${src}..."
+  info "Installing NVIDIA ${flavor} driver (${desc}) from the install store..."
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
-    ${online_prep}
     # The two nvidia-driver-pinning-<branch> packages Conflict on one file;
     # purge any installed one before (re)selecting the branch.
     if dpkg-query -W 'nvidia-driver-pinning-*' >/dev/null 2>&1; then
@@ -435,32 +705,18 @@ EOF
   in_target "update-initramfs -u"
 }
 
-# Addon artifacts: things apt cannot provide, dropped into addons/.
-#   *.deb  installed via apt from the local file (dependencies resolved
-#          from the enabled sources; the chroot policy-rc.d guard blocks
-#          service starts like for every other package).
+# Addon artifacts, install-time half (issue #111): addons/*.deb and
+# addons/*.list bake into the golden image at BUILD time (build-iso
+# step_golden_rootfs); only the per-install pieces run here.
 #   *.sh   user-authored customization hooks, EXECUTED inside the target
-#          chroot as root, in lexical order, after packages and addon
-#          debs (live-build hook semantics). A failing script fails the
-#          phase by name.
+#          chroot as root, in lexical order (live-build hook semantics).
+#          A failing script fails the phase by name.
 #   *.run  staged executable at /opt/addons in the target and NOT
 #          executed: vendor runfiles (VMware etc.) compile kernel modules
 #          and start services against the RUNNING system, so they must be
 #          run manually after first boot.
-install_addon_artifacts() {
+install_addon_runtime() {
   local f="" staged=0
-  if compgen -G "addons/*.deb" >/dev/null; then
-    info "Installing addon .deb packages..."
-    rm -rf "${TARGET}/var/tmp/addon-debs"
-    install -d "${TARGET}/var/tmp/addon-debs"
-    cp addons/*.deb "${TARGET}/var/tmp/addon-debs/"
-    in_target "
-      set -e
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get install -y /var/tmp/addon-debs/*.deb
-    "
-    rm -rf "${TARGET}/var/tmp/addon-debs"
-  fi
   if compgen -G "addons/*.sh" >/dev/null; then
     rm -rf "${TARGET}/var/tmp/addon-scripts"
     install -d "${TARGET}/var/tmp/addon-scripts"
@@ -510,6 +766,13 @@ install_brave() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y brave-browser
   "
+  stage_brave_apt_source
+}
+
+# Keyring + deb822 source staging half of install_brave, split out (issue
+# #111): the golden-image build installs brave-browser in its one apt
+# transaction and stages the update channel through this alone.
+stage_brave_apt_source() {
   local keyring_src="${CACHE_REPO_DIR}/${BRAVE_KEYRING_NAME}"
   if [[ ! -f "${keyring_src}" ]]; then
     warn "Brave archive keyring absent from the offline store (${keyring_src});"
@@ -589,6 +852,35 @@ harvest_walker_launcher() {
   rm -rf "${tmp}"
 }
 
+# Build-time harvester for the adw-gtk3 GTK3 theme (the build host is online):
+# download the release tarball and EXTRACT its two theme dirs (adw-gtk3/,
+# adw-gtk3-dark/) into DEST, so the ISO ships them in the offline store
+# (DEST = ${CACHE_DIR}/repo/${ADW_GTK3_STORE_SUBDIR}, grafted to
+# ${CACHE_REPO_DIR}/${ADW_GTK3_STORE_SUBDIR} on the ISO). install_adw_gtk3_theme
+# copies them from there at install time — NO network. Pairs with build-iso's
+# step_stage_adw_gtk3. ADW_GTK3_VERSION pins the release; empty resolves the
+# latest tag (build-time only). Release asset name is adw-gtk3${tag}.tar.xz
+# (e.g. adw-gtk3v6.5.tar.xz — verified against the v6.5 release assets).
+harvest_adw_gtk3() {
+  local dest="${1:?dest dir}" tag="${ADW_GTK3_VERSION:-}" tmp=""
+  [[ -n "${tag}" ]] ||
+    tag="$(resolve_latest_release_tag "${ADW_GTK3_REPO_URL}" "${ADW_GTK3_TAG_PATTERN}")"
+  info "Harvesting adw-gtk3 ${tag} theme into ${dest}..."
+  tmp="$(mktemp -d)"
+  curl -fsSL --retry 3 -o "${tmp}/adw-gtk3.tar.xz" \
+    "${ADW_GTK3_REPO_URL}/releases/download/${tag}/adw-gtk3${tag}.tar.xz" ||
+    { rm -rf "${tmp}"; fatal "Failed to harvest adw-gtk3 (${tag})."; }
+  # Extract into tmp and swap into dest only on success — a mid-extract tar
+  # failure must not leave a partial store for a later build's reuse check to
+  # accept (pairs with step_stage_adw_gtk3's leaf-file check).
+  tar -xJf "${tmp}/adw-gtk3.tar.xz" -C "${tmp}" adw-gtk3 adw-gtk3-dark ||
+    { rm -rf "${tmp}"; fatal "adw-gtk3 ${tag} tarball lacks the theme dirs."; }
+  rm -rf "${dest}"
+  install -d "${dest}"
+  mv "${tmp}/adw-gtk3" "${tmp}/adw-gtk3-dark" "${dest}/"
+  rm -rf "${tmp}"
+}
+
 # LythMono is not packaged. Its TTFs are harvested into the offline store at
 # build time (harvest_lythmono_fonts); install them from that LOCAL store path
 # into the system font path so all users get them, fully OFFLINE — NO GitHub
@@ -600,9 +892,25 @@ install_lythmono_fonts() {
     return 0
   fi
   info "Installing LythMono fonts from the offline store (${src})..."
-  install -d "${TARGET}/usr/local/share/fonts/LythMono"
-  cp "${src}"/*.ttf "${TARGET}/usr/local/share/fonts/LythMono/"
-  in_target "fc-cache -f /usr/local/share/fonts/LythMono"
+  install -d "${TARGET}/usr/share/fonts/LythMono"
+  cp "${src}"/*.ttf "${TARGET}/usr/share/fonts/LythMono/"
+  in_target "fc-cache -f /usr/share/fonts/LythMono"
+}
+
+# adw-gtk3 is not packaged in Debian. Its theme dirs are harvested into the
+# offline store at build time (harvest_adw_gtk3); copy them from that LOCAL
+# store path into the system theme path, fully OFFLINE — NO GitHub fetch, no
+# network branch. The gschema override (write_portal_config, 60-hyprland.sh)
+# selects adw-gtk3-dark as the GTK theme (issues #51/#76).
+install_adw_gtk3_theme() {
+  local src="${CACHE_REPO_DIR}/${ADW_GTK3_STORE_SUBDIR}"
+  if [[ ! -d "${src}/adw-gtk3" || ! -d "${src}/adw-gtk3-dark" ]]; then
+    warn "adw-gtk3 theme absent from the offline store (${src}); skipping."
+    return 0
+  fi
+  info "Installing adw-gtk3 theme from the offline store (${src})..."
+  install -d "${TARGET}/usr/share/themes"
+  cp -r "${src}/adw-gtk3" "${src}/adw-gtk3-dark" "${TARGET}/usr/share/themes/"
 }
 
 create_user() {
@@ -750,24 +1058,34 @@ i2c-dev
 EOF
 }
 
-phase_system() {
+phase_customize() {
+  # Standalone offline --phase=customize runs arrive with no store wired into
+  # the target (every standalone run tears its wiring down); mount-gated
+  # no-op on full runs. Same pairing as install_grub/install_sdboot.
+  wire_offline_repo
+  # Hygiene first: the pruned live hooks and fresh identity must exist before
+  # anything below reads or rebuilds against the tree.
+  prune_live_artifacts
+  regen_machine_id
+  regen_ssh_host_keys
   write_identity
   write_fstab
   write_mdadm_conf
   ensure_mok_key
-  install_base_packages
+  sign_dkms_modules
   install_nvidia_driver
-  install_addon_artifacts
-  install_chezmoi
-  install_brave
-  install_lythmono_fonts
+  install_addon_runtime
   configure_locale_tz
+  configure_keymap
   configure_time_sync
-  neuter_ssh_vsock_generator
   create_user
+  # After create_user: it writes into the real home the skel copy created.
+  configure_session_local
   # Before configure_zfs_boot_support: its update-initramfs -u -k all then
   # captures the modprobe.d/modules-load.d drop-ins without a second rebuild.
   configure_audio_quirks
   configure_ddcci
+  enable_firstboot
   configure_zfs_boot_support
+  unwire_offline_repo
 }

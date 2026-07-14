@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# Bootstrap: mount the target tree, debootstrap Debian (network or the on-ISO
-# repo), write the permanent Debian apt sources, and — offline — bind-mount
-# the on-ISO package store into the target with a temporary file:// apt source
-# so in-chroot apt resolves the offline packages during the install.
+# Deploy (issue #111): mount the target tree, unpack the golden rootfs — the
+# SAME squashfs the live session booted — onto the pool, and bind-mount the
+# medium's NVIDIA install store into the target with a temporary file:// apt
+# source so the customize phase's driver transaction resolves offline.
 
 # In-target path where the on-ISO package store is bind-mounted so apt's
 # file:// source resolves inside the chroot. Fixed (not derived from
@@ -29,14 +29,21 @@ ISO_TEMP_SOURCE_REL="etc/apt/sources.list.d/hypr-iso-temp.sources"
 # and they nest correctly.
 #
 # Because the self-bind makes ${TARGET} a mountpoint before any ZFS mount, the
-# dataset-mount guards below test FSTYPE==zfs (is the ROOT dataset mounted?),
-# NOT bare `mountpoint -q` (which the self-bind would satisfy spuriously and so
-# wrongly skip the dataset mount). release_target_propagation removes the
-# self-bind at cleanup and on the failure path.
+# dataset-mount guards below ask ZFS itself whether the ROOT dataset is
+# mounted, NOT bare `mountpoint -q` (which the self-bind would satisfy
+# spuriously) and NOT findmnt FSTYPE (with the self-bind under the dataset,
+# findmnt returns BOTH stacked mounts — multi-line — so the ==zfs test failed
+# on every second maintenance run in one live session, issue #50).
+# release_target_propagation removes the self-bind at cleanup and on the
+# failure path.
+root_dataset_mounted() {
+  [[ "$(zfs get -H -o value mounted "${ROOT_DATASET}" 2>/dev/null)" == yes ]]
+}
+
 isolate_target_propagation() {
   # Root dataset already mounted -> isolation happened on its original mount; a
   # late make-private cannot retract copies, so this is correctly a no-op.
-  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  root_dataset_mounted && return 0
   # ${TARGET} must exist before the self-bind: ensure_target_ready imports the
   # pool with -N (no mount) and never mkdir's it (the dataset mount used to
   # create it), so create it here to be self-sufficient regardless of caller.
@@ -51,7 +58,7 @@ isolate_target_propagation() {
 # zfs-unmounted and the pool exported. No-op unless only the bare self-bind
 # remains: it never unmounts a live ZFS ${TARGET}.
 release_target_propagation() {
-  [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" == zfs ]] && return 0
+  root_dataset_mounted && return 0
   mountpoint -q "${TARGET}" 2>/dev/null || return 0
   umount "${TARGET}" 2>/dev/null || umount -l "${TARGET}" 2>/dev/null ||
     warn "Could not remove ${TARGET} propagation self-bind."
@@ -72,7 +79,7 @@ mount_target_tree() {
   # run under set -e), so every mount is guarded. zfs mount -a is
   # natively idempotent. Isolate propagation BEFORE the root dataset mounts.
   isolate_target_propagation
-  if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then
+  if ! root_dataset_mounted; then
     zfs mount "${ROOT_DATASET}"
   fi
   zfs mount -a
@@ -90,10 +97,22 @@ ensure_target_ready() {
   if ! zpool list "${POOL_NAME}" >/dev/null 2>&1; then
     # -N: never automount on import — canmount=on children mounting before
     # the noauto root dataset would be shadowed by the root overlay-mount.
-    zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null || return 0
+    if ! zpool import -N -R "${TARGET}" "${POOL_NAME}" 2>/dev/null; then
+      # Pool nowhere to be found -> fresh install before storage; a no-op.
+      zpool import 2>/dev/null | grep -qE "^\s*pool: ${POOL_NAME}\$" || return 0
+      # The pool exists but refused a plain import. Routine on maintenance
+      # runs (issue #50): a root pool is never exported at shutdown, so once
+      # the installed system has booted, the live env's hostid no longer
+      # matches and import demands -f. The disks are this machine's own
+      # (preflight validated them), so force it; failing silently here used
+      # to surface as a misleading "No kernel found in ${TARGET}/boot".
+      info "Pool ${POOL_NAME} was last active on another hostid; importing with -f."
+      zpool import -f -N -R "${TARGET}" "${POOL_NAME}" ||
+        fatal "Pool ${POOL_NAME} exists but cannot be imported (see error above)."
+    fi
   fi
   isolate_target_propagation
-  if [[ "$(findmnt -no FSTYPE "${TARGET}" 2>/dev/null)" != zfs ]]; then
+  if ! root_dataset_mounted; then
     zfs mount "${ROOT_DATASET}"
     zfs mount -a
   fi
@@ -111,20 +130,53 @@ ensure_target_ready() {
   mount_chroot_binds
 }
 
-run_debootstrap() {
-  if [[ -f "${TARGET}/etc/debian_version" ]]; then
-    info "Target already bootstrapped; skipping debootstrap."
+# Echo the path of the golden squashfs on the live medium. LIVE_SQUASHFS
+# overrides for tests / exotic media. The stock boot layout ships it at
+# /live/filesystem.squashfs; tolerate a renamed single squashfs (Debian point
+# releases have moved names before), but refuse ambiguity — two squashfs on
+# one medium means the layout drifted and guessing installs the wrong root.
+locate_live_squashfs() {
+  if [[ -n "${LIVE_SQUASHFS:-}" ]]; then
+    [[ -f "${LIVE_SQUASHFS}" ]] ||
+      { warn "LIVE_SQUASHFS set but missing: ${LIVE_SQUASHFS}"; return 1; }
+    printf '%s\n' "${LIVE_SQUASHFS}"
     return 0
   fi
-  if ((NETWORK_AVAILABLE)); then
-    info "debootstrap ${SUITE} from ${MIRROR}..."
-    debootstrap --arch="${ARCH}" "${SUITE}" "${TARGET}" "${MIRROR}"
-  else
-    cache_validate
-    info "debootstrap ${SUITE} from the on-ISO repo (${CACHE_REPO_DIR})..."
-    debootstrap --no-check-gpg --arch="${ARCH}" "${SUITE}" "${TARGET}" \
-      "file://${CACHE_REPO_DIR}"
+  # set-u-safe: test contexts may source this file without lib/00-config.sh.
+  local live_dir="${LIVE_MEDIUM_DIR:-/run/live/medium}/live" found=()
+  if [[ -f "${live_dir}/filesystem.squashfs" ]]; then
+    printf '%s\n' "${live_dir}/filesystem.squashfs"
+    return 0
   fi
+  mapfile -t found < <(compgen -G "${live_dir}/*.squashfs" || true)
+  if ((${#found[@]} == 1)); then
+    printf '%s\n' "${found[0]}"
+    return 0
+  fi
+  warn "No unambiguous squashfs under ${live_dir} (found ${#found[@]})."
+  return 1
+}
+
+# Unpack the PRISTINE golden image (from the medium, not the running live
+# overlay — the overlay carries live-boot's mutations) onto the mounted
+# target tree. unsquashfs writes through the mounted dataset mountpoints and
+# preserves ownership/xattrs (running as root); -f makes a resumed deploy
+# overwrite a half-unpacked tree instead of aborting on existing files. The
+# golden /boot/efi is asserted empty at build time, so the mounted ESP is
+# never written.
+unpack_golden_rootfs() {
+  local sqfs=""
+  sqfs="$(locate_live_squashfs)" ||
+    fatal "Golden rootfs squashfs not found on the live medium" \
+      "(${LIVE_MEDIUM_DIR:-/run/live/medium}/live). Booted from something other" \
+      "than the hypr-deb ISO? Set LIVE_SQUASHFS=/path/to/filesystem.squashfs to override."
+  info "Unpacking golden rootfs ${sqfs##*/} onto ${TARGET}..."
+  unsquashfs -f -no-progress -d "${TARGET}" "${sqfs}" >/dev/null ||
+    fatal "unsquashfs of ${sqfs} onto ${TARGET} failed."
+  # Sanity: the tree must be the complete baked system, not a partial write.
+  [[ -f "${TARGET}/etc/debian_version" && -x "${TARGET}/usr/bin/Hyprland" ]] ||
+    fatal "Unpacked tree at ${TARGET} is not the golden image" \
+      "(missing /etc/debian_version or /usr/bin/Hyprland)."
 }
 
 # The PERMANENT apt sources of the installed system are always the real Debian
@@ -149,18 +201,16 @@ write_target_apt_sources() {
 # Requires mount_chroot_binds to have run first (the store is bound under /run).
 setup_target_iso_repo() {
   local mnt="${TARGET}${TARGET_ISO_REPO_MNT}"
-  # The offline store must actually exist before we bind it. On a resumed run
-  # the "already bootstrapped" short-circuit in run_debootstrap returns early
-  # and never reaches cache_validate, so this is the ONLY guard against a
-  # vanished store -- e.g. /run/live/medium got unmounted after preflight set
-  # CACHE_REPO_DIR to the on-ISO repo. Without it, `mount --bind` of a missing
-  # source dies with a cryptic kernel "special device ... does not exist".
+  # The store must actually exist before we bind it: /run/live/medium can
+  # vanish between preflight and here (medium unmounted mid-install). Without
+  # this guard, `mount --bind` of a missing source dies with a cryptic kernel
+  # "special device ... does not exist".
   if [[ ! -d "${CACHE_REPO_DIR}" ||
     ! -f "${CACHE_REPO_DIR}/dists/${SUITE}/main/binary-${ARCH}/Packages" ]]; then
-    fatal "Offline package store missing or incomplete at ${CACHE_REPO_DIR}" \
+    fatal "Install store missing or incomplete at ${CACHE_REPO_DIR}" \
       "(no dists/${SUITE}/main/binary-${ARCH}/Packages). The live medium" \
-      "(/run/live/medium) may have been unmounted since preflight; re-mount it" \
-      "and re-run, or pass --online to install from the network."
+      "(${LIVE_MEDIUM_DIR:-/run/live/medium}) may have been unmounted since" \
+      "preflight; re-mount it and re-run."
   fi
   mkdir -p "${mnt}"
   if ! mountpoint -q "${mnt}"; then
@@ -212,18 +262,20 @@ EOF
   chmod 755 "${TARGET}/usr/sbin/policy-rc.d"
 }
 
-phase_bootstrap() {
+phase_deploy() {
   mount_target_tree
-  run_debootstrap
+  # The medium NVIDIA store is the customize phase's only package source;
+  # gate on it BEFORE the (long) unpack so a yanked/failed medium dies fast.
+  cache_validate
+  unpack_golden_rootfs
+  # The image ships the permanent Debian mirror sources baked in
+  # (step_finalize_golden). The install itself runs STORE-ONLY: on a
+  # networked machine the reachable mirror would outbid the store's NVIDIA
+  # candidates in the customize transaction (the issue #110 failure mode).
+  # phase_cleanup rewrites the permanent sources after the last transaction.
+  rm -f "${TARGET}/etc/apt/sources.list.d/debian.sources"
   install_policy_rc_d
   mount_chroot_binds
-  # Offline: stand up the temporary file:// store source (+ bind) BEFORE writing
-  # the permanent Debian sources, so the in-chroot apt-get update below indexes
-  # the on-ISO packages. The unreachable Debian mirror is only warned about by
-  # apt (exit 0); the installed system keeps it as its permanent source.
-  if ((NETWORK_AVAILABLE == 0)); then
-    setup_target_iso_repo
-  fi
-  write_target_apt_sources
+  setup_target_iso_repo
   in_target "apt-get update"
 }

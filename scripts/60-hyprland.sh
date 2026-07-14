@@ -344,18 +344,22 @@ purge_build_deps() {
   fi
   info "Pinning runtime libraries of built binaries..."
   # Phase 2 moved the COMPILED stack to /usr (CMAKE_INSTALL_PREFIX=/usr,
-  # meson --prefix=/usr), so the built binaries and their libs now live in
-  # /usr/bin and /usr/lib, not /usr/local. Scan every installed binary, not
-  # just Hyprland: the protocol code generators hyprwayland-scanner and
-  # hyprwire-scanner link libpugixml.so.1 (package libpugixml1v5), whose
-  # only -dev provider (libpugixml-dev) is a purged build dep. Pinning
-  # solely off Hyprland + libs leaves those scanners' runtime libs
-  # unprotected, so the purge strips libpugixml1v5 and they break for every
-  # later source build (hyprlock/hypridle/swww add-ons).
+  # meson --prefix=/usr), and the hand-written glue now lives there too, so
+  # everything of ours is under /usr/bin and /usr/lib. Scan every installed
+  # binary, not just Hyprland: the protocol code generators
+  # hyprwayland-scanner and hyprwire-scanner link libpugixml.so.1 (package
+  # libpugixml1v5), whose only -dev provider (libpugixml-dev) is a purged
+  # build dep. Pinning solely off Hyprland + libs leaves those scanners'
+  # runtime libs unprotected, so the purge strips libpugixml1v5 and they
+  # break for every later source build (hyprlock/hypridle/swww add-ons).
   # Pinning the runtime-lib packages of all /usr binaries is harmless to the
   # purge goal — build deps are -dev/toolchain packages that no binary links
-  # against, so ldd never lists them. ldd on a non-ELF entry (the hand-written
-  # glue scripts kept in /usr/local) just warns to stderr (suppressed).
+  # against, so ldd never lists them. ldd on a non-ELF entry (the glue
+  # scripts in /usr/bin) just warns to suppressed stderr, the grep extracts
+  # only resolved .so paths, and this in_target runs set -e WITHOUT pipefail,
+  # so ldd's nonzero exit on those entries is masked by the pipeline. The
+  # walker/elephant Go binaries now get scanned too, harmlessly re-pinning
+  # libc-class packages that are already protected.
   in_target "
     set -e
     ldd /usr/bin/* /usr/lib/lib*.so* 2>/dev/null |
@@ -386,9 +390,34 @@ purge_build_deps() {
       apt-get autoremove --purge -y
     "
   fi
+  # This gate now also covers the migrated glue: shell scripts are non-ELF
+  # (ldd only warns to suppressed stderr), but the walker/elephant binaries
+  # are real ELF entries — a genuinely missing runtime lib of theirs now
+  # fails the install here instead of being silently ignored (intended).
   in_target "! ldd /usr/bin/* 2>/dev/null | grep -q 'not found'" ||
     fatal "Purge removed libraries a /usr/bin binary needs (ldd reports 'not found')."
   rm -rf "${TARGET}${HYPR_SRC_DIR:?}"
+}
+
+# Read one XKB value from the target's /etc/default/keyboard (written by
+# phase_system's configure_keymap), falling back to $2. Standalone
+# --phase=hyprland runs then honor what the system phase wrote instead of
+# this shell's re-sourced config default. set-u-safe: callers may run in
+# contexts (tests) that never sourced lib/00-config.sh.
+target_xkb_value() {
+  local key="$1" fallback="${2:-}" val=""
+  val="$(sed -n "s/^${key}=\"\?\([^\"]*\)\"\?$/\1/p" \
+    "${TARGET}/etc/default/keyboard" 2>/dev/null)"
+  printf '%s\n' "${val:-${fallback}}"
+}
+
+# Target-relative home directory receiving the staged default user configs.
+# SESSION_CONFIG_HOME (lib/00-config.sh) overrides it: the golden-image build
+# stages into /etc/skel so every adduser-created account inherits the files;
+# empty (the installer default) keeps writing the target user's real home.
+# set-u-safe for test contexts that never sourced lib/00-config.sh.
+user_config_home() {
+  printf '%s\n' "${SESSION_CONFIG_HOME:-/home/${TARGET_USERNAME}}"
 }
 
 # The user's starter config is Hyprland's own example/hyprland.lua at the
@@ -418,7 +447,8 @@ write_hypr_lua_config() {
   [[ -n "${example}" ]] ||
     fatal "Upstream example config not found (neither the staged Hyprland" \
       "source nor the installed /usr/share/hypr/hyprland.lua is present)."
-  local cfg_dir="${TARGET}/home/${TARGET_USERNAME}/.config/hypr"
+  local cfg_dir=""
+  cfg_dir="${TARGET}$(user_config_home)/.config/hypr"
   local entry="${cfg_dir}/hyprland.lua"
   local hdr_re='^-{2,}[[:space:]]+([A-Za-z][A-Za-z[:space:]]*[A-Za-z])[[:space:]]+-{2,}$'
   local line="" section="" slug="" modules=()
@@ -497,6 +527,31 @@ write_hypr_lua_config() {
       -e 's/(rounding_power[[:space:]]*=[[:space:]]*)2,/\13,/' \
       "${menu_mod}"
   done
+  # Keyboard layout: repoint the upstream example's kb_layout/kb_variant/
+  # kb_options at the configured layout (from the target's
+  # /etc/default/keyboard, written by configure_keymap). The values are
+  # preflight-validated charsets (no /, &, or \), so the sed is safe. A
+  # kb_layout-less upstream example is tolerated: libxkbcommon then falls
+  # back to XKB_DEFAULT_* from /etc/environment (configure_session), so
+  # warn only when the layout would visibly be wrong (non-us).
+  local kb_layout="" kb_variant="" kb_options="" kb_patched=0
+  kb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  kb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  kb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    if grep -qE 'kb_layout[[:space:]]*=' "${menu_mod}"; then
+      sed -i -E \
+        -e 's/(kb_layout[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_layout}"'"/' \
+        -e 's/(kb_variant[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_variant}"'"/' \
+        -e 's/(kb_options[[:space:]]*=[[:space:]]*)"[^"]*"/\1"'"${kb_options}"'"/' \
+        "${menu_mod}"
+      kb_patched=1
+    fi
+  done
+  if ((!kb_patched)) && [[ "${kb_layout}" != "us" ]]; then
+    warn "Upstream example carries no kb_layout assignment; Hyprland will" \
+      "rely on XKB_DEFAULT_* from /etc/environment for layout '${kb_layout}'."
+  fi
   for slug in "${modules[@]}"; do
     printf 'require("%s")\n' "${slug}" >>"${entry}"
   done
@@ -518,9 +573,9 @@ hl.on("hyprland.start", function()
   -- Hyprland skips it at start. Forcing a sysfs re-probe makes the kernel
   -- re-detect the sink and the compositor applies the monitor config live.
   -- Needs root (sysfs status write) -> fixed-command NOPASSWD helper, staged by
-  -- the installer at /usr/local/bin/drm-reprobe. Fired first so the external
+  -- the installer at /usr/bin/drm-reprobe. Fired first so the external
   -- comes up as early as possible.
-  hl.exec_cmd("sudo /usr/local/bin/drm-reprobe")
+  hl.exec_cmd("sudo /usr/bin/drm-reprobe")
   -- Finalize the UWSM session: activates graphical-session.target, imports
   -- the session environment, and runs XDG autostart. Without this the
   -- session is launched by uwsm but never actually managed by it. Harmless
@@ -532,10 +587,10 @@ hl.on("hyprland.start", function()
   hl.exec_cmd("swww-daemon")
   -- First login only: set an initial wallpaper (swww has no cache yet). After
   -- this, swww-daemon restores the cached selection on every later login.
-  hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/local/bin/swww-cycle && touch "$m"; }']])
-  hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/local/bin/hyprland-welcome && touch "$marker"; }']])
+  hl.exec_cmd([[sh -c 'm="$HOME/.config/hypr/.wallpaper-set"; [ -e "$m" ] || { /usr/bin/swww-cycle && touch "$m"; }']])
+  hl.exec_cmd([[sh -c 'marker="$HOME/.config/hypr/.welcome-shown"; [ -e "$marker" ] || { /usr/bin/hyprland-welcome && touch "$marker"; }']])
   -- Walker launcher backend (elephant) + walker in service mode so the bare
-  -- SUPER tap opens instantly. Prebuilt binaries in /usr/local/bin ship
+  -- SUPER tap opens instantly. Prebuilt binaries in /usr/bin ship
   -- neither a systemd user unit nor an XDG autostart entry — the
   -- reserved-hook case, like swww above.
   hl.exec_cmd([[sh -c 'pgrep -x elephant >/dev/null || elephant']])
@@ -549,7 +604,7 @@ end)
 hl.bind("SUPER + L", hl.dsp.exec_cmd("loginctl lock-session"))
 -- Cycle wallpapers (swww): a different random image per output (secondary
 -- action, triple chord).
-hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
+hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/bin/swww-cycle"))
 -- Brightness keys drive brightness-sync: every connected display as one level —
 -- real backlight where present (brightnessctl, internal panel and ddcci-exposed
 -- externals) else gamma via hyprdim. locked+repeating so they work on the lock
@@ -557,7 +612,7 @@ hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("/usr/local/bin/swww-cycle"))
 hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightness-sync up"),   { locked = true, repeating = true })
 hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightness-sync down"), { locked = true, repeating = true })
 -- Screenshots + screen recording (epic #67, item 1): the staged helper scripts
--- linux-screenshot / linux-screen-record (in /usr/local/bin). They save
+-- linux-screenshot / linux-screen-record (in /usr/bin). They save
 -- timestamped files (~/Pictures/Screenshots, ~/Videos/Screen Recordings), copy
 -- to the clipboard, and hold an atomic lock so repeated presses don't stack
 -- selectors. Conventional Print cluster; the user's dotfiles override these.
@@ -735,8 +790,8 @@ stage_wallpapers() {
     (cd "${src}" && tar -cf - --exclude=.git .) | (cd "${dest}" && tar -xf -)
   fi
   # Wallpaper cycle helper: a different random image per connected output.
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/swww-cycle" <<'EOF'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/swww-cycle" <<'EOF'
 #!/usr/bin/env bash
 # swww-cycle (installer.sh): assign a different random wallpaper to each
 # connected output from the system wallpaper set. Bound to SUPER+SHIFT+W and
@@ -749,18 +804,28 @@ if ! swww query >/dev/null 2>&1; then
   swww-daemon >/dev/null 2>&1 &
   for _ in $(seq 1 20); do swww query >/dev/null 2>&1 && break; sleep 0.2; done
 fi
-mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
-[ "${#outputs[@]}" -gt 0 ] || exit 0
+# Outputs register with the daemon a beat after the compositor starts (first
+# login races this; virtio even flaps the output once) — wait, don't shrug.
+# Exit NONZERO when nothing was applied: the first-login hook gates its
+# done-marker on this rc, and an exit-0 no-op wrote the marker with no
+# wallpaper ever set (hit live 2026-07-13 — gray desktop on every login).
+outputs=()
+for _ in $(seq 1 20); do
+  mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
+  [ "${#outputs[@]}" -gt 0 ] && break
+  sleep 0.5
+done
+[ "${#outputs[@]}" -gt 0 ] || { echo "swww-cycle: no outputs registered" >&2; exit 1; }
 mapfile -t imgs < <(find "$dir" -type f \
   \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) | shuf)
-[ "${#imgs[@]}" -gt 0 ] || exit 0
+[ "${#imgs[@]}" -gt 0 ] || { echo "swww-cycle: no wallpapers under $dir" >&2; exit 1; }
 i=0
 for out in "${outputs[@]}"; do
   swww img -o "$out" "${imgs[$(( i % ${#imgs[@]} ))]}" --transition-type "$transition"
   i=$(( i + 1 ))
 done
 EOF
-  chmod +x "${TARGET}/usr/local/bin/swww-cycle"
+  chmod +x "${TARGET}/usr/bin/swww-cycle"
 }
 
 # Stage the screenshot/recording capture helpers (epic #67, item 1; verified on
@@ -772,8 +837,8 @@ EOF
 # SCREEN_RECORD_CODEC. Notifications need a daemon (swaync, #67 item 2); the
 # capture still saves the file without one.
 stage_capture_helpers() {
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/linux-screenshot" <<'EOF'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/linux-screenshot" <<'EOF'
 #!/bin/sh
 set -eu
 
@@ -850,9 +915,9 @@ fi
 wl-copy --type image/png < "$output"
 notify-send "Screenshot saved" "$output"
 EOF
-  chmod +x "${TARGET}/usr/local/bin/linux-screenshot"
+  chmod +x "${TARGET}/usr/bin/linux-screenshot"
 
-  cat >"${TARGET}/usr/local/bin/linux-screen-record" <<'EOF'
+  cat >"${TARGET}/usr/bin/linux-screen-record" <<'EOF'
 #!/bin/sh
 set -eu
 
@@ -950,14 +1015,14 @@ cleanup_selection
 trap - EXIT HUP INT TERM
 notify-send "Screen recording started" "Region capture with $label. Press the same shortcut to stop."
 EOF
-  chmod +x "${TARGET}/usr/local/bin/linux-screen-record"
+  chmod +x "${TARGET}/usr/bin/linux-screen-record"
   # Default the record codec to NVENC when an NVIDIA driver was selected at
   # install time (h264_nvenc needs the driver, not just a card present), else
   # keep the portable software libx264. SCREEN_RECORD_CODEC still overrides
   # either default at runtime.
   if nvidia_install_requested; then
     sed -i 's/SCREEN_RECORD_CODEC:-libx264/SCREEN_RECORD_CODEC:-h264_nvenc/' \
-      "${TARGET}/usr/local/bin/linux-screen-record"
+      "${TARGET}/usr/bin/linux-screen-record"
   fi
 }
 
@@ -969,7 +1034,8 @@ EOF
 # rounding 6 + 1px border); the chown -R in the Hyprland phase gives the user
 # ownership. Mako is intentionally never installed.
 stage_swaync_config() {
-  local sw_dir="${TARGET}/home/${TARGET_USERNAME}/.config/swaync"
+  local sw_dir=""
+  sw_dir="${TARGET}$(user_config_home)/.config/swaync"
   install -d "${sw_dir}"
   cat >"${sw_dir}/config.json" <<'EOF'
 {
@@ -1078,7 +1144,8 @@ EOF
 # example config); ownership comes from the later chown -R.
 stage_kitty_config() {
   local example="${TARGET}/usr/share/doc/kitty/examples/kitty.conf"
-  local kitty_dir="${TARGET}/home/${TARGET_USERNAME}/.config/kitty"
+  local kitty_dir=""
+  kitty_dir="${TARGET}$(user_config_home)/.config/kitty"
   if [[ ! -f "${example}" ]]; then
     warn "kitty annotated default config missing (${example}); skipping."
     return 0
@@ -1089,21 +1156,22 @@ stage_kitty_config() {
 
 # Install the walker launcher stack from the offline store (harvested at BUILD
 # time by harvest_walker_launcher / build-iso step_stage_walker — NO network
-# here). Binaries land in /usr/local/bin; the elephant provider plugins are
+# here). Binaries land in /usr/bin; the elephant provider plugins are
 # staged into the user's config (~/.config/elephant/providers is where the
 # daemon discovers them — proven on the reference machine), owned by the later
 # chown -R like the other staged user configs. Runtime libs
 # (WALKER_RUNTIME_PACKAGES) come from the apt base set.
 stage_walker_launcher() {
   local src="${CACHE_REPO_DIR:-}/${WALKER_STORE_SUBDIR:-walker}" p=""
-  local prov_dir="${TARGET}/home/${TARGET_USERNAME}/.config/elephant/providers"
+  local prov_dir=""
+  prov_dir="${TARGET}$(user_config_home)/.config/elephant/providers"
   if [[ ! -x "${src}/walker" || ! -x "${src}/elephant" ]]; then
     warn "walker launcher stack absent from the offline store (${src}); skipping."
     return 0
   fi
   info "Installing walker + elephant from the offline store (${src})..."
-  install -m755 "${src}/walker" "${TARGET}/usr/local/bin/walker"
-  install -m755 "${src}/elephant" "${TARGET}/usr/local/bin/elephant"
+  install -m755 "${src}/walker" "${TARGET}/usr/bin/walker"
+  install -m755 "${src}/elephant" "${TARGET}/usr/bin/elephant"
   install -d "${prov_dir}"
   for p in "${ELEPHANT_PROVIDERS[@]}"; do
     [[ -f "${src}/${p}.so" ]] || { warn "elephant provider ${p}.so missing from store"; continue; }
@@ -1111,16 +1179,19 @@ stage_walker_launcher() {
   done
 }
 
-# Static, unconditional portal routing + dark-mode default (epic #67 items 3/4,
-# #57). The broker uses the hyprland impl when xdph is installed and otherwise
-# falls through to wlr (always installed as the packaged xdg-desktop-portal-wlr),
-# so this IDENTICAL config ships on every path with no install-time backend
-# detection. The prefer-dark gschema override drives the GTK/portal color scheme;
-# glib-compile-schemas compiles it into the target's schema cache (needs
-# libglib2.0-bin). Called from configure_session BEFORE its chown -R so the user
-# config file is owned by the target user.
+# Static, unconditional portal routing + dark theming defaults (epic #67 items
+# 3/4, #57, #51/#76). The broker uses the hyprland impl when xdph is installed
+# and otherwise falls through to wlr (always installed as the packaged
+# xdg-desktop-portal-wlr), so this IDENTICAL config ships on every path with no
+# install-time backend detection. The gschema override drives the GTK/portal
+# color scheme plus the GTK (adw-gtk3-dark, installed by install_adw_gtk3_theme),
+# icon (Papirus-Dark) and cursor (Adwaita) themes; glib-compile-schemas compiles
+# it into the target's schema cache (needs libglib2.0-bin). Called from
+# configure_session BEFORE its chown -R so the user config file is owned by the
+# target user.
 write_portal_config() {
-  local portal_dir="${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal"
+  local portal_dir=""
+  portal_dir="${TARGET}$(user_config_home)/.config/xdg-desktop-portal"
   install -d "${portal_dir}"
   cat >"${portal_dir}/hyprland-portals.conf" <<'EOF'
 [preferred]
@@ -1132,34 +1203,169 @@ EOF
   cat >"${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override" <<'EOF'
 [org.gnome.desktop.interface]
 color-scheme='prefer-dark'
+gtk-theme='adw-gtk3-dark'
+icon-theme='Papirus-Dark'
+cursor-theme='Adwaita'
 EOF
   # Guarded: a missing/failed compile must not abort the install (the override is
   # cosmetic). libglib2.0-bin provides glib-compile-schemas.
   in_target "glib-compile-schemas /usr/share/glib-2.0/schemas || true"
 }
 
+# Session environment: uwsm sources ~/.config/uwsm/env into the systemd user
+# environment before Hyprland starts. Written UNCONDITIONALLY: the theming
+# block (issues #51/#76) applies to every install — QT_QPA_PLATFORMTHEME=gtk3
+# makes Qt6 apps follow the GTK theme via qt6-gtk-platformtheme
+# (THEME_PACKAGES), and XCURSOR_THEME pins the Adwaita cursor so Wayland-native
+# apps match the gschema cursor-theme. The Hyprland-wiki NVIDIA variables
+# (issue #4) are appended only when an NVIDIA driver install was requested.
+write_uwsm_env() {
+  local env_dir=""
+  env_dir="${TARGET}$(user_config_home)/.config/uwsm"
+  mkdir -p "${env_dir}"
+  cat >"${env_dir}/env" <<'EOF'
+# Managed by hypr-deb: session environment sourced by uwsm into the systemd
+# user environment. Theming defaults (issues #51/#76): Qt6 apps follow the GTK
+# theme through the gtk3 platform theme; Adwaita cursors everywhere.
+export QT_QPA_PLATFORMTHEME=gtk3
+export XCURSOR_THEME=Adwaita
+EOF
+  if nvidia_install_requested; then
+    cat >>"${env_dir}/env" <<'EOF'
+# NVIDIA environment for the Hyprland session (issue #4).
+export LIBVA_DRIVER_NAME=nvidia
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export GBM_BACKEND=nvidia-drm
+EOF
+  fi
+}
+
 configure_session() {
   info "Configuring greetd + uwsm session..."
+  # Greeter keyboard layout: greetd spawns its greeter with a PAM-built env
+  # (no session config of its own); pam_env reads /etc/environment, and
+  # cage/wlroots/libxkbcommon honor XKB_DEFAULT_*. Without this a non-us
+  # user cannot type their password at tuigreet. Values come from the
+  # target's /etc/default/keyboard (configure_keymap) so standalone
+  # --phase=hyprland runs stay consistent. Resume-safe: only the
+  # XKB_DEFAULT_ lines are ever rewritten; operator content is untouched.
+  local xkb_layout="" xkb_variant="" xkb_options=""
+  xkb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  xkb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  xkb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  mkdir -p "${TARGET}/etc"
+  touch "${TARGET}/etc/environment"
+  sed -i '/^XKB_DEFAULT_/d' "${TARGET}/etc/environment"
+  {
+    printf 'XKB_DEFAULT_LAYOUT=%s\n' "${xkb_layout}"
+    if [[ -n "${xkb_variant}" ]]; then
+      printf 'XKB_DEFAULT_VARIANT=%s\n' "${xkb_variant}"
+    fi
+    if [[ -n "${xkb_options}" ]]; then
+      printf 'XKB_DEFAULT_OPTIONS=%s\n' "${xkb_options}"
+    fi
+  } >>"${TARGET}/etc/environment"
+  stage_session_configs
+  install_drm_reprobe_sudoers
+  # The user config is generated against this install's keymap (it reads the
+  # target's /etc/default/keyboard), so it stays out of the machine-
+  # independent staging above.
+  write_hypr_lua_config
+  in_target "
+    set -e
+    # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
+    # shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
+  "
+}
+
+# Per-machine session configuration (issue #111): the HALF of the old
+# configure_session that depends on THIS install's user, keymap, autologin
+# and NVIDIA choices. Everything machine-independent is already baked into
+# the golden image (stage_session_configs, run by the build with
+# SESSION_CONFIG_HOME=/etc/skel), and create_user's skel copy has populated
+# the real home before this runs.
+configure_session_local() {
+  info "Configuring the per-machine session (keymap, greeter, user config)..."
+  # Greeter keyboard layout: greetd spawns its greeter with a PAM-built env;
+  # pam_env reads /etc/environment, and cage/wlroots/libxkbcommon honor
+  # XKB_DEFAULT_*. Without this a non-us user cannot type their password at
+  # tuigreet. Values come from the target's /etc/default/keyboard
+  # (configure_keymap). Resume-safe: only the XKB_DEFAULT_ lines are ever
+  # rewritten; the image's baked content is untouched.
+  local xkb_layout="" xkb_variant="" xkb_options=""
+  xkb_layout="$(target_xkb_value XKBLAYOUT "${XKB_LAYOUT:-us}")"
+  xkb_variant="$(target_xkb_value XKBVARIANT "${XKB_VARIANT:-}")"
+  xkb_options="$(target_xkb_value XKBOPTIONS "${XKB_OPTIONS:-}")"
+  touch "${TARGET}/etc/environment"
+  sed -i '/^XKB_DEFAULT_/d' "${TARGET}/etc/environment"
+  {
+    printf 'XKB_DEFAULT_LAYOUT=%s\n' "${xkb_layout}"
+    if [[ -n "${xkb_variant}" ]]; then
+      printf 'XKB_DEFAULT_VARIANT=%s\n' "${xkb_variant}"
+    fi
+    if [[ -n "${xkb_options}" ]]; then
+      printf 'XKB_DEFAULT_OPTIONS=%s\n' "${xkb_options}"
+    fi
+  } >>"${TARGET}/etc/environment"
+  # --autologin: the image bakes the tuigreet greeter default; rewrite
+  # config.toml to start the session directly as the created user. Without
+  # the flag the baked greeter config stands as-is.
+  if ((HYPR_AUTOLOGIN)); then
+    cat >"${TARGET}/etc/greetd/config.toml" <<EOF
+[terminal]
+vt = 1
+
+[default_session]
+# Absolute paths are required: greetd builds the session environment from
+# PAM, and Debian's default stack provides no PATH for it.
+command = "/usr/bin/hypr-session"
+user = "${TARGET_USERNAME}"
+EOF
+  fi
+  # uwsm env: the skel copy carries the theming block only; rewrite it in the
+  # real home so the NVIDIA lines land when a driver was chosen.
+  write_uwsm_env
+  # The user config is generated against this install's keymap (it reads the
+  # target's /etc/default/keyboard), replacing the image's us-layout skel copy.
+  write_hypr_lua_config
+  install_drm_reprobe_sudoers
+  in_target "
+    set -e
+    # Fail the install if the drm-reprobe sudoers drop-in is malformed rather
+    # than shipping a broken (or privilege-widening) rule into the target.
+    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
+    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
+  "
+}
+
+# Machine-independent session staging (issue #111): every session file that
+# does NOT depend on this install's user, keymap, or NVIDIA choice. The
+# legacy installer reaches it through configure_session; the golden-image
+# build calls it directly with SESSION_CONFIG_HOME=/etc/skel (and the default
+# HYPR_AUTOLOGIN=0 tuigreet greeter) so one staged copy bakes into the image.
+stage_session_configs() {
   # greetd leaves the session's stdout/stderr attached to VT1, so uwsm and
   # Hyprland startup chatter paints over the console during the greeter →
   # desktop handoff (issue #12). Both session paths route through this
   # wrapper: systemd-cat keeps the output in the journal (read it with
   # `journalctl -t hypr-session`) instead of the VT, and
   # UWSM_SILENT_START=2 suppresses uwsm's own startup text.
-  mkdir -p "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/hypr-session" <<'EOF'
+  mkdir -p "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/hypr-session" <<'EOF'
 #!/usr/bin/env bash
 # Staged by installer.sh: greetd session entry. Session output goes to
 # the journal (journalctl -t hypr-session), never to the VT.
 UWSM_SILENT_START=2 exec /usr/bin/systemd-cat -t hypr-session \
   /usr/bin/uwsm start -- hyprland.desktop
 EOF
-  chmod +x "${TARGET}/usr/local/bin/hypr-session"
+  chmod +x "${TARGET}/usr/bin/hypr-session"
   mkdir -p "${TARGET}/etc/greetd" "${TARGET}/etc/greetd/sessions"
   local session_command="" session_user=""
   if ((HYPR_AUTOLOGIN)); then
     # No greeter: greetd starts the session directly as the target user.
-    session_command="/usr/local/bin/hypr-session"
+    session_command="/usr/bin/hypr-session"
     session_user="${TARGET_USERNAME}"
   else
     # Debian ships the greetd daemon WITHOUT any greeter binary (agreety
@@ -1251,7 +1457,7 @@ EOF
 [Desktop Entry]
 Name=Hyprland
 Comment=Hyprland (uwsm-managed, silenced)
-Exec=/usr/local/bin/hypr-session
+Exec=/usr/bin/hypr-session
 Type=Application
 DesktopNames=Hyprland
 EOF
@@ -1265,20 +1471,10 @@ vt = 1
 command = "${session_command}"
 user = "${session_user}"
 EOF
-  # NVIDIA session environment (issue #4): uwsm sources ~/.config/uwsm/env
-  # into the systemd user session before Hyprland starts. These are the
-  # Hyprland-wiki variables for NVIDIA GPUs; the chown -R below covers the
-  # file's ownership.
-  if nvidia_install_requested; then
-    mkdir -p "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm"
-    cat >"${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env" <<'EOF'
-# Managed by hypr-deb (issue #4): NVIDIA environment for the Hyprland
-# session. Sourced by uwsm into the systemd user environment.
-export LIBVA_DRIVER_NAME=nvidia
-export __GLX_VENDOR_LIBRARY_NAME=nvidia
-export GBM_BACKEND=nvidia-drm
-EOF
-  fi
+  # Session environment (~/.config/uwsm/env): written unconditionally now that
+  # it carries the theming defaults, NVIDIA lines appended only when requested.
+  # The chown -R below covers the file's ownership.
+  write_uwsm_env
   # External-display recovery (DP-3 HPD-dark after login). The greeter wrapper
   # disables every non-primary output with `wlr-randr --output <conn> --off`.
   # On NVIDIA that disable leaves the connector hot-plug-detect dark: the kernel
@@ -1289,8 +1485,8 @@ EOF
   # live. Proven on the live box: a single `echo detect` recovered the LG
   # ultrawide on DP-3 in ~2s with no restart. The status write needs root, so
   # ship a fixed-command NOPASSWD helper.
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/drm-reprobe" <<'EOF'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/drm-reprobe" <<'EOF'
 #!/usr/bin/env bash
 # Staged by installer.sh: force a DRM hot-plug re-probe of external connectors
 # the greeter left HPD-dark, so Hyprland re-detects them at login. eDP (the
@@ -1305,17 +1501,7 @@ for path in /sys/class/drm/card*-*/status; do
   fi
 done
 EOF
-  chmod 755 "${TARGET}/usr/local/bin/drm-reprobe"
-  # NOPASSWD for the single fixed command (no args) -> minimal privilege; the
-  # hyprland.start hook runs it as ${TARGET_USERNAME} via sudo (user is in the
-  # sudo group, and Debian's /etc/sudoers @includedir's /etc/sudoers.d).
-  install -d -m 755 "${TARGET}/etc/sudoers.d"
-  cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
-# Managed by installer.sh: let the desktop user force a DRM connector re-probe
-# at Hyprland start, recovering an external display the greeter disabled.
-${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/local/bin/drm-reprobe
-EOF
-  chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
+  chmod 755 "${TARGET}/usr/bin/drm-reprobe"
   # hyprlock PAM service (issue #71): authenticate the lock screen against the
   # system stack. hypridle (issue #72) is enabled for the user by linking its
   # unit into graphical-session.target.wants — a plain symlink (not `systemctl
@@ -1336,8 +1522,8 @@ EOF
   # hyprdim daemon (D-Bus dev.hyprdim). The brightness keys, hypridle's idle
   # dim/restore, and the lock_cmd all route through it. Staged like drm-reprobe
   # (literal heredoc + chmod). The hyprdim binary is built by build_custom_hyprdim.
-  install -d "${TARGET}/usr/local/bin"
-  cat >"${TARGET}/usr/local/bin/brightness-sync" <<'BRIGHTNESS_SYNC'
+  install -d "${TARGET}/usr/bin"
+  cat >"${TARGET}/usr/bin/brightness-sync" <<'BRIGHTNESS_SYNC'
 #!/bin/sh
 # brightness-sync — ONE logical brightness level (0-100) across every connected
 # display. The level is PERSISTED and applied ABSOLUTELY, so all displays stay
@@ -1534,6 +1720,10 @@ _dpms_set() {  # ACTION(disable|enable) WHICH(internal|external) -> DPMS matchin
         hyprctl dispatch "hl.dsp.dpms({ action = \"$_act\", monitor = \"$_c\" })" >/dev/null 2>&1 || true
     done
 }
+_has_internal() {  # true when any connected display is internal (eDP/LVDS/DSI)
+    for _c in $(connected_connectors); do _is_internal "$_c" && return 0; done
+    return 1
+}
 
 cmd="${1:-}"
 case "$cmd" in
@@ -1556,11 +1746,15 @@ case "$cmd" in
                # lock surface to come up (else powering the external off races startup and
                # leaves it on-black), then power off non-internal displays. On unlock
                # (hyprlock exits) power them back on. Used as hypridle's lock_cmd.
+               # NO internal display (VM, desktop): every display is "external" and
+               # the off would black the whole seat with nothing re-powering it
+               # until unlock — leave all displays to hyprlock (hit live 2026-07-13
+               # on virtio: locked session wedged to "no output detected").
                pidof hyprlock >/dev/null 2>&1 && exit 0
                hyprlock & _h=$!
                _i=0; while [ "$_i" -lt 40 ] && ! pidof hyprlock >/dev/null 2>&1; do _i=$((_i+1)); sleep 0.05; done
                sleep 0.5
-               _dpms_set disable external
+               if _has_internal; then _dpms_set disable external; fi
                wait "$_h" || true
                _dpms_set enable external ;;
     externals-off) _dpms_set disable external ;;   # power off non-internal displays
@@ -1570,15 +1764,15 @@ case "$cmd" in
     *) echo "usage: brightness-sync {up|down|set <pct>|dim|restore|reconcile|lock|externals-off|externals-on|internal-off|internal-on}" >&2; exit 2 ;;
 esac
 BRIGHTNESS_SYNC
-  chmod 755 "${TARGET}/usr/local/bin/brightness-sync"
+  chmod 755 "${TARGET}/usr/bin/brightness-sync"
   # hyprdim user unit. The ExecStart points at the compiled binary in /usr/bin
   # (upstream's unit uses %h/.local/bin/hyprdim). Resident, supervised,
   # respawning; brightness-sync re-asserts external gamma after a restart. Enabled
   # for the user the same way hypridle is: a plain symlink into
   # graphical-session.target.wants (works even when the stack builds at first boot —
   # the link dangles until the unit lands and resolves at session start).
-  mkdir -p "${TARGET}/usr/local/lib/systemd/user"
-  cat >"${TARGET}/usr/local/lib/systemd/user/hyprdim.service" <<'HYPRDIM_SERVICE'
+  mkdir -p "${TARGET}/usr/lib/systemd/user"
+  cat >"${TARGET}/usr/lib/systemd/user/hyprdim.service" <<'HYPRDIM_SERVICE'
 [Unit]
 Description=hyprdim — per-display gamma brightness daemon (external outputs)
 # Locally-built daemon (binary hyprdim, D-Bus dev.hyprdim). Source, upstream
@@ -1603,13 +1797,13 @@ HYPRDIM_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
   # hypridle is part of the source-compiled stack, now shipped as a .deb with
   # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
-  # hand-written hyprdim.service below stays in /usr/local (installer glue,
-  # not owned by any .deb).
+  # hand-written hyprdim.service above is installer glue placed unpackaged at
+  # the same /usr/lib/systemd/user path, next to the packaged units (dpkg
+  # does not own it; see the glue-placement note in README).
   ln -sf /usr/lib/systemd/user/hypridle.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
-  ln -sf /usr/local/lib/systemd/user/hyprdim.service \
+  ln -sf /usr/lib/systemd/user/hyprdim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
-  write_hypr_lua_config
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
@@ -1620,10 +1814,6 @@ HYPRDIM_SERVICE
   write_portal_config
   in_target "
     set -e
-    # Fail the build if the drm-reprobe sudoers drop-in is malformed rather than
-    # shipping a broken (or privilege-widening) rule into the target.
-    /usr/sbin/visudo -c -f /etc/sudoers.d/drm-reprobe >/dev/null
-    chown -R '${TARGET_USERNAME}:${TARGET_USERNAME}' '/home/${TARGET_USERNAME}'
     # tuigreet --remember writes its cache as _greetd; the Debian package
     # does not create the directory, and a greeter that cannot write it
     # can crash-loop (repaint storm, swallowed keystrokes on VT1).
@@ -1636,6 +1826,24 @@ HYPRDIM_SERVICE
   "
 }
 
+# Per-install NOPASSWD rule for the single fixed drm-reprobe command (no args)
+# -> minimal privilege; the hyprland.start hook runs it as ${TARGET_USERNAME}
+# via sudo (the user is in the sudo group, and Debian's /etc/sudoers
+# @includedir's /etc/sudoers.d). Named for TARGET_USERNAME, so it never bakes
+# into the golden image — it is written per install (configure_session).
+install_drm_reprobe_sudoers() {
+  install -d -m 755 "${TARGET}/etc/sudoers.d"
+  # rm first: a resumed run must rewrite this file, but the previous pass
+  # left it 0440 and `cat >` onto a read-only file fails for non-root.
+  rm -f "${TARGET}/etc/sudoers.d/drm-reprobe"
+  cat >"${TARGET}/etc/sudoers.d/drm-reprobe" <<EOF
+# Managed by installer.sh: let the desktop user force a DRM connector re-probe
+# at Hyprland start, recovering an external display the greeter disabled.
+${TARGET_USERNAME} ALL=(root) NOPASSWD: /usr/bin/drm-reprobe
+EOF
+  chmod 440 "${TARGET}/etc/sudoers.d/drm-reprobe"
+}
+
 # --- First-boot deferral (--build-on-firstboot) ------------------------------
 
 # Shared firstboot machinery: a per-job directory so independent features
@@ -1645,21 +1853,31 @@ HYPRDIM_SERVICE
 # renames it .failed and the boot CONTINUES — jobs must leave the system
 # usable when they fail. The unit disables itself once no runnable jobs
 # remain; a job requests a reboot by touching /run/hypr-deb-reboot-required.
-stage_firstboot_runner() {
-  # The enable runs UNCONDITIONALLY (it is idempotent): a resumed run that
-  # died between writing the files and enabling the unit must still enable
-  # it, so only the file-writing is skipped when the runner exists.
-  if [[ ! -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot" ]]; then
-    mkdir -p "${TARGET}/usr/local/sbin" \
-      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d" \
+# File-writing half of the firstboot machinery, split out (issue #111) so the
+# golden-image build can bake the runner + unit DORMANT (never enabled — the
+# live session must not run firstboot jobs); the installer path enables it via
+# stage_firstboot_runner below.
+write_firstboot_runner() {
+  if [[ ! -x "${TARGET}/usr/sbin/hypr-deb-firstboot" ]]; then
+    mkdir -p "${TARGET}/usr/sbin" \
+      "${TARGET}/usr/lib/hypr-deb/firstboot.d" \
       "${TARGET}/etc/systemd/system"
-    cat >"${TARGET}/usr/local/sbin/hypr-deb-firstboot" <<'EOF'
+    cat >"${TARGET}/usr/sbin/hypr-deb-firstboot" <<'EOF'
 #!/usr/bin/env bash
 # Hypr-Deb firstboot job runner (staged by installer.sh). Runs every
-# /usr/local/lib/hypr-deb/firstboot.d/*.sh in lexical order.
+# /usr/lib/hypr-deb/firstboot.d/*.sh in lexical order.
 set -uo pipefail
-dir=/usr/local/lib/hypr-deb/firstboot.d
+dir=/usr/lib/hypr-deb/firstboot.d
 shopt -s nullglob
+# Bounded clock-settle wait: on an RTC-mode mismatch (e.g. --rtc=local on a
+# UTC-RTC machine) timesyncd steps the clock by hours shortly after boot; a
+# backwards jump mid-dkms-build fails every kbuild conftest (seen live
+# 2026-07-13). Wait for NTP sync — or 60s, so offline machines (stable
+# clock, no step coming) proceed unharmed.
+for _ in $(seq 1 30); do
+  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] && break
+  sleep 2
+done
 for job in "${dir}"/*.sh; do
   echo "hypr-deb-firstboot: running ${job##*/}" >&2
   if bash "${job}"; then
@@ -1679,17 +1897,17 @@ if [[ -f /run/hypr-deb-reboot-required ]]; then
   systemctl reboot
 fi
 EOF
-    chmod +x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
+    chmod +x "${TARGET}/usr/sbin/hypr-deb-firstboot"
 
     cat >"${TARGET}/etc/systemd/system/hypr-deb-firstboot.service" <<'EOF'
 [Unit]
 Description=Hypr-Deb first-boot jobs
 Before=greetd.service
-ConditionPathExists=/usr/local/sbin/hypr-deb-firstboot
+ConditionPathExists=/usr/sbin/hypr-deb-firstboot
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/hypr-deb-firstboot
+ExecStart=/usr/sbin/hypr-deb-firstboot
 StandardOutput=journal+console
 RemainAfterExit=yes
 TimeoutStartSec=0
@@ -1698,13 +1916,20 @@ TimeoutStartSec=0
 WantedBy=multi-user.target
 EOF
   fi
+}
+
+stage_firstboot_runner() {
+  # The enable runs UNCONDITIONALLY (it is idempotent): a resumed run that
+  # died between writing the files and enabling the unit must still enable
+  # it, so only the file-writing is skipped when the runner exists.
+  write_firstboot_runner
   in_target "systemctl enable hypr-deb-firstboot.service"
 }
 
 stage_firstboot() {
   info "Staging first-boot build..."
   local name=""
-  mkdir -p "${TARGET}${HYPR_SRC_DIR}" "${TARGET}/usr/local/lib/hypr-deb"
+  mkdir -p "${TARGET}${HYPR_SRC_DIR}" "${TARGET}/usr/lib/hypr-deb"
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     stage_source "${name}"
   done
@@ -1722,16 +1947,16 @@ stage_firstboot() {
   done
 
   cp lib/00-config.sh lib/01-log.sh scripts/60-hyprland.sh \
-    "${TARGET}/usr/local/lib/hypr-deb/"
+    "${TARGET}/usr/lib/hypr-deb/"
 
   stage_firstboot_runner
-  cat >"${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh" <<EOF
+  cat >"${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh" <<EOF
 #!/usr/bin/env bash
 # Firstboot job: one-shot Hyprland build (staged by installer.sh).
 set -euo pipefail
-source /usr/local/lib/hypr-deb/00-config.sh
-source /usr/local/lib/hypr-deb/01-log.sh
-source /usr/local/lib/hypr-deb/60-hyprland.sh
+source /usr/lib/hypr-deb/00-config.sh
+source /usr/lib/hypr-deb/01-log.sh
+source /usr/lib/hypr-deb/60-hyprland.sh
 TARGET=""           # build on the running system
 NETWORK_AVAILABLE=0 # sources are pre-staged; no network needed
 CACHE_DIR="${HYPR_SRC_DIR}"
@@ -1745,7 +1970,7 @@ test -x /usr/bin/Hyprland
 purge_build_deps
 info "First-boot Hyprland build complete."
 EOF
-  chmod +x "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
+  chmod +x "${TARGET}/usr/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
 }
 
 # OFFLINE (default when the on-ISO store is present): install the ENTIRE custom
@@ -1834,7 +2059,13 @@ phase_hyprland() {
   # not stage — so it is skipped here. configure_session still runs (it writes the
   # user config, reading the example from the just-installed hyprland deb).
   if ((NETWORK_AVAILABLE == 0)); then
+    # Standalone offline --phase=hyprland arrives with no store wired into
+    # the target (bootstrap's wiring is torn down at the end of every
+    # standalone run); mount-gated no-op on full runs. Same pairing as
+    # phase_system/install_grub/install_sdboot.
+    wire_offline_repo
     install_prebuilt_stack
+    unwire_offline_repo
     configure_session
     return 0
   fi

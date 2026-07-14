@@ -84,6 +84,35 @@ assert_fails "--jobs rejects non-numeric values" bash -c '
 
 out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args --keymap=de
+  echo "${XKB_LAYOUT}|${XKB_VARIANT}|${XKB_LAYOUT_EXPLICIT}|${XKB_VARIANT_EXPLICIT}"')"
+assert_eq "de||1|" "${out}" \
+  "--keymap=de sets the layout and marks it explicit (variant untouched)"
+
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args --keymap=de:nodeadkeys
+  echo "${XKB_LAYOUT}|${XKB_VARIANT}|${XKB_LAYOUT_EXPLICIT}|${XKB_VARIANT_EXPLICIT}"')"
+assert_eq "de|nodeadkeys|1|1" "${out}" \
+  "--keymap=layout:variant sets both and marks both explicit"
+
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args
+  echo "${XKB_LAYOUT}|${XKB_MODEL}|[${XKB_LAYOUT_EXPLICIT}]"')"
+assert_eq "us|pc105|[]" "${out}" \
+  "keymap defaults to us/pc105 and stays autodetectable (no explicit marker)"
+
+assert_fails "--keymap rejects an injection-shaped layout" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args "--keymap=de;rm -rf /"'
+
+assert_fails "--keymap rejects an injection-shaped variant" bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
+  parse_args "--keymap=de:x\"; rm"'
+
+out="$(bash -c '
+  source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
   parse_args --ntp="0.pool.ntp.org time.cloudflare.com"
   echo "${NTP_SERVERS}"')"
 assert_eq "0.pool.ntp.org time.cloudflare.com" "${out}" \

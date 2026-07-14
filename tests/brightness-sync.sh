@@ -8,7 +8,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 # Extract the brightness-sync the installer stages from its literal heredoc, so
-# this tests exactly what lands at /usr/local/bin/brightness-sync (not a copy
+# this tests exactly what lands at /usr/bin/brightness-sync (not a copy
 # that could drift from the installer).
 BS="${tmp}/brightness-sync"
 awk "/<<'BRIGHTNESS_SYNC'\$/{f=1;next} /^BRIGHTNESS_SYNC\$/{f=0} f" \
@@ -59,6 +59,31 @@ assert_contains "$(cat "${LOG}")" \
 assert_contains "$(cat "${LOG}")" \
   "set-property dev.hyprdim /outputs/DP_3 dev.hyprdim Brightness" \
   "brightness up nudges the external display's gamma via the daemon"
+
+# lock with NO internal display (VM, desktop): every display is "external";
+# powering it off would black the whole seat until unlock (hit live 2026-07-13
+# on virtio) — lock must NOT dpms-disable anything.
+: >"${LOG}"; "${BS}" lock
+if grep -q 'disable' "${LOG}"; then
+  echo "  FAIL: lock powered off a display on a no-internal machine" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: lock leaves the only (external-classified) display lit"
+fi
+
+# lock WITH an internal display: the external goes dark while the internal
+# carries the lock surface (the laptop behavior this exists for).
+mkdir -p "${DRM}/card1-eDP-1"; echo connected >"${DRM}/card1-eDP-1/status"
+: >"${LOG}"; "${BS}" lock
+assert_contains "$(cat "${LOG}")" 'disable' \
+  "lock powers the external off when an internal display exists"
+if grep -q 'disable.*eDP' "${LOG}"; then
+  echo "  FAIL: lock must never power off the internal display" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: internal display stays lit through lock"
+fi
+rm -rf "${DRM}/card1-eDP-1"
 
 # An unknown verb is a usage error (exit 2), not a silent no-op.
 rc=0; "${BS}" bogus >/dev/null 2>&1 || rc=$?

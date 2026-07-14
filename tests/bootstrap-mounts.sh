@@ -7,14 +7,18 @@ echo "test: mount_target_tree propagation isolation + idempotency"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
-# Stub harness: record every storage command. FSTYPE is what `findmnt -no FSTYPE
-# ${TARGET}` reports (empty = nothing mounted yet, "zfs" = root dataset already
-# mounted on a resume). MOUNTED toggles whether `mountpoint` says paths are
-# mounted (drives the self-bind guard and the ESP guard).
-run_mount() { # $1 = FSTYPE of ${TARGET}; $2 = 1 if mountpoint says "mounted"
+# Stub harness: record every storage command. ZMOUNTED is what `zfs get -H -o
+# value mounted ${ROOT_DATASET}` reports ("no" = nothing mounted yet, "yes" =
+# root dataset already mounted on a resume — including under the stacked
+# self-bind + dataset mounts of a second same-session maintenance run, where
+# findmnt FSTYPE returned multi-line output and broke, issue #50). MOUNTED
+# toggles whether `mountpoint` says paths are mounted (drives the self-bind
+# guard and the ESP guard). `zfs get` queries are answered, all other zfs
+# calls recorded.
+run_mount() { # $1 = zfs get mounted (yes|no); $2 = 1 if mountpoint says "mounted"
   bash -c '
     set -euo pipefail
-    FSTYPE='"'$1'"'
+    ZMOUNTED='"'$1'"'
     MOUNTED='"$2"'
     calls="'"${tmp}"'/calls"
     : >"${calls}"
@@ -22,10 +26,12 @@ run_mount() { # $1 = FSTYPE of ${TARGET}; $2 = 1 if mountpoint says "mounted"
     warn() { :; }
     fatal() { echo "FATAL: $*" >&2; exit 1; }
     zpool() { return 0; } # pool already imported
-    zfs() { echo "zfs $*" >>"${calls}"; }
+    zfs() {
+      if [[ "$1" == get ]]; then printf "%s\n" "${ZMOUNTED}"; return 0; fi
+      echo "zfs $*" >>"${calls}"
+    }
     mount() { echo "mount $*" >>"${calls}"; }
     mountpoint() { ((MOUNTED)); }
-    findmnt() { printf "%s\n" "${FSTYPE}"; }
     source scripts/30-bootstrap.sh
     TARGET="'"${tmp}"'/target"
     POOL_NAME=TESTPOOL
@@ -36,8 +42,8 @@ run_mount() { # $1 = FSTYPE of ${TARGET}; $2 = 1 if mountpoint says "mounted"
   '
 }
 
-# --- Fresh run: nothing mounted yet (FSTYPE empty, mountpoint says no) --------
-out="$(run_mount "" 0)"
+# --- Fresh run: nothing mounted yet (dataset unmounted, mountpoint says no) ---
+out="$(run_mount no 0)"
 assert_contains "${out}" "mount --bind ${tmp}/target ${tmp}/target" \
   "self-binds the target for propagation isolation"
 assert_contains "${out}" "mount --make-private ${tmp}/target" \
@@ -57,8 +63,9 @@ else
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
 
-# --- Resume: root dataset already a ZFS mount (FSTYPE=zfs, mountpoint says yes)
-out="$(run_mount "zfs" 1)"
+# --- Resume / second same-session run: root dataset already mounted (stacked
+# --- under the self-bind or not — the dataset state, not findmnt, decides)
+out="$(run_mount yes 1)"
 if printf '%s\n' "${out}" | grep -q "zfs mount TESTPOOL/ROOT/test"; then
   echo "  FAIL: root dataset re-mounted although already a zfs mount" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
@@ -139,9 +146,10 @@ iso2="$(bash -c '
   source scripts/30-bootstrap.sh
   info() { :; }; warn() { :; }
   fatal() { echo "FATAL: $*"; exit 1; }
-  findmnt() { return 1; }      # ${TARGET} has no fstype (not a mount)
+  zfs() { return 1; }          # root dataset not mounted
   mountpoint() { return 1; }   # ${TARGET} is not a mountpoint
   mount() { echo "mount $*" >>"${calls}"; }
+  ROOT_DATASET=TESTPOOL/ROOT/test
   TARGET="'"${tmp}"'/fresh-target"   # deliberately absent
   isolate_target_propagation && echo "ISOLATE_OK"
   [[ -d "${TARGET}" ]] && echo "TARGET_CREATED"
@@ -157,5 +165,123 @@ if printf '%s\n' "${iso2}" | grep -q "FATAL:"; then
 else
   echo "  ok: no fatal on an absent target"
 fi
+
+# --- ensure_target_ready: import failure handling (issue #50) -----------------
+# A root pool is never exported at shutdown, so on a maintenance run the plain
+# import fails (hostid mismatch) and must be retried with -f; a genuinely
+# absent pool (fresh install before storage) must stay a silent no-op.
+run_import() { # $1 = pool visible in `zpool import` listing; $2 = plain import ok
+  bash -c '
+    set -euo pipefail
+    VISIBLE='"$1"'
+    PLAIN_OK='"$2"'
+    calls="'"${tmp}"'/import-calls"
+    : >"${calls}"
+    info() { :; }
+    warn() { :; }
+    fatal() { echo "FATAL: $*" >&2; exit 1; }
+    source scripts/30-bootstrap.sh
+    zpool() {
+      echo "zpool $*" >>"${calls}"
+      case "${1}:$#" in
+        list:*) return 1 ;;                       # pool never imported yet
+        import:1)                                  # bare listing of importables
+          ((VISIBLE)) && printf "   pool: TESTPOOL\n"
+          return 0 ;;
+        import:*)
+          [[ "$2" == "-f" ]] && return 0           # forced import succeeds
+          ((PLAIN_OK)) ;;
+      esac
+    }
+    zfs() { :; }
+    mount() { :; }
+    mountpoint() { return 0; }
+    findmnt() { printf "zfs\n"; }
+    isolate_target_propagation() { :; }
+    mount_chroot_binds() { :; }
+    TARGET=/nonexistent-target
+    POOL_NAME=TESTPOOL
+    ROOT_DATASET=TESTPOOL/ROOT/test
+    ESP_MOUNT=/boot/efi
+    ensure_target_ready && echo "READY_OK"
+    cat "${calls}"
+  ' 2>&1
+}
+
+echo "test: ensure_target_ready import failure handling"
+imp1="$(run_import 1 1)"
+assert_contains "${imp1}" "READY_OK" "plain import succeeds -> ready"
+if printf '%s\n' "${imp1}" | grep -q -- "-f"; then
+  echo "  FAIL: forced import attempted although plain import succeeded" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no -f when the plain import works"
+fi
+
+imp2="$(run_import 1 0)"
+assert_contains "${imp2}" "zpool import -f -N -R /nonexistent-target TESTPOOL" \
+  "hostid-mismatch import is retried with -f"
+assert_contains "${imp2}" "READY_OK" "forced import leads to a ready target"
+
+imp3="$(run_import 0 0)"
+assert_contains "${imp3}" "READY_OK" "absent pool stays a silent no-op"
+if printf '%s\n' "${imp3}" | grep -q -- "-f"; then
+  echo "  FAIL: forced import attempted although the pool does not exist" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no -f on an absent pool"
+fi
+
+# --- standalone-run teardown: export the pool, keep the service guard ---------
+# teardown_target_tree runs after every successful standalone --phase run; it
+# must export the pool (or the installed system's next boot dies in the
+# initramfs on a hostid mismatch) but must NOT remove policy-rc.d (only the
+# real cleanup phase hands the disk over).
+run_teardown() { # $1 = function to call
+  bash -c '
+    set -euo pipefail
+    calls="'"${tmp}"'/td-calls"
+    : >"${calls}"
+    info() { :; }
+    warn() { :; }
+    teardown_target_iso_repo() { echo "iso_repo_teardown" >>"${calls}"; }
+    write_target_apt_sources() { echo "permanent_sources" >>"${calls}"; }
+    kill_target_processes() { :; }
+    teardown_chroot_binds() { :; }
+    release_target_propagation() { echo "release_bind" >>"${calls}"; }
+    report_disk_holders() { :; }
+    mountpoint() { return 0; }
+    umount() { :; }
+    rm() { echo "rm $*" >>"${calls}"; }
+    zfs() { :; }
+    zpool() {
+      [[ "$1" == export ]] && echo "zpool export $2" >>"${calls}"
+      return 0
+    }
+    source scripts/99-cleanup.sh
+    TARGET=/target
+    ESP_MOUNT=/boot/efi
+    POOL_NAME=TESTPOOL
+    DISK1=/dev/null DISK2=/dev/null DISK3=/dev/null
+    '"$1"'
+    cat "${calls}"
+  ' 2>&1
+}
+
+echo "test: standalone teardown exports the pool but keeps the service guard"
+td1="$(run_teardown teardown_target_tree)"
+assert_contains "${td1}" "zpool export TESTPOOL" "teardown exports the pool"
+assert_contains "${td1}" "iso_repo_teardown" "teardown unwires the iso repo"
+assert_contains "${td1}" "release_bind" "teardown releases the self-bind"
+if printf '%s\n' "${td1}" | grep -q "policy-rc.d"; then
+  echo "  FAIL: teardown_target_tree removed the service guard" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: service guard untouched by the standalone teardown"
+fi
+
+td2="$(run_teardown phase_cleanup)"
+assert_contains "${td2}" "policy-rc.d" "phase_cleanup removes the service guard"
+assert_contains "${td2}" "zpool export TESTPOOL" "phase_cleanup still exports the pool"
 
 finish_test

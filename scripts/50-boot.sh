@@ -25,9 +25,9 @@ kernel_cmdline() {
 
 # Sync the newest kernel+initrd from ZFS /boot to the ESP (grub/sd-boot).
 write_esp_sync_hook() {
-  mkdir -p "${TARGET}/usr/local/sbin" \
+  mkdir -p "${TARGET}/usr/sbin" \
     "${TARGET}/etc/kernel/postinst.d" "${TARGET}/etc/initramfs/post-update.d"
-  cat >"${TARGET}/usr/local/sbin/hypr-deb-sync-esp" <<'EOF'
+  cat >"${TARGET}/usr/sbin/hypr-deb-sync-esp" <<'EOF'
 #!/usr/bin/env bash
 # Copy the newest kernel + initrd from /boot (ZFS) to the ESP so FAT-bound
 # bootloaders (grub, systemd-boot) can read them. Installed by installer.sh.
@@ -53,36 +53,100 @@ if [[ -f "${sd_src}" && -f "${sd_dst}" && "${sd_src}" -nt "${sd_dst}" ]]; then
 fi
 sync
 EOF
-  chmod +x "${TARGET}/usr/local/sbin/hypr-deb-sync-esp"
+  chmod +x "${TARGET}/usr/sbin/hypr-deb-sync-esp"
   local hook=""
   for hook in "${TARGET}/etc/kernel/postinst.d/zz-hypr-deb-esp" \
     "${TARGET}/etc/initramfs/post-update.d/zz-hypr-deb-esp"; do
     cat >"${hook}" <<'EOF'
 #!/bin/sh
-exec /usr/local/sbin/hypr-deb-sync-esp
+exec /usr/sbin/hypr-deb-sync-esp
 EOF
     chmod +x "${hook}"
   done
 }
 
 run_esp_sync() {
-  in_target "/usr/local/sbin/hypr-deb-sync-esp"
+  in_target "/usr/sbin/hypr-deb-sync-esp"
 }
 
-create_nvram_entry() { # $1=label $2=loader-path (backslash form)
-  local label="$1" loader="$2" disk="" pnum=1 bootnum=""
-  # Delete stale entries with the same label so re-runs don't accumulate
-  # duplicates. Exact-label match: the label is everything between
-  # "BootXXXX* " and the tab-separated device path (or end of line).
-  while read -r bootnum; do
-    efibootmgr -b "${bootnum}" -B >/dev/null ||
-      warn "Could not delete stale NVRAM entry Boot${bootnum} (${label})"
-  done < <(efibootmgr | awk -F'\t' -v lbl="${label}" '
+# PARTUUIDs of this install's ESP member partitions (partition 1 on DISK1 and
+# DISK2), as a lowercase ERE alternation for matching efibootmgr device paths.
+# Empty when blkid cannot identify them.
+esp_partuuid_regex() {
+  local disk="" uuid="" re=""
+  for disk in "${DISK1}" "${DISK2}"; do
+    uuid="$(blkid -s PARTUUID -o value "$(part_dev "${disk}" 1)" 2>/dev/null || true)"
+    [[ -n "${uuid}" ]] && re+="${re:+|}${uuid,,}"
+  done
+  printf '%s' "${re}"
+}
+
+# NVRAM label per loader — the single source for entry creation, retirement,
+# and BootOrder enforcement. "debian" and "Linux Boot Manager" deliberately
+# match the stock GRUB/systemd-boot labels; the ESP filter in
+# nvram_nums_for_label keeps a foreign OS's same-label entries safe.
+declare -A LOADER_LABELS=(
+  [zbm]="ZFSBootMenu"
+  [grub]="debian"
+  [systemd-boot]="Linux Boot Manager"
+)
+
+# PARTUUIDs of every partition currently present on the machine, as a
+# lowercase ERE alternation. Empty when blkid cannot enumerate them.
+all_partuuid_regex() {
+  blkid -s PARTUUID -o value 2>/dev/null |
+    tr '[:upper:]' '[:lower:]' | paste -sd'|'
+}
+
+# Print the Boot numbers whose label matches $1 exactly AND whose device path
+# is on this install's ESP, one per line. Exact-label match: the label is
+# everything between "BootXXXX* " and the tab-separated device path. The ESP
+# filter keeps a co-installed foreign OS's entry (stock GRUB is also labeled
+# "debian", stock systemd-boot "Linux Boot Manager") off another disk safe.
+# When the ESP PARTUUIDs cannot be read, FAIL CLOSED: matching by label alone
+# would hand a foreign OS's entry to the delete paths.
+# $2=1 additionally matches DANGLING entries — same label but a GPT PARTUUID
+# that no longer exists on any disk (our own entry from before a repartition;
+# label-scoped, so only labels we manage are ever considered). Delete paths
+# want these gone; BootOrder must never be rebuilt around them.
+nvram_nums_for_label() { # $1=exact label  [$2=1: include dangling entries]
+  local uuids="" all="" dangling="${2:-0}"
+  uuids="$(esp_partuuid_regex)"
+  if [[ -z "${uuids}" ]]; then
+    warn "Cannot identify the ESP partitions; leaving NVRAM entries for '$1' alone."
+    return 0
+  fi
+  ((dangling)) && all="$(all_partuuid_regex)"
+  # No partition listing -> cannot prove anything dangling; fail closed.
+  [[ -z "${all}" ]] && dangling=0
+  efibootmgr | awk -F'\t' -v lbl="$1" -v uuids="${uuids}" \
+    -v all="${all}" -v dangling="${dangling}" '
     $1 ~ /^Boot[0-9A-F]{4}[* ] / {
       entry = $1; num = substr(entry, 5, 4)
       sub(/^Boot[0-9A-F]{4}[* ] /, "", entry)
-      if (entry == lbl) print num
-    }')
+      if (entry != lbl) next
+      dev = tolower($2)
+      if (dev ~ uuids) { print num; next }
+      if (dangling && match(dev, /gpt,[0-9a-f-]+/)) {
+        pu = substr(dev, RSTART + 4, RLENGTH - 4)
+        if (index("|" all "|", "|" pu "|") == 0) print num
+      }
+    }'
+}
+
+delete_nvram_entries() { # $1=exact label
+  local bootnum=""
+  while read -r bootnum; do
+    efibootmgr -b "${bootnum}" -B >/dev/null ||
+      warn "Could not delete stale NVRAM entry Boot${bootnum} ($1)"
+  done < <(nvram_nums_for_label "$1" 1)
+}
+
+create_nvram_entry() { # $1=label $2=loader-path (backslash form)
+  local label="$1" loader="$2" disk="" pnum=1
+  # Delete stale entries with the same label so re-runs don't accumulate
+  # duplicates.
+  delete_nvram_entries "${label}"
   # Entry on both ESP member disks for redundancy; DISK1 first (primary).
   for disk in "${DISK2}" "${DISK1}"; do
     efibootmgr --create --disk "$(readlink -f "${disk}")" --part "${pnum}" \
@@ -215,7 +279,40 @@ install_zbm() {
     "${ROOT_DATASET}"
   install_shim zbm
   sign_loader "${ESP_MOUNT}/EFI/zbm/zfsbootmenu.efi" zbm
-  create_nvram_entry "ZFSBootMenu" '\EFI\zbm\shimx64.efi'
+  create_nvram_entry "${LOADER_LABELS[zbm]}" '\EFI\zbm\shimx64.efi'
+}
+
+# --- Offline package wiring ----------------------------------------------------
+# grub/systemd-boot apt-install their packages inside the target. On a
+# standalone --phase=boot (bootloader switch on an existing install) nothing
+# has wired the on-ISO package store into the target — that is done by
+# phase_bootstrap / online_install_prebuilt only — so an offline switch would
+# abort at apt. Stand the store up with the existing bootstrap machinery and
+# tear down ONLY what this phase set up: on a full offline run the store is
+# already bind-mounted (phase_bootstrap) and phase_cleanup owns its teardown.
+BOOT_REPO_WIRED=0
+
+wire_offline_repo() {
+  BOOT_REPO_WIRED=0
+  ((NETWORK_AVAILABLE)) && return 0
+  # Gate on the bind MOUNT, not the temp source file: a stale source left by
+  # an aborted run (no trap removes it) would otherwise skip wiring and leave
+  # apt resolving an unmounted file:// URI on every retry. Re-wiring over
+  # stale debris is safe — setup_target_iso_repo is idempotent.
+  mountpoint -q "${TARGET}${TARGET_ISO_REPO_MNT}" && return 0
+  setup_target_iso_repo
+  BOOT_REPO_WIRED=1
+  in_target "apt-get update" || {
+    unwire_offline_repo
+    fatal "apt index refresh from the on-ISO package store failed."
+  }
+}
+
+unwire_offline_repo() {
+  if ((BOOT_REPO_WIRED)); then
+    teardown_target_iso_repo
+    BOOT_REPO_WIRED=0
+  fi
 }
 
 # --- GRUB --------------------------------------------------------------------
@@ -294,6 +391,7 @@ EOF
 install_grub() {
   local osprober_pkg=""
   ((GRUB_OS_PROBER)) && osprober_pkg="os-prober"
+  wire_offline_repo
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
@@ -301,11 +399,32 @@ install_grub() {
     grub-install --target=x86_64-efi --efi-directory=${ESP_MOUNT} \
       --boot-directory=${ESP_MOUNT}/EFI/debian --bootloader-id=debian \
       --no-nvram --uefi-secure-boot
-  "
+  " || {
+    unwire_offline_repo
+    fatal "GRUB package install / grub-install failed inside the target."
+  }
+  unwire_offline_repo
   write_esp_sync_hook
   run_esp_sync
   write_grub_cfg
-  create_nvram_entry "debian" '\EFI\debian\shimx64.efi'
+  install_efi_boot_fallback
+  create_nvram_entry "${LOADER_LABELS[grub]}" '\EFI\debian\shimx64.efi'
+}
+
+# Removable-path fallback: firmware with blank/reset NVRAM probes ONLY
+# \EFI\BOOT\BOOTX64.EFI — without it the install is unbootable the moment
+# the boot entries are lost (hit live 2026-07-13: an NVRAM reset stranded a
+# finished install). Shim chain-loads grubx64.efi from its own directory,
+# and the Debian-signed grub reads /EFI/debian/grub.cfg via its baked-in
+# prefix, so three copies suffice. fbx64 is deliberately NOT copied: shim
+# prefers the fallback app over grubx64 when both sit beside it, and fbx64
+# wants a BOOT.CSV + reboot cycle instead of just booting the system.
+install_efi_boot_fallback() {
+  local boot="${TARGET}${ESP_MOUNT}/EFI/BOOT" deb="${TARGET}${ESP_MOUNT}/EFI/debian"
+  mkdir -p "${boot}"
+  cp "${deb}/shimx64.efi" "${boot}/BOOTX64.EFI"
+  cp "${deb}/grubx64.efi" "${boot}/grubx64.efi"
+  cp "${deb}/mmx64.efi" "${boot}/mmx64.efi"
 }
 
 # --- systemd-boot --------------------------------------------------------------
@@ -337,13 +456,18 @@ EOF
 
 install_sdboot() {
   local sd_src=""
+  wire_offline_repo
   in_target "
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y systemd-boot
     SYSTEMD_RELAX_ESP_CHECKS=1 bootctl install --no-variables \
       --esp-path=${ESP_MOUNT}
-  "
+  " || {
+    unwire_offline_repo
+    fatal "systemd-boot package install / bootctl install failed inside the target."
+  }
+  unwire_offline_repo
   write_esp_sync_hook
   run_esp_sync
   write_sdboot_entries
@@ -353,10 +477,47 @@ install_sdboot() {
   sign_loader "${sd_src}" systemd
   # --no-variables skips bootctl's NVRAM write (unreliable on a RAID1 ESP);
   # create the entry ourselves on both member disks.
-  create_nvram_entry "Linux Boot Manager" '\EFI\systemd\shimx64.efi'
+  create_nvram_entry "${LOADER_LABELS[systemd-boot]}" '\EFI\systemd\shimx64.efi'
+}
+
+# After a bootloader switch (--phase=boot with a different --bootloader) the
+# previous loader's NVRAM entries would keep winning the boot; delete the
+# OTHER two loaders' entries by exact label.
+# ponytail: the retired loaders' ESP files are deliberately left in place —
+# they are the recovery path if the new loader fails to boot.
+retire_other_loaders() { # $1=label of the just-installed loader
+  local label=""
+  for label in "${LOADER_LABELS[@]}"; do
+    [[ "${label}" == "$1" ]] || delete_nvram_entries "${label}"
+  done
+}
+
+# Firmware (Dell especially) reorders BootOrder behind our back, so a
+# successful install can still boot the old loader. Verify the new loader's
+# entries head BootOrder and rewrite it if not.
+ensure_boot_order_head() { # $1=label of the just-installed loader
+  local nums="" order="" head="" rest="" n=""
+  nums="$(nvram_nums_for_label "$1" | paste -sd,)"
+  if [[ -z "${nums}" ]]; then
+    warn "No NVRAM entry labeled '$1'; cannot verify BootOrder."
+    return 0
+  fi
+  order="$(efibootmgr | awk '$1 == "BootOrder:" { print $2 }')"
+  head="${order%%,*}"
+  if [[ ",${nums}," == *",${head},"* ]]; then
+    return 0
+  fi
+  # Our entries first, the rest of the existing order preserved behind them.
+  for n in ${order//,/ }; do
+    [[ ",${nums}," == *",${n},"* ]] || rest+=",${n}"
+  done
+  info "BootOrder does not lead with '$1'; setting ${nums}${rest}."
+  efibootmgr -o "${nums}${rest}" >/dev/null ||
+    warn "Could not set BootOrder; put '$1' first in the firmware setup."
 }
 
 phase_boot() {
+  local label=""
   detect_kernel
   case "${BOOTLOADER}" in
     zbm) install_zbm ;;
@@ -364,5 +525,8 @@ phase_boot() {
     systemd-boot) install_sdboot ;;
     *) fatal "BOOTLOADER not set (preflight should have ensured this)." ;;
   esac
+  label="${LOADER_LABELS[${BOOTLOADER}]}"
+  retire_other_loaders "${label}"
+  ensure_boot_order_head "${label}"
   stage_mok_enrollment
 }

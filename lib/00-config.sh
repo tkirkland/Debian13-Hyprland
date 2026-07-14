@@ -83,7 +83,8 @@ EOF
 }
 
 # --- System identity ---------------------------------------------------------
-TARGET_HOSTNAME="${TARGET_HOSTNAME:-precision}"
+# Generic default (env-overridable): "precision" was reference-machine leak.
+TARGET_HOSTNAME="${TARGET_HOSTNAME:-hyprland}"
 TARGET_USERNAME="${TARGET_USERNAME:-me}"
 USER_PASSWORD="${USER_PASSWORD:-}" # empty = interactive adduser prompt
 ROOT_PASSWORD="${ROOT_PASSWORD:-}" # empty = root stays locked
@@ -94,6 +95,17 @@ TIMEZONE_EXPLICIT="${TIMEZONE:+1}"
 LOCALE_EXPLICIT="${LOCALE:+1}"
 TIMEZONE="${TIMEZONE:-America/New_York}"
 LOCALE="${LOCALE:-en_US.UTF-8}"
+# XKB keyboard layout, same pattern (configure_keymap autodetects only the
+# members the operator did NOT set; --keymap sets the markers itself since
+# parse_args runs after these :+1 captures). XKB_MODEL has no marker: it is
+# never autodetected worth overriding — pc105 fits everything we target.
+XKB_LAYOUT_EXPLICIT="${XKB_LAYOUT:+1}"
+XKB_VARIANT_EXPLICIT="${XKB_VARIANT:+1}"
+XKB_OPTIONS_EXPLICIT="${XKB_OPTIONS:+1}"
+XKB_LAYOUT="${XKB_LAYOUT:-us}"
+XKB_VARIANT="${XKB_VARIANT:-}"
+XKB_MODEL="${XKB_MODEL:-pc105}"
+XKB_OPTIONS="${XKB_OPTIONS:-}"
 # Hardware clock (RTC) interpretation. No default: the user must choose, via
 # --rtc=<utc|local> or the interactive prompt (require_rtc_choice). Neither is
 # assumed — an unset value is an error before the system phase runs.
@@ -114,9 +126,13 @@ CACHE_DIR="${CACHE_DIR:-/var/cache/hypr-deb}"
 # preflight probes this first: an in-root store cannot be shadowed by a /run bind
 # mount and does not depend on the medium staying visible mid-install.
 ISO_LIVE_REPO="${ISO_LIVE_REPO:-/opt/hypr-deb/repo}"
-# Fallback for older ISOs that shipped the store as a top-level data directory on
-# the medium (mounted at /run/live/medium) rather than embedded in the squashfs.
-ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
+# Where live-boot mounts the ISO9660 medium in the live session. The golden
+# ISO (issue #111) ships the install store AND the squashfs the deploy phase
+# unpacks under here.
+LIVE_MEDIUM_DIR="${LIVE_MEDIUM_DIR:-/run/live/medium}"
+# The medium-side install store (golden ISOs: NVIDIA + bootloader debs, ZBM
+# EFI, KERNEL stamp; older ISOs shipped the full pool here).
+ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-${LIVE_MEDIUM_DIR}/hypr-repo}"
 # Location of the apt repo (pool/ + dists/) the offline machinery installs from.
 # Defaults to the on-ISO store (ISO_LIVE_REPO) — decoupled from CACHE_DIR so an
 # offline install never depends on a second, install-time cache. preflight
@@ -124,6 +140,24 @@ ISO_MEDIUM_REPO="${ISO_MEDIUM_REPO:-/run/live/medium/hypr-repo}"
 # ISO_MEDIUM_REPO); tools/build-iso.sh overrides it to its workspace pool.
 # ISO_LIVE_REPO/ISO_MEDIUM_REPO MUST be defined above this line (set -u).
 CACHE_REPO_DIR="${CACHE_REPO_DIR:-${ISO_LIVE_REPO}}"
+
+# --- ISO build mode (issue #111, golden rootfs) --------------------------------
+# HYPR_ISO_GOLDEN=1 switches tools/build-iso.sh to the golden-rootfs pipeline:
+# the build debootstraps a second, clean chroot from the file:// pool, installs
+# the COMPLETE target system into it once, and ships that one squashfs as BOTH
+# the live session and the image the installer copies to disk. The multi-GB
+# pool becomes a build-workspace artifact; the ISO carries only the small
+# install store (NVIDIA + bootloader debs, ZBM EFI, KERNEL stamp) on the
+# ISO9660 medium at /hypr-repo. Default since the Phase-2 installer pivot
+# (the installer consumes only golden ISOs now); 0 selects the legacy
+# stock-squashfs repack with the full pool embedded at /opt/hypr-deb/repo —
+# its ISO still boots but the current installer cannot install from it.
+HYPR_ISO_GOLDEN="${HYPR_ISO_GOLDEN:-1}"
+
+# Upstream kitty deb source (daily repackage of kovidgoyal's official
+# binaries; Debian's 0.41 has the false NVIDIA sRGB warning, fixed >= 0.47).
+# step_stage_kitty pulls the latest release deb into the build pool.
+KITTY_DEB_REPO_URL="${KITTY_DEB_REPO_URL:-https://github.com/tkirkland/kitty-deb}"
 
 # --- Bootloader ---------------------------------------------------------------
 # Chosen via --bootloader or interactive prompt: zbm | grub | systemd-boot
@@ -640,15 +674,30 @@ ELEPHANT_PROVIDERS=(
 # qalc + imagemagick: elephant's calc and clipboard providers probe for them at
 # startup and silently self-disable when absent (audit findings 4/5).
 WALKER_RUNTIME_PACKAGES=(libgtk4-layer-shell0 libpoppler-glib8 qalc imagemagick)
+# adw-gtk3 (issues #51/#76): the unofficial GTK3 port of libadwaita's GTK4
+# look, GitHub-only. The release tarball is HARVESTED into the offline store at
+# BUILD time (harvest_adw_gtk3, 40-system.sh) under ADW_GTK3_STORE_SUBDIR and
+# its two theme dirs (adw-gtk3/, adw-gtk3-dark/) are copied from there OFFLINE
+# at install time (install_adw_gtk3_theme) — never fetched during an install.
+# ADW_GTK3_VERSION pins the release deterministically (e.g. v6.5); empty
+# resolves the latest tag at BUILD time only. Upstream tags are vX.Y (no patch
+# component — v6.5), so the default vX.Y.Z pattern needs overriding here.
+ADW_GTK3_REPO_URL="${ADW_GTK3_REPO_URL:-https://github.com/lassekongo83/adw-gtk3}"
+ADW_GTK3_VERSION="${ADW_GTK3_VERSION:-}"
+ADW_GTK3_TAG_PATTERN="${ADW_GTK3_TAG_PATTERN:-^v[0-9]+(\.[0-9]+)+$}"
+# Subdir under the offline store root (CACHE_REPO_DIR) holding the theme dirs.
+ADW_GTK3_STORE_SUBDIR="${ADW_GTK3_STORE_SUBDIR:-adw-gtk3}"
 
 # Debian packages the upstream build replaces (filtered out of the base set on
 # BOTH paths so we never dkms-build modules we immediately remove).
 ZFS_DEBIAN_PACKAGES=(zfs-initramfs zfs-dkms zfsutils-linux zfs-zed)
-# Upstream OpenZFS metapackages installed by NAME on the OFFLINE path
-# (install_zfs_offline): the on-ISO pool carries them (built by build-iso
-# step_zfs), so the offline default ships the SAME upstream OpenZFS the online
-# source build produces — not Debian's 2.3.x. The online path builds these from
-# source instead (install_zfs_from_source).
+# Upstream OpenZFS packages consumed from the on-ISO pool (built by build-iso
+# step_zfs), so every install ships the SAME upstream OpenZFS the online
+# source build produces — not Debian's 2.3.x. All four (dkms included) bake
+# into the golden image at ISO-build time, module compiled and signed there —
+# installs and first boots never build modules (issue #111). The legacy
+# offline path (install_zfs_offline) installs the same set in the chroot; the
+# online path builds from source (install_zfs_from_source).
 ZFS_UPSTREAM_PACKAGES=(
   openzfs-zfsutils openzfs-zfs-dkms openzfs-zfs-initramfs openzfs-zfs-zed
 )
@@ -704,6 +753,17 @@ PORTAL_PACKAGES=(
   libglib2.0-bin
 )
 
+# Dark theming defaults (issues #51/#76), proven on the reference machine.
+# gnome-themes-extra ships the GTK3 Adwaita-dark fallback theme;
+# qt6-gtk-platformtheme lets Qt6 apps read the GTK settings (paired with
+# QT_QPA_PLATFORMTHEME=gtk3 in the uwsm env); papirus-icon-theme provides the
+# Papirus-Dark icon set; adwaita-icon-theme is pinned explicitly for the
+# Adwaita cursor theme (otherwise only a transitive dependency). All in main.
+THEME_PACKAGES=(
+  gnome-themes-extra qt6-gtk-platformtheme papirus-icon-theme
+  adwaita-icon-theme
+)
+
 # lxpolkit (#67 item 4): the LXDE polkit authentication agent. Ships
 # /etc/xdg/autostart/lxpolkit.desktop and autostarts via `uwsm finalize`
 # (already wired in the hyprland.start hook) — no extra autostart line needed.
@@ -734,7 +794,7 @@ TARGET_BASE_PACKAGES=(
   zfs-zed
   mdadm dosfstools efibootmgr network-manager sudo locales
   systemd-timesyncd
-  console-setup ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
+  console-setup keyboard-configuration ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
   grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin sway-notification-center
@@ -744,10 +804,34 @@ TARGET_BASE_PACKAGES=(
   "${AUDIO_PACKAGES[@]}"
   "${FNKEY_PACKAGES[@]}"
   "${PORTAL_PACKAGES[@]}"
+  "${THEME_PACKAGES[@]}"
   "${POLKIT_PACKAGES[@]}"
   "${FILEMANAGER_PACKAGES[@]}"
   "${WALKER_RUNTIME_PACKAGES[@]}"
   intel-microcode amd64-microcode hwdata xwayland xkb-data
+)
+
+# Packages the golden image (issue #111) carries ON TOP of the target base
+# set — they serve the live session and the install pipeline, and the ones
+# that are live-only (live-boot/live-config*) are purged from the copied tree
+# at customize time:
+#   live-boot/live-config*  boot the squashfs as the live session
+#   git                     live convenience (was a live-extras graft)
+#   squashfs-tools          unsquashfs — the installer's rootfs copy step
+#   gdisk parted rsync      partitioning/copy tools (were LIVE_TOOL_PACKAGES,
+#                           whose uname-keyed headers entry cannot bake)
+#   openssl                 ensure_mok_key runs it in the live env
+#   NVIDIA_DKMS_BUILD_PACKAGES + linux-headers (via TARGET_BASE) bake so the
+#   conflict-free half of every NVIDIA variant is already in the image.
+# The live-only members of the golden image: baked in so the squashfs boots
+# as the live session, purged from the copied tree by prune_live_artifacts
+# (scripts/40-system.sh) so they never ship on the installed system.
+LIVE_PURGE_PACKAGES=(live-boot live-config live-config-systemd)
+
+GOLDEN_EXTRA_PACKAGES=(
+  "${LIVE_PURGE_PACKAGES[@]}"
+  git squashfs-tools gdisk parted rsync openssl
+  "${NVIDIA_DKMS_BUILD_PACKAGES[@]}"
 )
 
 # --- Addons -------------------------------------------------------------------
@@ -783,6 +867,13 @@ LIVE_TOOL_PACKAGES=(
 
 # --- Behaviour ------------------------------------------------------------------
 ASSUME_YES="${ASSUME_YES:-0}"
+# Target-relative destination for the staged default user configs (uwsm env,
+# portal routing, swaync/kitty/walker/hypr configs). Empty (the default) =
+# the target user's real home (/home/${TARGET_USERNAME}); the golden-image
+# build (issue #111) overrides it to /etc/skel so every adduser-created
+# account — the live-config live user and the installed create_user account —
+# inherits the same defaults from one staged copy.
+SESSION_CONFIG_HOME="${SESSION_CONFIG_HOME:-}"
 # --ntp: space-separated NTP servers written into the target's
 # systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/10-installer.conf).
 # Empty (the default) leaves timesyncd on Debian's stock pool/DHCP behaviour;

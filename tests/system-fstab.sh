@@ -50,9 +50,11 @@ assert_contains "${user_body}" "canmount=on" \
 assert_contains "${user_body}" "sudo,adm,systemd-journal,video" \
   "create_user adds the owner to the video group (backlight access, issue #48)"
 
-# The zfs build must produce ONLY the utils/dkms package set:
-# native-deb-kmod compiles modules for the RUNNING (live) kernel and drags
-# that kernel image into the target as a dependency.
+# The in-target zfs build must produce ONLY the utils/dkms package set:
+# native-deb-kmod compiles modules for one fixed kernel and drags that kernel
+# image into the target as a dependency. The ISO-build path (ZFS_DEB_POOL set)
+# DOES build it, pinned — the per-path script assertions live in
+# tests/zfs-build.sh; here assert the kmod build stays behind the pool gate.
 zfs_body="$(bash -c '
   source lib/00-config.sh
   source lib/01-log.sh
@@ -60,35 +62,36 @@ zfs_body="$(bash -c '
   declare -f install_zfs_from_source')"
 assert_contains "${zfs_body}" "native-deb-utils" \
   "zfs build uses native-deb-utils"
-if printf '%s\n' "${zfs_body}" | grep -qE 'native-deb(-kmod)?[" ]*$'; then
-  echo "  FAIL: zfs build must not invoke native-deb or native-deb-kmod" >&2
-  TEST_FAILURES=$((TEST_FAILURES + 1))
-else
-  echo "  ok: zfs build avoids native-deb-kmod"
-fi
+assert_contains "${zfs_body}" 'ZFS_DEB_POOL' \
+  "the native-deb-kmod build is gated on ZFS_DEB_POOL (see tests/zfs-build.sh)"
 assert_contains "${zfs_body}" "openzfs-zfs-dkms" \
   "zfs build asserts the dkms package was produced"
 # pam_zfs_key in common-password breaks chpasswd without encrypted homes.
 assert_contains "${zfs_body}" "pam-auth-update" \
   "zfs build purges pam_zfs_key and regenerates the PAM stack"
 
-# Addon artifacts: debs install via apt (dependency resolution); runfiles
-# are staged at /opt/addons, never executed in the chroot.
+# Addon artifacts (issue #111 split): debs/lists bake into the golden image
+# at build time; only the per-install pieces run at customize — shell hooks
+# execute in the chroot, runfiles stage at /opt/addons, never executed.
 addon_body="$(bash -c '
   source lib/00-config.sh
   source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f install_addon_artifacts phase_system')"
-assert_contains "${addon_body}" "apt-get install -y /var/tmp/addon-debs" \
-  "addon debs installed through apt"
+  declare -f install_addon_runtime phase_customize')"
 assert_contains "${addon_body}" "/opt/addons" \
   "runfiles staged into the target"
-assert_contains "${addon_body}" "install_addon_artifacts" \
-  "phase_system runs the addon artifact step"
+assert_contains "${addon_body}" "install_addon_runtime" \
+  "phase_customize runs the addon runtime step"
 assert_contains "${addon_body}" "addon-scripts" \
   "addon shell hooks execute inside the target"
 assert_contains "${addon_body}" "Addon script failed" \
   "failing addon script fails the phase by name"
+if [[ "${addon_body}" == *"addon-debs"* ]]; then
+  echo "  FAIL: addon debs are build-time now; customize must not install them" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: no install-time addon-deb path (baked at build)"
+fi
 
 # man-db re-indexes on every apt transaction's trigger; install_base_packages
 # disables its auto-update (debconf) before the first package install so the
@@ -101,15 +104,15 @@ base_body="$(bash -c '
 assert_contains "${base_body}" "man-db/auto-update boolean false" \
   "install disables man-db auto-update to skip per-transaction reindexing"
 
-# configure_locale_tz needs /etc/locale.gen from the locales package, so
-# install_base_packages must come first in phase_system.
+# configure_zfs_boot_support's update-initramfs must capture the SIGNED zfs
+# modules, so sign_dkms_modules must come first in phase_customize.
 first_step="$(bash -c '
   source lib/00-config.sh
   source lib/01-log.sh
   source scripts/40-system.sh
-  declare -f phase_system' |
-  grep -oE 'install_base_packages|configure_locale_tz' | head -n1)"
-assert_eq "install_base_packages" "${first_step}" \
-  "base packages install before locale configuration"
+  declare -f phase_customize' |
+  grep -oE 'sign_dkms_modules|configure_zfs_boot_support' | head -n1)"
+assert_eq "sign_dkms_modules" "${first_step}" \
+  "zfs modules signed before the initramfs rebuild"
 
 finish_test

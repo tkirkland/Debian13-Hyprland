@@ -37,41 +37,56 @@ phase_verify() {
   done
   kver="$(printf '%s' "${vers}" | sort -V | tail -n1)"
 
-  if ((BUILD_ON_FIRSTBOOT)); then
-    vcheck "firstboot unit enabled" in_target \
-      "systemctl is-enabled hypr-deb-firstboot.service"
-    vcheck "firstboot runner staged" \
-      test -x "${TARGET}/usr/local/sbin/hypr-deb-firstboot"
-    vcheck "hyprland firstboot job staged" test -x \
-      "${TARGET}/usr/local/lib/hypr-deb/firstboot.d/50-hyprland-build.sh"
-    vcheck "sources staged" \
-      test -d "${TARGET}/var/tmp/hypr-deb-build/hyprland"
-    vcheck "toolchain staged for firstboot" in_target "command -v cmake"
-  else
-    # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
-    # (set by pam_systemd in real logins); provide both for the check.
-    vcheck "Hyprland binary runs" in_target "
-      set -e
-      install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
-      runuser -u '${TARGET_USERNAME}' -- \
-        env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
-        /usr/bin/Hyprland --version
-      rm -rf /tmp/hypr-verify-rt
-    "
-    vcheck "Hyprland links resolve" in_target \
-      "! ldd /usr/bin/Hyprland | grep -q 'not found'"
-    # guiutils builds every util from its root CMakeLists; if a future tag
-    # drops or renames the welcome util, fail loudly here (issue #11).
-    vcheck "welcome app installed" \
-      test -x "${TARGET}/usr/bin/hyprland-welcome"
-  fi
+  # Hyprland refuses to run as root and aborts without XDG_RUNTIME_DIR
+  # (set by pam_systemd in real logins); provide both for the check.
+  vcheck "Hyprland binary runs" in_target "
+    set -e
+    install -d -m 700 -o '${TARGET_USERNAME}' /tmp/hypr-verify-rt
+    runuser -u '${TARGET_USERNAME}' -- \
+      env XDG_RUNTIME_DIR=/tmp/hypr-verify-rt \
+      /usr/bin/Hyprland --version
+    rm -rf /tmp/hypr-verify-rt
+  "
+  vcheck "Hyprland links resolve" in_target \
+    "! ldd /usr/bin/Hyprland | grep -q 'not found'"
+  # guiutils builds every util from its root CMakeLists; if a future tag
+  # drops or renames the welcome util, fail loudly here (issue #11).
+  vcheck "welcome app installed" \
+    test -x "${TARGET}/usr/bin/hyprland-welcome"
+
+  # Golden-image customize hygiene (issue #111): the copied tree must have
+  # shed its live identity and plumbing.
+  local live_pkg=""
+  for live_pkg in "${LIVE_PURGE_PACKAGES[@]}"; do
+    vcheck "live package purged (${live_pkg})" in_target \
+      "! dpkg -s '${live_pkg}' >/dev/null 2>&1"
+  done
+  vcheck "live autologin hook removed" bash -c \
+    "[[ ! -e '${TARGET}/usr/lib/live/config/2999-hypr-autologin' ]]"
+  vcheck "live user home absent" bash -c "[[ ! -e '${TARGET}/home/user' ]]"
+  # Fresh identity: non-empty machine-id (the image ships it EMPTY) that is
+  # not the live session's, and ssh host keys that are not the live session's.
+  vcheck "machine-id regenerated (non-empty, not the live env's)" bash -c "
+    [[ -s '${TARGET}/etc/machine-id' ]] &&
+    ! cmp -s '${TARGET}/etc/machine-id' /etc/machine-id"
+  vcheck "ssh host keys regenerated (present, not the live env's)" bash -c "
+    [[ -f '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' ]] &&
+    ! cmp -s '${TARGET}/etc/ssh/ssh_host_ed25519_key.pub' \
+      /etc/ssh/ssh_host_ed25519_key.pub"
+  # The install is COMPLETE at reboot: zfs is dkms-owned with its module
+  # already built (baked at image-build time), and no deferred install work
+  # is queued for the user's first boot.
+  vcheck "zfs module owned by dkms (baked, no firstboot build)" in_target \
+    "dkms status zfs | grep -q installed"
+  vcheck "no firstboot jobs pending" bash -c \
+    "! compgen -G '${TARGET}/usr/lib/hypr-deb/firstboot.d/*.sh' >/dev/null"
 
   # Screenshot/recording capture helpers + deps (epic #67, item 1). Staged
   # unconditionally by configure_session, so verified on both install paths.
   vcheck "screenshot helper staged" test -x \
-    "${TARGET}/usr/local/bin/linux-screenshot"
+    "${TARGET}/usr/bin/linux-screenshot"
   vcheck "screen-record helper staged" test -x \
-    "${TARGET}/usr/local/bin/linux-screen-record"
+    "${TARGET}/usr/bin/linux-screen-record"
   vcheck "screenshot deps present (grim/slurp/jq)" in_target \
     "command -v grim && command -v slurp && command -v jq"
   vcheck "recording deps present (wf-recorder/notify-send/pactl)" in_target \
@@ -103,6 +118,24 @@ phase_verify() {
     "${TARGET}/home/${TARGET_USERNAME}/.config/xdg-desktop-portal/hyprland-portals.conf"
   vcheck "dark-mode gschema override staged" test -f \
     "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  # Dark theming defaults (#51/#76): packages, gschema keys, theme dirs, uwsm env.
+  vcheck "theming packages installed (gnome-themes-extra/qt6-gtk-platformtheme/papirus/adwaita)" \
+    in_target "dpkg -s gnome-themes-extra && dpkg -s qt6-gtk-platformtheme &&
+      dpkg -s papirus-icon-theme && dpkg -s adwaita-icon-theme"
+  vcheck "gschema override selects adw-gtk3-dark GTK theme" \
+    grep -q "gtk-theme='adw-gtk3-dark'" \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "gschema override selects Papirus-Dark icons" \
+    grep -q "icon-theme='Papirus-Dark'" \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "gschema override pins the Adwaita cursor" \
+    grep -q "cursor-theme='Adwaita'" \
+    "${TARGET}/usr/share/glib-2.0/schemas/90-hypr-deb.gschema.override"
+  vcheck "adw-gtk3-dark theme installed" test -d \
+    "${TARGET}/usr/share/themes/adw-gtk3-dark"
+  vcheck "uwsm env routes Qt through the gtk3 platform theme" \
+    grep -q "QT_QPA_PLATFORMTHEME" \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/uwsm/env"
   vcheck "lxpolkit installed" in_target "command -v lxpolkit"
   vcheck "lxpolkit autostart present" test -f \
     "${TARGET}/etc/xdg/autostart/lxpolkit.desktop"
@@ -120,13 +153,34 @@ phase_verify() {
   vcheck "session launcher at /usr/bin/uwsm" \
     test -x "${TARGET}/usr/bin/uwsm"
   # The quiet-VT wrapper both session modes launch through (issue #12).
-  vcheck "session wrapper at /usr/local/bin/hypr-session" \
-    test -x "${TARGET}/usr/local/bin/hypr-session"
+  vcheck "session wrapper at /usr/bin/hypr-session" \
+    test -x "${TARGET}/usr/bin/hypr-session"
   # shellcheck disable=SC2016  # the $() must expand inside the chroot, not here
   vcheck "getty@tty1 masked (no VT1 contention with greetd)" in_target \
     '[[ "$(systemctl is-enabled getty@tty1.service 2>/dev/null || true)" == masked ]]'
   vcheck "user hyprland.lua exists" \
     test -f "${TARGET}/home/${TARGET_USERNAME}/.config/hypr/hyprland.lua"
+
+  # Keyboard layout (console + greeter + Hyprland). Dynamic read-back like
+  # greeter_bin above, so standalone --phase=verify runs check the target's
+  # actual configuration, not this shell's re-sourced default.
+  vcheck "keyboard config written" \
+    grep -q '^XKBLAYOUT="[a-z]' "${TARGET}/etc/default/keyboard"
+  vcheck "keyboard-configuration installed" \
+    in_target "dpkg -s keyboard-configuration >/dev/null"
+  kb="$(sed -n 's/^XKBLAYOUT="\?\([^"]*\)"\?$/\1/p' \
+    "${TARGET}/etc/default/keyboard" 2>/dev/null || true)"
+  vcheck "greeter XKB env staged (${kb:-none})" \
+    grep -q "^XKB_DEFAULT_LAYOUT=${kb}$" "${TARGET}/etc/environment"
+  # Only when a module carries kb_layout at all: a kb_layout-less upstream
+  # example is legal (libxkbcommon falls back to the XKB_DEFAULT_* env), so
+  # its absence must not fail a plain-us install.
+  if grep -rqE 'kb_layout[[:space:]]*=' \
+    "${TARGET}/home/${TARGET_USERNAME}/.config/hypr" 2>/dev/null; then
+    vcheck "hyprland kb_layout matches console (${kb:-none})" \
+      grep -rq "kb_layout.*\"${kb}\"" \
+      "${TARGET}/home/${TARGET_USERNAME}/.config/hypr"
+  fi
 
   # NVIDIA (issue #4): only when a GPU was detected and a driver chosen.
   # Both flavors install offline from /hypr-repo now (Phase 5), so this is
@@ -216,9 +270,10 @@ phase_verify() {
   vcheck "mdadm.conf present" test -s "${TARGET}/etc/mdadm/mdadm.conf"
   vcheck "zfs-zed enabled (pool fault reporting)" in_target \
     "systemctl is-enabled zfs-zed"
-  # BOTH paths replace Debian's zfs with the upstream build (online from source,
-  # offline from the on-ISO pool via install_zfs_offline), so the upstream package
-  # must be present regardless of network — verify it unconditionally.
+  # Every path replaces Debian's zfs with the upstream build (baked into the
+  # golden image; legacy paths install it from source or the on-ISO pool), so
+  # the upstream package must be present regardless of network — verify it
+  # unconditionally.
   vcheck "upstream openzfs installed" in_target \
     "dpkg -s openzfs-zfsutils >/dev/null"
   vcheck "pool bootfs set" bash -c \

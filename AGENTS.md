@@ -130,7 +130,10 @@ Two long-lived branches: `develop` (where fix-group PRs land) and `master`
 1. Work is committed to a per-fix-group branch, pushed, and the agent opens
    a PR into `develop`. The user reviews; on his explicit go-ahead the agent
    merges it with a **merge commit** (squash/rebase are disabled repo-wide).
-   One PR = one fix type, so each fix stays trackable as a unit.
+   One PR = one fix type, so each fix stays trackable as a unit. Once
+   merged into `develop`, the fix-group branch is **deleted** (local and
+   remote) — the merge commit is the record; never push a branch after its
+   merge.
 2. For a release, the agent opens a PR `develop` → `master`.
 3. The user reviews and gives the verdict in-session:
    - **Approved** ("gtg" / "all good" / similar) — the agent merges with a

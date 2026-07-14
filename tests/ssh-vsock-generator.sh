@@ -43,10 +43,11 @@ source lib/01-log.sh
 source scripts/20-storage.sh
 source scripts/40-system.sh
 
-# phase_system must actually call the neutering, and after configure_time_sync.
-ps_fn="$(declare -f phase_system)"
-assert_contains "${ps_fn}" "neuter_ssh_vsock_generator" \
-  "neuter_ssh_vsock_generator wired into the system phase"
+# The neutering is BAKED into the golden image (issue #111): build-iso's
+# step_golden_session must call it (the installed system inherits the mask
+# from the unpacked image, so phase_customize no longer needs it).
+assert_contains "$(cat tools/build-iso.sh)" "neuter_ssh_vsock_generator" \
+  "neuter_ssh_vsock_generator baked by the golden-image build"
 
 # Behavioral: fake in_target to record the chroot command, then run that exact
 # command into a temp prefix and prove the resulting symlink points to /dev/null

@@ -40,17 +40,19 @@ out="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh; source lib/02-args.sh
   source lib/03-state.sh; source lib/04-chroot-mounts.sh
   for f in scripts/*.sh; do source "$f"; done
-  for fn in phase_preflight phase_storage phase_bootstrap \
-            phase_system phase_boot phase_hyprland phase_verify \
+  for fn in phase_preflight phase_storage phase_deploy \
+            phase_customize phase_boot phase_verify \
             phase_cleanup ensure_target_ready; do
     declare -f "$fn" >/dev/null || { echo "MISSING $fn"; exit 1; }
   done
   echo all-present')"
 assert_eq "all-present" "${out}" "all phase functions defined"
 
-# ensure_target_ready is a no-op when bootstrap is not stamped: it must
-# return 0 and print nothing (resume helper only acts after bootstrap).
-out="$(STATE_DIR="$(mktemp -d)" bash -c '
+# ensure_target_ready is a no-op when the pool does not exist: it must
+# return 0 and print nothing. POOL_NAME is overridden to a name no host can
+# carry — the default (PRECISION) IS the dev machine's own root pool, which
+# made this test walk into real mounts when run there.
+out="$(STATE_DIR="$(mktemp -d)" POOL_NAME="hyprdeb-test-no-such-pool" bash -c '
   source lib/00-config.sh; source lib/01-log.sh
   source lib/03-state.sh; source lib/04-chroot-mounts.sh
   source scripts/30-bootstrap.sh

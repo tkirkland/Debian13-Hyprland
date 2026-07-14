@@ -94,10 +94,12 @@ rc=0
 "${prcd}" || rc=$?
 assert_eq "101" "${rc}" "policy-rc.d forbids service starts (exit 101)"
 
+# phase_cleanup delegates the tree/pool teardown to teardown_target_tree
+# (shared with the standalone --phase success path), so inspect both bodies.
 cleanup_body="$(bash -c '
   source lib/00-config.sh; source lib/01-log.sh
   source scripts/99-cleanup.sh
-  declare -f phase_cleanup')"
+  declare -f phase_cleanup teardown_target_tree')"
 assert_contains "${cleanup_body}" "policy-rc.d" \
   "cleanup removes the chroot service guard"
 assert_contains "${cleanup_body}" \
@@ -110,5 +112,55 @@ assert_contains "${cleanup_body}" "kill_target_processes" \
   "cleanup kills chroot-holding processes before teardown"
 assert_contains "${cleanup_body}" "teardown_target_iso_repo" \
   "cleanup removes the offline temp source and repo bind"
+
+# The install is store-ONLY until cleanup: on a NETWORKED machine any live
+# mirror source wins the candidate race against the store (apt installs
+# trixie-security's newer kernel instead of the store's, stranding the
+# prebuilt zfs kmod — issue #110 VM validation failure). The golden image
+# ships the permanent mirror sources BAKED IN (step_finalize_golden), so
+# phase_deploy must strip them after the unpack; phase_cleanup rewrites them
+# after the last package transaction.
+echo "test: install is store-only until cleanup (no mirror mid-install)"
+run_deploy() { # runs phase_deploy with stubs; baked sources pre-seeded
+  bash -c "
+    set -u
+    source lib/00-config.sh
+    source lib/01-log.sh
+    source scripts/30-bootstrap.sh
+    TARGET='${tmp}/btarget'
+    mount_target_tree() { :; }
+    cache_validate() { :; }
+    unpack_golden_rootfs() { :; }
+    install_policy_rc_d() { :; }
+    mount_chroot_binds() { :; }
+    setup_target_iso_repo() { write_iso_temp_source; }
+    in_target() { :; }
+    info() { :; }
+    phase_deploy
+  "
+}
+rm -rf "${tmp}/btarget"; mkdir -p "${tmp}/btarget/etc/apt/sources.list.d"
+: >"${tmp}/btarget/etc/apt/sources.list.d/debian.sources" # baked by the build
+run_deploy
+if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/debian.sources" ]]; then
+  echo "  FAIL: deploy left the baked mirror sources in place (mirror would outbid the store mid-install)" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+else
+  echo "  ok: deploy strips the baked mirror sources (store-only mid-install)"
+fi
+if [[ -e "${tmp}/btarget/etc/apt/sources.list.d/hypr-iso-temp.sources" ]]; then
+  echo "  ok: deploy wires the temporary store source"
+else
+  echo "  FAIL: deploy did not wire the store source" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+
+# ...and cleanup writes the permanent sources (idempotent online) so the
+# installed system always ends up with the real mirror, plus drops the
+# store-derived apt indexes.
+assert_contains "${cleanup_body}" "write_target_apt_sources" \
+  "cleanup writes the permanent mirror sources after the last transaction"
+assert_contains "${cleanup_body}" "var/lib/apt/lists/" \
+  "cleanup drops the store-derived apt indexes"
 
 finish_test

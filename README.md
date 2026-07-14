@@ -256,6 +256,12 @@ Common flags (see `--help` for the full list):
                                        (e.g. 610.43.02-1); pinned installs are
                                        apt-mark held
 --jobs=<n>                             cap build parallelism
+--keymap=<layout[:variant]>            XKB keyboard layout for the installed
+                                       system — console, greeter, and Hyprland
+                                       (e.g. de or de:nodeadkeys; default:
+                                       autodetected from the live session's
+                                       /etc/default/keyboard, falling back
+                                       to us)
 --mirror=<url>                         Debian mirror (default deb.debian.org)
 --ntp="<servers>"                      space-separated NTP servers for the
                                        installed system's systemd-timesyncd
@@ -271,9 +277,13 @@ Common flags (see `--help` for the full list):
 
 Identity and layout knobs are environment overrides (set before launch):
 `TARGET_HOSTNAME`, `TARGET_USERNAME`, `USER_PASSWORD`, `ROOT_PASSWORD`,
-`TIMEZONE`, `LOCALE`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
+`TIMEZONE`, `LOCALE`, `XKB_LAYOUT`, `XKB_VARIANT`, `XKB_MODEL`,
+`XKB_OPTIONS`, `NTP_SERVERS`, `POOL_NAME`, `EFI_SIZE`, `SWAP_SIZE`,
 `HYPRDIM_REPO_URL` (source for the hyprdim brightness daemon), and
-more — see `lib/00-config.sh`.
+more — see `lib/00-config.sh`. Like `TIMEZONE`/`LOCALE`, an explicit
+`XKB_*` value always wins over autodetection; unset members are detected
+from the live session and validated against the target's xkb rules before
+they can replace the `us` fallback.
 
 The installed system has time synchronization enabled by default: `systemd-timesyncd`
 is installed and enabled in the target, so the clock stays disciplined after
@@ -336,7 +346,7 @@ Offline installation is the [Offline-from-ISO](#offline-from-iso-recommended)
 model above: the network-bearing work happens once on the build host
 (`tools/build-iso.sh --confirm`), which assembles a self-sufficient ISO. The
 booted target installs entirely from the on-ISO package store at
-`/run/live/medium/hypr-repo`, with **no network**:
+`/opt/hypr-deb/repo` (see above), with **no network**:
 
 - The `bootstrap` phase runs `cache_validate` against the on-ISO repo
   (`CACHE_REPO_DIR`, pointed at the store by preflight) and fails with a precise
@@ -349,6 +359,17 @@ booted target installs entirely from the on-ISO package store at
 - The temporary source and bind mount are torn down at cleanup. The installed
   system's **permanent** apt sources are the real Debian mirror, so future
   online `apt update`s work. The store is **not** copied into the target.
+- **ZFS compiles nowhere on this path**: the live squashfs ships the ISO's own
+  prebuilt upstream OpenZFS debs (kmod for the live kernel + userland — the
+  same 2.4.x the target gets; pool feature safety is enforced explicitly via
+  `zpool create -o compatibility=`), and the target installs the prebuilt
+  `openzfs-zfs-modules-<kver>` deb from the pool. Two
+  kernels are recorded in the store: `KERNEL_PINNED` (the stock ISO's live
+  kernel, asserted present in the pool at build time) and `KERNEL_TARGET`
+  (the kernel the pool's `linux-image-amd64` metapackage resolves to — often
+  newer, since trixie-security kernels move between point releases). A
+  prebuilt kmod deb is built for each (one build when they match); the live
+  session uses the pinned one, the installed system the target one.
 
 Freshness/version checking is a **build-time** concern: `deb_needs_rebuild`
 recompiles a component at ISO-creation only when its release tag is newer than
@@ -387,6 +408,14 @@ storage layout is identical regardless of choice.
 For grub and systemd-boot, a kernel postinst/initramfs hook syncs the
 current kernel + initramfs from `/boot` (on ZFS) to the ESP on every kernel
 or initramfs update.
+
+**Switching bootloaders later** (issue #50): boot the live ISO and run
+`--phase=boot --bootloader=<new>` against the existing install — the phase
+re-imports the pool, installs the new loader, and retires the old loader's
+NVRAM entry (entry matching fails closed; dangling same-label entries are
+reaped). The full grub→zbm→systemd-boot→grub cycle is VM-validated. Known
+cosmetic leftover: the old loader's ESP directory (`EFI/zbm`,
+`EFI/systemd`, ...) is not removed.
 
 **Rollback caveat:** with grub or systemd-boot, after rolling back the root
  dataset, the ESP still carries the newer kernel copy until the hook next
@@ -439,7 +468,7 @@ the hyprwm stack; its runtime dependencies (python3, python3-xdg,
 whiptail, dbus-user-session) come from Debian.
 
 greetd launches a single Hyprland session through a wrapper at
-`/usr/local/bin/hypr-session` (`uwsm start -- hyprland.desktop`). The
+`/usr/bin/hypr-session` (`uwsm start -- hyprland.desktop`). The
 wrapper keeps the greeter→desktop handoff quiet (issue #12): it runs uwsm
 under `systemd-cat` with `UWSM_SILENT_START=2`, so startup chatter lands in
 the journal (`journalctl -t hypr-session`) instead of painting over VT1.
@@ -467,10 +496,17 @@ wallpaper cycle, and the traditional `Print` screenshot cluster
 as the `assets/wallpapers` submodule, installed to
 `/usr/share/backgrounds/hypr-deb`.
 
+The install also ships **dark theming defaults** (PR #109): the `adw-gtk3`
+GTK theme (harvested into the offline store at build time) with
+`adw-gtk3-dark` selected via a gschema override, a matching dark
+`color-scheme` for the portal, and Qt/icon/cursor defaults exported through
+the uwsm environment — again just defaults, overridable by personal
+dotfiles.
+
 **External-display brightness** (issue #66): the `XF86MonBrightness` keys, the
 idle dim, and the lock screen all drive one logical brightness level across
 *every* connected display via the `brightness-sync` wrapper
-(`/usr/local/bin/brightness-sync`). Where a real hardware backlight exists it is
+(`/usr/bin/brightness-sync`). Where a real hardware backlight exists it is
 set directly with `brightnessctl` — the internal panel, and external monitors
 exposed as `/sys/class/backlight` nodes by the `ddcci-dkms` driver over DDC/CI
 (`ddcutil`/`i2c-tools` provide the DDC/CI tooling; the `ddcci` and `i2c-dev`
@@ -502,17 +538,28 @@ Source policy:
   path), or in the target chroot / on first boot for a networked install. The
   build uses GCC 15 from a pinned sid source where required. Compiled stack
   artifacts install to `/usr` (the packaged `.debs` lay down `/usr/bin`,
-  `/usr/lib`); the hand-written glue scripts stay under `/usr/local`. Build
-  trees under `/var/tmp` are deleted after packaging.
+  `/usr/lib`); the hand-written glue (scripts, the hyprdim user unit, the
+  firstboot machinery) also lives under `/usr` but stays unpackaged — dpkg
+  silently overwrites unowned files if a package ever ships the same path
+  and deletes them on that package's purge, an accepted risk for these
+  bespoke, namespaced names. Build trees under `/var/tmp` are deleted after
+  packaging.
 - The **offline-from-ISO install compiles nothing** — it `apt-get install`s
-  the stack debs (already built at ISO creation) by name from the on-ISO repo.
+  the stack debs (already built at ISO creation) by name from the on-ISO repo,
+  including the ZFS kernel module (prebuilt `openzfs-zfs-modules-<kver>`, no
+  dkms compile).
 - **OpenZFS comes from upstream, not trixie**: the latest release is built as
-  native `openzfs-*` packages replacing Debian's 2.3.x, with modules
-  dkms-signed by the machine's MOK key. For offline-from-ISO installs these
-  debs are prebuilt into the on-ISO repo and installed from there; a networked
-  install builds them in the chroot. The pool itself is created by the live
-  session's 2.3.x, so its feature set stays conservative until you
-  `zpool upgrade` deliberately.
+  native `openzfs-*` packages replacing Debian's 2.3.x, with modules signed by
+  the machine's MOK key. For offline-from-ISO installs these debs — including
+  a prebuilt kernel-module deb for the pinned live/target kernel (the store's
+  `KERNEL_PINNED`; the build fails if the stock ISO's kernel and the pool's
+  diverge) — come from the on-ISO repo: the modules install prebuilt and are
+  MOK-signed (via linux-kbuild's `sign-file`, exactly as dkms would) at
+  install time, and `openzfs-zfs-dkms` arrives dormant via a
+  first-boot job so future kernel upgrades still get dkms rebuilds. A
+  networked install builds everything in the chroot instead. The pool itself
+  is created by the live session's 2.3.x, so its feature set stays
+  conservative until you `zpool upgrade` deliberately.
 
 Build hygiene: the exact build-dependency package set is recorded and, after
 a successful build and verify, purged (`apt-get purge --autoremove`), leaving
