@@ -415,6 +415,7 @@ cp "${tmp}/target${HYPR_SRC_DIR}/hyprland/example/hyprland.lua" \
   "${offline_target}/usr/share/hypr/hyprland.lua"
 (
   in_target() { :; }
+  # shellcheck disable=SC2030  # deliberately subshell-local retarget
   TARGET="${offline_target}"
   HYPR_AUTOLOGIN=1
   configure_session
@@ -425,5 +426,47 @@ else
   echo "  FAIL: offline config not generated from /usr/share/hypr/hyprland.lua" >&2
   TEST_FAILURES=$((TEST_FAILURES + 1))
 fi
+
+# swww-cycle honesty (first-login marker gates on its rc): applying nothing
+# must exit NONZERO — an exit-0 no-op wrote the done-marker with no wallpaper
+# ever set (hit live 2026-07-13). Stub swww (daemon up, zero outputs) and
+# sleep (the output-wait loop must not stall the suite).
+sc_bin="$(mktemp -d)"
+cat >"${sc_bin}/swww" <<'EOF'
+#!/bin/sh
+[ "$1" = query ] && exit 0
+exit 0
+EOF
+cat >"${sc_bin}/sleep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "${sc_bin}/swww" "${sc_bin}/sleep"
+rc=0
+# shellcheck disable=SC2031  # top-level TARGET; the earlier (…) copy is unrelated
+PATH="${sc_bin}:${PATH}" "${TARGET}/usr/bin/swww-cycle" >/dev/null 2>&1 || rc=$?
+if ((rc != 0)); then
+  echo "  ok: swww-cycle exits nonzero when no output got a wallpaper"
+else
+  echo "  FAIL: swww-cycle exit-0 with no outputs re-breaks the first-login marker" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+# With an output but an empty wallpaper dir: still an honest failure.
+cat >"${sc_bin}/swww" <<'EOF'
+#!/bin/sh
+if [ "$1" = query ]; then echo "eDP-1: 1920x1080"; fi
+exit 0
+EOF
+rc=0
+# shellcheck disable=SC2031  # top-level TARGET; the earlier (…) copy is unrelated
+SWWW_WALLPAPER_DIR="${sc_bin}/nowhere" PATH="${sc_bin}:${PATH}" \
+  "${TARGET}/usr/bin/swww-cycle" >/dev/null 2>&1 || rc=$?
+if ((rc != 0)); then
+  echo "  ok: swww-cycle exits nonzero with no wallpapers to apply"
+else
+  echo "  FAIL: swww-cycle exit-0 with no images re-breaks the first-login marker" >&2
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+fi
+rm -rf "${sc_bin}"
 
 finish_test

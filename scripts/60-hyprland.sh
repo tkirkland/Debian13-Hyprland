@@ -804,11 +804,21 @@ if ! swww query >/dev/null 2>&1; then
   swww-daemon >/dev/null 2>&1 &
   for _ in $(seq 1 20); do swww query >/dev/null 2>&1 && break; sleep 0.2; done
 fi
-mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
-[ "${#outputs[@]}" -gt 0 ] || exit 0
+# Outputs register with the daemon a beat after the compositor starts (first
+# login races this; virtio even flaps the output once) — wait, don't shrug.
+# Exit NONZERO when nothing was applied: the first-login hook gates its
+# done-marker on this rc, and an exit-0 no-op wrote the marker with no
+# wallpaper ever set (hit live 2026-07-13 — gray desktop on every login).
+outputs=()
+for _ in $(seq 1 20); do
+  mapfile -t outputs < <(swww query | awk -F: 'NF>1 { gsub(/ /, "", $2); print $2 }')
+  [ "${#outputs[@]}" -gt 0 ] && break
+  sleep 0.5
+done
+[ "${#outputs[@]}" -gt 0 ] || { echo "swww-cycle: no outputs registered" >&2; exit 1; }
 mapfile -t imgs < <(find "$dir" -type f \
   \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) | shuf)
-[ "${#imgs[@]}" -gt 0 ] || exit 0
+[ "${#imgs[@]}" -gt 0 ] || { echo "swww-cycle: no wallpapers under $dir" >&2; exit 1; }
 i=0
 for out in "${outputs[@]}"; do
   swww img -o "$out" "${imgs[$(( i % ${#imgs[@]} ))]}" --transition-type "$transition"
@@ -1710,6 +1720,10 @@ _dpms_set() {  # ACTION(disable|enable) WHICH(internal|external) -> DPMS matchin
         hyprctl dispatch "hl.dsp.dpms({ action = \"$_act\", monitor = \"$_c\" })" >/dev/null 2>&1 || true
     done
 }
+_has_internal() {  # true when any connected display is internal (eDP/LVDS/DSI)
+    for _c in $(connected_connectors); do _is_internal "$_c" && return 0; done
+    return 1
+}
 
 cmd="${1:-}"
 case "$cmd" in
@@ -1732,11 +1746,15 @@ case "$cmd" in
                # lock surface to come up (else powering the external off races startup and
                # leaves it on-black), then power off non-internal displays. On unlock
                # (hyprlock exits) power them back on. Used as hypridle's lock_cmd.
+               # NO internal display (VM, desktop): every display is "external" and
+               # the off would black the whole seat with nothing re-powering it
+               # until unlock — leave all displays to hyprlock (hit live 2026-07-13
+               # on virtio: locked session wedged to "no output detected").
                pidof hyprlock >/dev/null 2>&1 && exit 0
                hyprlock & _h=$!
                _i=0; while [ "$_i" -lt 40 ] && ! pidof hyprlock >/dev/null 2>&1; do _i=$((_i+1)); sleep 0.05; done
                sleep 0.5
-               _dpms_set disable external
+               if _has_internal; then _dpms_set disable external; fi
                wait "$_h" || true
                _dpms_set enable external ;;
     externals-off) _dpms_set disable external ;;   # power off non-internal displays
