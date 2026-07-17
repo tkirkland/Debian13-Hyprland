@@ -393,15 +393,22 @@ declare -gA HYPR_DEB_DEPENDS=(
 # Conflicts+Replaces let ours cleanly supersede the Debian packages.
 declare -gA HYPR_DEB_PROVIDES=(
   [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
-  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev, libxkbregistry0, libxkbregistry-dev"
 )
 declare -gA HYPR_DEB_CONFLICTS=(
   [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
-  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev, libxkbregistry0, libxkbregistry-dev"
 )
 declare -gA HYPR_DEB_REPLACES=(
   [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
-  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev, libxkbregistry0, libxkbregistry-dev"
+)
+# Debian revision per component when the CONTROL changed without a new
+# upstream release (default 1). xkbcommon r2: declares the libxkbregistry
+# it always shipped (waybar's dep chain otherwise pulls Debian's
+# libxkbregistry0, which pins the conflicting libxkbcommon0 1.7.0; #68).
+declare -gA HYPR_DEB_REVISION=(
+  [xkbcommon]=2
 )
 ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default

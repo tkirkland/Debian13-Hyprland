@@ -11,6 +11,21 @@ assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0)" "tag_to_debver strips v, adds -1
 assert_eq "1.2.3-1"  "$(tag_to_debver 1.2.3)"   "tag_to_debver bare version"
 assert_eq "1.13.2-1" "$(tag_to_debver xkbcommon-1.13.2)" "tag_to_debver strips name- prefix"
 
+# The revision map lives in lib/00-config.sh (not sourced here) — set the
+# entry locally to unit-test the mechanism, grep-assert the config value.
+HYPR_DEB_REVISION[xkbcommon]=2
+assert_eq "1.13.2-2" "$(tag_to_debver xkbcommon-1.13.2 xkbcommon)" \
+  "tag_to_debver applies HYPR_DEB_REVISION for xkbcommon"
+assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0 hyprland)" \
+  "tag_to_debver defaults unmapped components to -1"
+
+# xkbcommon must declare the libxkbregistry it ships, in all three fields,
+# and carry the r2 revision bump so the pool re-pools the control change.
+assert_eq "3" "$(grep -c 'libxkbregistry0, libxkbregistry-dev' lib/00-config.sh)" \
+  "libxkbregistry declared in Provides+Conflicts+Replaces"
+assert_eq "1" "$(grep -c '\[xkbcommon\]=2' lib/00-config.sh)" \
+  "HYPR_DEB_REVISION carries xkbcommon r2"
+
 tmp="$(mktemp -d)"
 # 0.9.0 vs 0.10.0 discriminates dpkg ordering from bash lexical '>':
 # lexical wrongly prefers 0.9.0, dpkg correctly picks 0.10.0.
