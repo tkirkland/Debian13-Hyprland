@@ -85,10 +85,10 @@ unchanged, and Hyprland session survives a relogin. The ISO VM gate then
 proves the install path end to end.
 
 - **Package:** `waybar` → `TARGET_BASE_PACKAGES`.
-- **Unit:** the deb's `waybar.service`, enabled via the dangling
-  `ln -sf` pattern into
-  `${TARGET}/etc/systemd/user/graphical-session.target.wants/`
-  (`60-hyprland.sh:1797-1806` precedent) — not `systemctl --global enable`.
+- **Unit:** the deb's `waybar.service` **auto-enables** at package install
+  (deb-systemd-helper creates the `graphical-session.target.wants` symlink
+  in `/etc/systemd/user` — verified live 2026-07-16). Same posture as
+  swaync: config staging only, no installer enablement code.
 - **Config:** `stage_waybar_config()` modeled on `stage_swaync_config()`
   (`60-hyprland.sh:1036-1136`): dirs via `${TARGET}$(user_config_home)`
   (skel-aware for the golden bake), two heredocs →
