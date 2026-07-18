@@ -804,7 +804,7 @@ TARGET_BASE_PACKAGES=(
   console-setup keyboard-configuration ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
-  grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin sway-notification-center
+  grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin sway-notification-center waybar fonts-font-awesome
   ddcci-dkms ddcutil i2c-tools
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"

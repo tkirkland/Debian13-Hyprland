@@ -1135,6 +1135,107 @@ EOF
 EOF
 }
 
+# Stage the waybar config (issue #68). The Debian package ships the binary,
+# a user unit it AUTO-ENABLES via graphical-session.target.wants (deb-
+# systemd-helper, verified live 2026-07-16 — same as swaync), and a
+# sway-oriented default config we shadow entirely. Comment-free JSON so tests can json.load it.
+# Icons are Font Awesome 6 Free codepoints (fonts-font-awesome rides in
+# TARGET_BASE_PACKAGES; waybar only Suggests it). Palette matches swaync +
+# the #4a6f9a window-border theme. bluetooth/battery: VM/desktop profiles
+# have no adapter/battery — format-no-controller "" hides bluetooth
+# explicitly; battery hides itself when no BAT* exists.
+stage_waybar_config() {
+  local wb_dir
+  wb_dir="${TARGET}$(user_config_home)/.config/waybar"
+  install -d "${wb_dir}"
+  cat >"${wb_dir}/config.jsonc" <<'EOF'
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 6,
+  "modules-left": ["hyprland/workspaces", "hyprland/window"],
+  "modules-center": ["clock"],
+  "modules-right": ["tray", "wireplumber", "network", "bluetooth", "battery"],
+  "hyprland/workspaces": {
+    "format": "{id}"
+  },
+  "hyprland/window": {
+    "max-length": 60,
+    "separate-outputs": true
+  },
+  "clock": {
+    "format": "{:%a %b %d  %H:%M}",
+    "tooltip-format": "<tt>{calendar}</tt>"
+  },
+  "tray": {
+    "spacing": 8
+  },
+  "wireplumber": {
+    "format": " {volume}%",
+    "format-muted": " muted",
+    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "tooltip-format": "{node_name}"
+  },
+  "network": {
+    "format-wifi": " {essid}",
+    "format-ethernet": " wired",
+    "format-disconnected": " offline",
+    "tooltip-format": "{ifname}: {ipaddr}"
+  },
+  "bluetooth": {
+    "format": "",
+    "format-connected": " {num_connections}",
+    "format-no-controller": "",
+    "tooltip-format": "{controller_alias} {status}"
+  },
+  "battery": {
+    "format": " {capacity}%",
+    "format-charging": " {capacity}%",
+    "states": {
+      "warning": 20,
+      "critical": 10
+    }
+  }
+}
+EOF
+  cat >"${wb_dir}/style.css" <<'EOF'
+/* waybar — installer baseline (issue #68). Palette matches swaync and the
+ * #4a6f9a window-border theme; replace wholesale for personal theming. */
+* {
+  font-family: "DejaVu Sans", "Font Awesome 6 Free", sans-serif;
+  font-size: 13px;
+  min-height: 0;
+}
+window#waybar {
+  background: #1e1e2e;
+  color: #f5f5f5;
+}
+#workspaces button {
+  padding: 0 6px;
+  color: #f5f5f5;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+#workspaces button.active {
+  border-bottom: 2px solid #4a6f9a;
+}
+#workspaces button.urgent {
+  border-bottom: 2px solid #cc4444;
+}
+#window, #clock, #tray, #wireplumber, #network, #bluetooth, #battery {
+  padding: 0 10px;
+}
+#battery.warning {
+  color: #e0af68;
+}
+#battery.critical {
+  color: #cc4444;
+}
+EOF
+}
+
 # Stage the kitty terminal config. kitty is installed by apt but ships no
 # user config — ~/.config/kitty stays empty. Copy the package's full annotated
 # default (every option documented inline, all values commented out at their
@@ -1807,6 +1908,7 @@ HYPRDIM_SERVICE
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
+  stage_waybar_config
   stage_kitty_config
   stage_walker_launcher
   # Portal routing + dark-mode default; before the chown -R so the user config
