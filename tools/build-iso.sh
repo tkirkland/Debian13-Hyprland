@@ -340,8 +340,7 @@ step_build_stack() {
   # Mirrors the already-hoisted installer path (scripts/60-hyprland.sh build_stack).
   install_build_deps
   for name in "${HYPR_BUILD_ORDER[@]}"; do
-    tag="$(resolve_latest_release_tag \
-      "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
+    tag="$(resolve_component_tag "${name}")"
     debver="$(tag_to_debver "${tag}" "${name}")"
     if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
       stagerel="${BUILD_STAGE_REL}/${name}"
@@ -387,8 +386,7 @@ step_build_portal() {
   local name="${XDPH_COMPONENT}" tag debver stagerel
   (
     set -e
-    tag="$(resolve_latest_release_tag \
-      "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
+    tag="$(resolve_component_tag "${name}")"
     debver="$(tag_to_debver "${tag}" "${name}")"
     if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
       stagerel="${BUILD_STAGE_REL}/${name}"

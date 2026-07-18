@@ -8,7 +8,21 @@ if ! declare -f info >/dev/null; then info(){ printf '%s\n' "$*" >&2; }; fi
 # Optional per-package control metadata, looked up by package_to_deb. Declared
 # here (no-op if 00-config.sh already populated them) so referencing a missing
 # key is safe under `set -u` even when this lib is used standalone.
-declare -gA HYPR_DEB_CONFLICTS HYPR_DEB_REPLACES HYPR_DEB_PROVIDES HYPR_DEB_REVISION
+declare -gA HYPR_DEB_CONFLICTS HYPR_DEB_REPLACES HYPR_DEB_PROVIDES HYPR_DEB_REVISION HYPR_TAG_PIN
+
+# Pin-aware tag resolution: HYPR_TAG_PIN (lib/00-config.sh) holds a component
+# at a known-good tag when upstream libraries release ahead of the Hyprland
+# release built against them; everything unpinned floats to the latest
+# release tag. Every build-side tag lookup must come through here — calling
+# resolve_latest_release_tag directly bypasses the pin.
+resolve_component_tag() {
+  local name="$1"
+  if [[ -n "${HYPR_TAG_PIN[${name}]:-}" ]]; then
+    printf '%s\n' "${HYPR_TAG_PIN[${name}]}"
+    return 0
+  fi
+  resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}"
+}
 
 # Release tag -> Debian version X.Y.Z-1. Strips any leading non-digit prefix so
 # the version starts with a digit (dpkg requirement). Tags seen: v0.49.0,
@@ -230,7 +244,7 @@ package_to_deb() {
 # wiring for the build root is completed in Phase 3.
 build_component_to_deb() {
   local name="$1" pool="$2" tag debver destdir out
-  tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
+  tag="$(resolve_component_tag "${name}")"
   debver="$(tag_to_debver "${tag}" "${name}")"
   if ! deb_needs_rebuild "${pool}" "${name}" "${debver}"; then
     info "reuse cached ${name} ${debver} (upstream not newer)"
