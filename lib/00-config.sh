@@ -409,6 +409,19 @@ declare -gA HYPR_DEB_REPLACES=(
 # libxkbregistry0, which pins the conflicting libxkbcommon0 1.7.0; #68).
 declare -gA HYPR_DEB_REVISION=(
   [xkbcommon]=2
+  # 2026-07-18 soname-coherence rebuild: hyprutils 0.14.0 (.so.12 -> .so.13)
+  # and aquamarine 0.13.0 (.so.11 -> .so.12) floated in ahead of the Hyprland
+  # release built against them, leaving these prebuilt consumers with
+  # unresolvable NEEDED entries (black screen at boot). The bump forces a
+  # rebuild against the staged new libs. Drop each entry when its component's
+  # own upstream tag next advances.
+  [hyprland]=2
+  [hypridle]=2
+  [hyprland-guiutils]=2
+  [hyprgraphics]=2
+  [hyprlang]=2
+  [hyprtoolkit]=2
+  [hyprwire]=2
 )
 ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default

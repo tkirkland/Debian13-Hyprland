@@ -979,6 +979,33 @@ step_nvidia_depsim() {
   rm -rf "${simtmp}"
 }
 
+# 6g-2b) Link-coherence gate: every ELF the image ships in the standard
+# binary/library dirs must resolve its NEEDED sonames inside the image.
+# Catches independently-floating stack components whose soname bumped while
+# prebuilt consumers still reference the old one (hyprutils 0.14 vs
+# libhyprutils.so.12, 2026-07-18: Hyprland unloadable, greetd crashloop,
+# black screen) at BUILD time instead of first boot. chroot ldd resolves with
+# the image's own ld.so and search paths, exactly like the booted system.
+# ldd prints "not found" per missing soname and handles non-ELF gracefully.
+step_golden_linkcheck() {
+  info "[build] golden link-coherence gate (chroot ldd over shipped ELFs)"
+  local out=""
+  out="$(chroot "${GOLDEN}" /bin/bash -s <<'LDDCHK'
+shopt -s nullglob
+for f in /usr/bin/* /usr/sbin/* /usr/libexec/* \
+         /usr/lib/x86_64-linux-gnu/lib*.so.*; do
+  [[ -f "${f}" && ! -L "${f}" ]] || continue
+  ldd "${f}" 2>/dev/null | grep 'not found' | sed "s|^[[:space:]]*|${f}: |"
+done
+true
+LDDCHK
+)"
+  if [[ -n "${out}" ]]; then
+    printf '%s\n' "${out}" >&2
+    fatal "golden image has unresolvable shared libraries (stack soname skew?)"
+  fi
+}
+
 # 6g-5) Finalize the golden image for shipping: permanent Debian sources
 # replace the temporary file:// pool source, the chroot service guard comes
 # OUT (it must never ship), identity is scrubbed (machine-id, ssh host keys
@@ -1000,6 +1027,10 @@ step_finalize_golden() {
 # removed outright (hypr-sshd-keygen / customize regenerate). apt lists and
 # the binary caches are regenerable dead weight in a squashfs.
 golden_hygiene_scrub() {
+  # debootstrap copies the BUILD HOST's hostname into the chroot; without this
+  # the live session boots under the build machine's name (leak, seen live
+  # 2026-07-18 as "precision"). The installer sets the real hostname on disk.
+  printf 'hyprland\n' >"${GOLDEN}/etc/hostname"
   : >"${GOLDEN}/etc/machine-id"
   rm -f "${GOLDEN}/var/lib/dbus/machine-id"
   rm -f "${GOLDEN}/etc/ssh/ssh_host_"*
@@ -1211,6 +1242,7 @@ run_heavy_build() {
     step_stage_adw_gtk3
     step_golden_rootfs      # 6g-1: the REAL offline install (replaces depsim)
     step_golden_session     # 6g-2: skel configs, vendor bakes, dormant firstboot
+    step_golden_linkcheck   # 6g-2b: every shipped ELF resolves inside the image
     step_install_store      # 6g-3: NVIDIA + bootloader store, ZBM, KERNEL
     step_nvidia_depsim      # 6g-4: every variant resolves against the store
     step_finalize_golden    # 6g-5: sources/guard/identity scrub, binds down
