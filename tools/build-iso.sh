@@ -495,22 +495,34 @@ step_runtime_closure() {
 # kovidgoyal binaries repackaged) into the pool. Debian ships kitty 0.41,
 # which prints a false sRGB warning on NVIDIA (fixed upstream >= 0.47); the
 # repackaged deb versions higher (e.g. 0.47.4-0gh1), so apt resolves it over
-# Debian's during the golden install with no pin needed. Reuse any staged
-# copy; fetch failure is fatal (a silent fallback to 0.41 would ship the bug).
+# Debian's during the golden install with no pin needed. Like Brave
+# (cache_populate_brave): check the latest release EVERY build and reuse the
+# staged copy only when it IS the latest — the offline guarantee covers
+# installs, not builds, so a cached deb must never pin the shipped version.
+# Only if the release check itself fails does a staged copy get reused (an
+# offline rebuild still works); with no staged copy either, fetch failure is
+# fatal (a silent fallback to Debian's 0.41 would ship the sRGB bug).
 step_stage_kitty() {
-  local dest="${CACHE_DIR}/repo/pool" api="" url=""
-  if compgen -G "${dest}/kitty_*gh*_amd64.deb" >/dev/null; then
-    info "[build] reusing staged upstream kitty deb"
-    return 0
-  fi
+  local dest="${CACHE_DIR}/repo/pool" api="" url="" fname=""
   api="${KITTY_DEB_REPO_URL/github.com/api.github.com\/repos}/releases/latest"
   url="$(curl -fsSL --retry 3 "${api}" 2>/dev/null |
     grep -oE '"browser_download_url": *"[^"]+"' | cut -d'"' -f4 |
     grep -E '/kitty_[^/]+_amd64\.deb$' | head -n1 || true)"
-  [[ -n "${url}" ]] || fatal "no kitty deb asset found at ${api}"
-  info "[build] staging upstream kitty deb: ${url##*/}"
+  if [[ -z "${url}" ]]; then
+    if compgen -G "${dest}/kitty_*gh*_amd64.deb" >/dev/null; then
+      warn "kitty release check failed; reusing staged deb (may be stale)"
+      return 0
+    fi
+    fatal "no kitty deb asset found at ${api} and none staged"
+  fi
+  fname="${url##*/}"
+  if [[ -f "${dest}/${fname}" ]]; then
+    info "[build] reusing staged upstream kitty deb ${fname} (latest)"
+    return 0
+  fi
+  info "[build] staging upstream kitty deb: ${fname}"
   mkdir -p "${dest}"
-  curl -fsSL --retry 5 --retry-all-errors -o "${dest}/${url##*/}" "${url}" ||
+  curl -fsSL --retry 5 --retry-all-errors -o "${dest}/${fname}" "${url}" ||
     fatal "kitty deb download failed: ${url}"
 }
 
