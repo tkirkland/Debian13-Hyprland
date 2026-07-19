@@ -1012,6 +1012,12 @@ LDDCHK
 )"
   if [[ -n "${out}" ]]; then
     printf '%s\n' "${out}" >&2
+    # A failed golden must not be reusable. The stamp was written at bake
+    # time, and the poolhash can't see content-only changes: a deb rebuilt
+    # into the SAME filename keeps the hash identical (hit 2026-07-18: xdph
+    # rebuilt clean as 1.4.0-1 over the deleted poisoned 1.4.0-1, the stamp
+    # matched, and the broken golden tree was reused and re-scanned verbatim).
+    rm -f "${ISO_WORKSPACE}/.golden-rootfs-done"
     fatal "golden image has unresolvable shared libraries (stack soname skew?)"
   fi
 }
