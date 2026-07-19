@@ -342,7 +342,7 @@ step_build_stack() {
   for name in "${HYPR_BUILD_ORDER[@]}"; do
     tag="$(resolve_latest_release_tag \
       "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-    debver="$(tag_to_debver "${tag}")"
+    debver="$(tag_to_debver "${tag}" "${name}")"
     if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
       stagerel="${BUILD_STAGE_REL}/${name}"
       rm -rf "${TARGET}${stagerel}"
@@ -389,7 +389,7 @@ step_build_portal() {
     set -e
     tag="$(resolve_latest_release_tag \
       "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-    debver="$(tag_to_debver "${tag}")"
+    debver="$(tag_to_debver "${tag}" "${name}")"
     if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
       stagerel="${BUILD_STAGE_REL}/${name}"
       rm -rf "${TARGET}${stagerel}"
