@@ -508,6 +508,19 @@ write_hypr_lua_config() {
   for menu_mod in "${cfg_dir}"/*.lua; do
     sed -i -E '/XF86MonBrightness(Up|Down).*brightnessctl/d' "${menu_mod}"
   done
+  # Volume/mic keys drive swayosd-client instead of the upstream example's raw
+  # wpctl commands (issue #75): swayosd sets the volume itself AND pops the OSD.
+  # Matched by text like the brightnessctl deletion above; playerctl media
+  # binds pass through untouched. Volume keys stay repeating; mute toggles are
+  # locked only (a held mute key must not oscillate).
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i \
+      -e '/XF86AudioRaiseVolume.*wpctl/c\hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("swayosd-client --output-volume raise"), { locked = true, repeating = true })' \
+      -e '/XF86AudioLowerVolume.*wpctl/c\hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("swayosd-client --output-volume lower"), { locked = true, repeating = true })' \
+      -e '/XF86AudioMute.*wpctl/c\hl.bind("XF86AudioMute",        hl.dsp.exec_cmd("swayosd-client --output-volume mute-toggle"), { locked = true })' \
+      -e '/XF86AudioMicMute.*wpctl/c\hl.bind("XF86AudioMicMute",     hl.dsp.exec_cmd("swayosd-client --input-volume mute-toggle"),  { locked = true })' \
+      "${menu_mod}"
+  done
   # swww manages the wallpaper, so disable Hyprland's built-in default wallpaper
   # and logo (else the mascot flashes before swww draws). Patch the values in
   # whichever upstream-split module sets them inside its misc config table.
@@ -1239,6 +1252,31 @@ window#waybar {
 EOF
 }
 
+# Stage the swayosd style (issue #75). swayosd reads ~/.config/swayosd/
+# style.css (falls back to its /etc/xdg default when absent or broken), so
+# keep this minimal: dark pill + accent progress bar on the installer
+# palette (swaync/waybar precedent); everything else inherits the default.
+stage_swayosd_config() {
+  local so_dir
+  so_dir="${TARGET}$(user_config_home)/.config/swayosd"
+  install -d "${so_dir}"
+  cat >"${so_dir}/style.css" <<'EOF'
+/* swayosd — installer baseline (issue #75). Palette matches swaync/waybar
+ * and the #4a6f9a window-border theme; replace wholesale for personal
+ * theming. */
+window#osd {
+  background: #1e1e2e;
+}
+window#osd image,
+window#osd label {
+  color: #f5f5f5;
+}
+window#osd progress {
+  background: #4a6f9a;
+}
+EOF
+}
+
 # Stage the kitty terminal config. kitty is installed by apt but ships no
 # user config — ~/.config/kitty stays empty. Copy the package's full annotated
 # default (every option documented inline, all values commented out at their
@@ -1828,11 +1866,19 @@ _has_internal() {  # true when any connected display is internal (eDP/LVDS/DSI)
     for _c in $(connected_connectors); do _is_internal "$_c" && return 0; done
     return 1
 }
+osd_brightness() {  # DISPLAY-ONLY OSD popup after a key nudge (issue #75).
+    # swayosd never SETS brightness — this wrapper stays the sole change path.
+    # Best-effort: OSD absence must never break the nudge. Level read the way
+    # the wrapper itself does: internal backlight's actual post-nudge value,
+    # else the persisted logical level.
+    _p=$(_seed_level 2>/dev/null) || _p=$(get_level 2>/dev/null) || return 0
+    swayosd-client --custom-message "Brightness ${_p}%" --custom-icon display-brightness-symbolic >/dev/null 2>&1 || true
+}
 
 cmd="${1:-}"
 case "$cmd" in
-    up)        nudge + ;;
-    down)      nudge - ;;
+    up)        nudge +; osd_brightness ;;
+    down)      nudge -; osd_brightness ;;
     set)       _L=$(clamp "${2:-$(get_level)}");        set_level "$_L"; apply_level "$_L" ;;
     reconcile) apply_level "$(get_level)" ;;
     dim)       if [ ! -e "$DIM_SAVE" ]; then
@@ -1898,6 +1944,23 @@ RestartSec=1
 [Install]
 WantedBy=graphical-session.target
 HYPRDIM_SERVICE
+  # swayosd-server user unit (issue #75). The Debian swayosd package ships NO
+  # user unit for the server (only the D-Bus-activated system-side libinput
+  # backend), so this is installer glue like hyprdim.service above — unit
+  # validated live on the reference machine 2026-07-16.
+  cat >"${TARGET}/usr/lib/systemd/user/swayosd.service" <<'SWAYOSD_SERVICE'
+[Unit]
+Description=swayosd on-screen display server
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/swayosd-server
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
+SWAYOSD_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
   # hypridle is part of the source-compiled stack, now shipped as a .deb with
   # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
@@ -1908,10 +1971,13 @@ HYPRDIM_SERVICE
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   ln -sf /usr/lib/systemd/user/hyprdim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
+  ln -sf /usr/lib/systemd/user/swayosd.service \
+    "${TARGET}/etc/systemd/user/graphical-session.target.wants/swayosd.service"
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
   stage_waybar_config
+  stage_swayosd_config
   stage_kitty_config
   stage_walker_launcher
   # Portal routing + dark-mode default; before the chown -R so the user config
