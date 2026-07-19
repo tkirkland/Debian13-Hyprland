@@ -327,6 +327,7 @@ HYPR_BUILD_ORDER=(
   hypridle
   swww
   hyprdim
+  wdisplays
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -360,6 +361,12 @@ declare -A HYPR_REPO_URL=(
   # (cargo build via build_custom_hyprdim). Drives external-display brightness
   # via D-Bus dev.hyprdim for the brightness-sync wrapper (issue #66).
   ["hyprdim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hyprdim}"
+  # wdisplays: GUI display arranger (SUPER+P). Debian's 1.1.1 renders broken
+  # (clipped) on Hyprland 0.55; the maintained artizirk fork (1.1.3+) is fixed
+  # — built as a stack deb whose version naturally supersedes Debian's
+  # 1.1.1-1+b2 under the same package name. Meson, zero options; the fork
+  # tags unprefixed ("1.1.3"), which the default v?X.Y.Z pattern matches.
+  ["wdisplays"]="${WDISPLAYS_REPO_URL:-https://github.com/artizirk/wdisplays}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # xdg-desktop-portal-hyprland (xdph): the Hyprland screencast/screenshot portal
@@ -615,6 +622,10 @@ HYPR_BUILD_PACKAGES=(
   # source hypr stack, which satisfies them. qt6-wayland is intentionally omitted
   # (not proven needed).
   qt6-base-dev libpipewire-0.3-dev libspa-0.2-dev
+  # wdisplays (GTK3 display arranger): GTK3 + epoxy. Verified live: neither
+  # touches the held source-built stack (its Provides satisfy the wayland/xkb
+  # dev chain).
+  libgtk-3-dev libepoxy-dev
 )
 
 # Upstream OpenZFS, FORCED on networked installs: trixie's 2.3.x is

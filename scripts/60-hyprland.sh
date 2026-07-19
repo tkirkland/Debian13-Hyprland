@@ -501,6 +501,14 @@ write_hypr_lua_config() {
     sed -i 's/hl\.bind(mainMod \.\. " + R", hl\.dsp\.exec_cmd(menu))/hl.bind(mainMod .. " + SUPER_L", hl.dsp.exec_cmd(menu), { release = true })/' \
       "${menu_mod}"
   done
+  # Display arranger on SUPER+P: repoint the upstream example's pseudo bind
+  # at wdisplays (the source-built artizirk fork; Debian's 1.1.1 renders
+  # broken on Hyprland 0.55) and keep pseudo reachable on SUPER+SHIFT+P
+  # (unbound upstream).
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i 's/hl\.bind(mainMod \.\. " + P", hl\.dsp\.window\.pseudo())/hl.bind(mainMod .. " + P", hl.dsp.exec_cmd("wdisplays"))\nhl.bind(mainMod .. " + SHIFT + P", hl.dsp.window.pseudo())/' \
+      "${menu_mod}"
+  done
   # Drop the upstream example's raw-brightnessctl XF86MonBrightness binds:
   # hypr-deb.lua (required last) rebinds those keys to brightness-sync
   # (issue #66). Binds register per hl.bind() call, so leaving the upstream
@@ -646,6 +654,10 @@ hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw")) -- toggle 
 -- defines fileManager but no browser at all). Conventional SUPER+B; the
 -- user's dotfiles override.
 hl.bind("SUPER + B", hl.dsp.exec_cmd("brave-browser"))
+-- wdisplays (SUPER+P): tiled or oversized it looks bad — float + center.
+-- Deliberately NO forced size: GTK3's minimum-size negotiation clips the
+-- canvas when the rule shrinks the window below it (proven live).
+hl.window_rule({ name = "float-wdisplays", match = { class = "wdisplays" }, float = true, center = true })
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
