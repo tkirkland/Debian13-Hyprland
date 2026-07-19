@@ -1364,6 +1364,24 @@ EOF
   # Guarded: a missing/failed compile must not abort the install (the override is
   # cosmetic). libglib2.0-bin provides glib-compile-schemas.
   in_target "glib-compile-schemas /usr/share/glib-2.0/schemas || true"
+  # Zero the GTK3 CSD shadow margin. Hyprland 0.55 mishandles the xdg
+  # window-geometry offset the shadow creates, clipping GTK3 CSD
+  # windows by the margin width (~24px; proven 2026-07-19 via wdisplays A/B on
+  # the reference machine: margin present = clipped, margin zeroed = clean,
+  # theme-agnostic). The compositor draws window borders anyway, so the
+  # shadow is redundant. Drop this when the compositor bug is fixed upstream.
+  local gtk3_dir=""
+  gtk3_dir="${TARGET}$(user_config_home)/.config/gtk-3.0"
+  install -d "${gtk3_dir}"
+  cat >"${gtk3_dir}/gtk.css" <<'EOF'
+/* Managed by hypr-deb: Hyprland 0.55 clips GTK3 CSD windows (tiled or floating) by the
+ * shadow margin (compositor bug); zeroing it sidesteps the clip and the
+ * compositor's own borders make the shadow redundant. */
+decoration {
+  box-shadow: none;
+  margin: 0;
+}
+EOF
 }
 
 # Session environment: uwsm sources ~/.config/uwsm/env into the systemd user
