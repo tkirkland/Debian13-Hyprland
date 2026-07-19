@@ -410,6 +410,20 @@ declare -gA HYPR_DEB_REPLACES=(
 declare -gA HYPR_DEB_REVISION=(
   [xkbcommon]=2
 )
+
+# Upstream tags float to latest by default (resolve_component_tag). A pin
+# holds a component at a known-good tag when upstream releases a library
+# AHEAD of the Hyprland release built against it: the soname/API skew leaves
+# every prebuilt consumer with unresolvable NEEDED entries (2026-07-18:
+# hyprutils 0.14.0 + aquamarine 0.13.0 vs Hyprland 0.55.4 — greetd
+# crashloop, black screen; 0.55.4 does not even COMPILE against hyprutils
+# 0.14). Drop each pin when the Hyprland release consuming the new library
+# lands and the whole stack can advance together — step_golden_linkcheck
+# fails the build loudly if a skew ever slips through again.
+declare -gA HYPR_TAG_PIN=(
+  [hyprutils]="v0.13.1"
+  [aquamarine]="v0.12.1"
+)
 ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default
 # v-prefixed semver (xkbcommon tags 'xkbcommon-X.Y.Z'; wayland-protocols

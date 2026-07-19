@@ -92,8 +92,11 @@ resolve_all_tags() {
   local name="" tag=""
   if ((NETWORK_AVAILABLE)); then
     for name in "${HYPR_BUILD_ORDER[@]}"; do
-      tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" \
-        "${HYPR_TAG_PATTERN[${name}]:-}")"
+      # Pin-aware (HYPR_TAG_PIN, lib/00-config.sh): inline lookup rather than
+      # resolve_component_tag so this path doesn't depend on lib-deb-package.sh.
+      tag="${HYPR_TAG_PIN[${name}]:-}"
+      [[ -n "${tag}" ]] || tag="$(resolve_latest_release_tag \
+        "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       info "Resolved ${name} -> ${tag}"
     done

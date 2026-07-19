@@ -120,6 +120,23 @@ if command -v dpkg-deb >/dev/null; then
   build_component_to_deb foo "${gpool}" >/dev/null 2>&1
   { [[ -f "${gpool}/foo_1.3.0-1_amd64.deb" ]] && echo "  ok: gate builds+packages when newer"; } \
     || { echo "  FAIL: no new deb when upstream newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  # Pin resolution: a pinned component must yield the pin WITHOUT any network
+  # tag lookup; unpinned components fall through to resolve_latest_release_tag.
+  declare -gA HYPR_TAG_PIN=([foo]="v1.1.0")
+  # shellcheck disable=SC2317  # must not be reached for a pinned component
+  resolve_latest_release_tag() { echo "FAIL-network-hit"; }
+  ptag="$(resolve_component_tag foo)"
+  { [[ "${ptag}" == "v1.1.0" ]] && echo "  ok: pinned component resolves to the pin, no network"; } \
+    || { echo "  FAIL: pin ignored (got ${ptag})" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  resolve_latest_release_tag() { echo "v9.9.9"; }
+  HYPR_REPO_URL[foo2]="https://example/foo2"
+  utag="$(resolve_component_tag foo2)"
+  { [[ "${utag}" == "v9.9.9" ]] && echo "  ok: unpinned component floats to latest"; } \
+    || { echo "  FAIL: unpinned float broken (got ${utag})" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  unset 'HYPR_TAG_PIN[foo]'
+  npins="$(grep -c '^\s*\[\(hyprutils\|aquamarine\)\]="v' lib/00-config.sh || true)"
+  { [[ "${npins}" == "2" ]] && echo "  ok: config pins hyprutils + aquamarine (drop when Hyprland advances)"; } \
+    || { echo "  FAIL: expected exactly 2 stack pins in lib/00-config.sh, got ${npins}" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
   rm -rf "${gtmp}"
 else
   echo "  skip: dpkg-deb not installed (gate test)"
