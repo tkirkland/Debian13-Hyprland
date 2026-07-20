@@ -327,6 +327,7 @@ HYPR_BUILD_ORDER=(
   hypridle
   swww
   hyprdim
+  wdisplays
   uwsm
 )
 # Source repository per component. Keys are quoted so formatters cannot
@@ -360,6 +361,12 @@ declare -A HYPR_REPO_URL=(
   # (cargo build via build_custom_hyprdim). Drives external-display brightness
   # via D-Bus dev.hyprdim for the brightness-sync wrapper (issue #66).
   ["hyprdim"]="${HYPRDIM_REPO_URL:-https://github.com/tkirkland/hyprdim}"
+  # wdisplays: GUI display arranger (SUPER+P). Debian's 1.1.1 renders broken
+  # (clipped) on Hyprland 0.55; the maintained artizirk fork (1.1.3+) is fixed
+  # — built as a stack deb whose version naturally supersedes Debian's
+  # 1.1.1-1+b2 under the same package name. Meson, zero options; the fork
+  # tags unprefixed ("1.1.3"), which the default v?X.Y.Z pattern matches.
+  ["wdisplays"]="${WDISPLAYS_REPO_URL:-https://github.com/artizirk/wdisplays}"
   ["uwsm"]="${UWSM_REPO_URL:-https://github.com/Vladimir-csp/uwsm}"
 )
 # xdg-desktop-portal-hyprland (xdph): the Hyprland screencast/screenshot portal
@@ -393,15 +400,36 @@ declare -gA HYPR_DEB_DEPENDS=(
 # Conflicts+Replaces let ours cleanly supersede the Debian packages.
 declare -gA HYPR_DEB_PROVIDES=(
   [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
-  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev, libxkbregistry0, libxkbregistry-dev"
 )
 declare -gA HYPR_DEB_CONFLICTS=(
   [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
-  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev, libxkbregistry0, libxkbregistry-dev"
 )
 declare -gA HYPR_DEB_REPLACES=(
   [wayland]="libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1, libwayland-bin, libwayland-dev"
-  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev"
+  [xkbcommon]="libxkbcommon0, libxkbcommon-x11-0, libxkbcommon-dev, libxkbregistry0, libxkbregistry-dev"
+)
+# Debian revision per component when the CONTROL changed without a new
+# upstream release (default 1). xkbcommon r2: declares the libxkbregistry
+# it always shipped (waybar's dep chain otherwise pulls Debian's
+# libxkbregistry0, which pins the conflicting libxkbcommon0 1.7.0; #68).
+declare -gA HYPR_DEB_REVISION=(
+  [xkbcommon]=2
+)
+
+# Upstream tags float to latest by default (resolve_component_tag). A pin
+# holds a component at a known-good tag when upstream releases a library
+# AHEAD of the Hyprland release built against it: the soname/API skew leaves
+# every prebuilt consumer with unresolvable NEEDED entries (2026-07-18:
+# hyprutils 0.14.0 + aquamarine 0.13.0 vs Hyprland 0.55.4 — greetd
+# crashloop, black screen; 0.55.4 does not even COMPILE against hyprutils
+# 0.14). Drop each pin when the Hyprland release consuming the new library
+# lands and the whole stack can advance together — step_golden_linkcheck
+# fails the build loudly if a skew ever slips through again.
+declare -gA HYPR_TAG_PIN=(
+  [hyprutils]="v0.13.1"
+  [aquamarine]="v0.12.1"
 )
 ISO_REPO_DIR="/run/hypr-iso/repo"   # mount path of the on-ISO repo at install
 # Release-tag pattern per component when it differs from the default
@@ -594,6 +622,10 @@ HYPR_BUILD_PACKAGES=(
   # source hypr stack, which satisfies them. qt6-wayland is intentionally omitted
   # (not proven needed).
   qt6-base-dev libpipewire-0.3-dev libspa-0.2-dev
+  # wdisplays (GTK3 display arranger): GTK3 + epoxy. Verified live: neither
+  # touches the held source-built stack (its Provides satisfy the wayland/xkb
+  # dev chain).
+  libgtk-3-dev libepoxy-dev
 )
 
 # Upstream OpenZFS, FORCED on networked installs: trixie's 2.3.x is
@@ -797,7 +829,7 @@ TARGET_BASE_PACKAGES=(
   console-setup keyboard-configuration ca-certificates curl greetd tuigreet kitty cage wlr-randr openssh-server
   unzip fontconfig ntfs-3g
   psmisc
-  grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin sway-notification-center
+  grim slurp wf-recorder swappy wl-clipboard ffmpeg jq libnotify-bin sway-notification-center waybar swayosd fonts-font-awesome
   ddcci-dkms ddcutil i2c-tools
   shim-signed mokutil sbsigntool
   "${UWSM_RUNTIME_PACKAGES[@]}"

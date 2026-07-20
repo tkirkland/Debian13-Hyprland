@@ -92,8 +92,11 @@ resolve_all_tags() {
   local name="" tag=""
   if ((NETWORK_AVAILABLE)); then
     for name in "${HYPR_BUILD_ORDER[@]}"; do
-      tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" \
-        "${HYPR_TAG_PATTERN[${name}]:-}")"
+      # Pin-aware (HYPR_TAG_PIN, lib/00-config.sh): inline lookup rather than
+      # resolve_component_tag so this path doesn't depend on lib-deb-package.sh.
+      tag="${HYPR_TAG_PIN[${name}]:-}"
+      [[ -n "${tag}" ]] || tag="$(resolve_latest_release_tag \
+        "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
       HYPR_RESOLVED_TAG["${name}"]="${tag}"
       info "Resolved ${name} -> ${tag}"
     done
@@ -498,12 +501,33 @@ write_hypr_lua_config() {
     sed -i 's/hl\.bind(mainMod \.\. " + R", hl\.dsp\.exec_cmd(menu))/hl.bind(mainMod .. " + SUPER_L", hl.dsp.exec_cmd(menu), { release = true })/' \
       "${menu_mod}"
   done
+  # Display arranger on SUPER+P: repoint the upstream example's pseudo bind
+  # at wdisplays (the source-built artizirk fork; Debian's 1.1.1 renders
+  # broken on Hyprland 0.55) and keep pseudo reachable on SUPER+SHIFT+P
+  # (unbound upstream).
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i 's/hl\.bind(mainMod \.\. " + P", hl\.dsp\.window\.pseudo())/hl.bind(mainMod .. " + P", hl.dsp.exec_cmd("wdisplays"))\nhl.bind(mainMod .. " + SHIFT + P", hl.dsp.window.pseudo())/' \
+      "${menu_mod}"
+  done
   # Drop the upstream example's raw-brightnessctl XF86MonBrightness binds:
   # hypr-deb.lua (required last) rebinds those keys to brightness-sync
   # (issue #66). Binds register per hl.bind() call, so leaving the upstream
   # pair in place loads BOTH and every brightness keypress fires twice.
   for menu_mod in "${cfg_dir}"/*.lua; do
     sed -i -E '/XF86MonBrightness(Up|Down).*brightnessctl/d' "${menu_mod}"
+  done
+  # Volume/mic keys drive swayosd-client instead of the upstream example's raw
+  # wpctl commands (issue #75): swayosd sets the volume itself AND pops the OSD.
+  # Matched by text like the brightnessctl deletion above; playerctl media
+  # binds pass through untouched. Volume keys stay repeating; mute toggles are
+  # locked only (a held mute key must not oscillate).
+  for menu_mod in "${cfg_dir}"/*.lua; do
+    sed -i \
+      -e '/XF86AudioRaiseVolume.*wpctl/c\hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("swayosd-client --output-volume raise"), { locked = true, repeating = true })' \
+      -e '/XF86AudioLowerVolume.*wpctl/c\hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("swayosd-client --output-volume lower"), { locked = true, repeating = true })' \
+      -e '/XF86AudioMute.*wpctl/c\hl.bind("XF86AudioMute",        hl.dsp.exec_cmd("swayosd-client --output-volume mute-toggle"), { locked = true })' \
+      -e '/XF86AudioMicMute.*wpctl/c\hl.bind("XF86AudioMicMute",     hl.dsp.exec_cmd("swayosd-client --input-volume mute-toggle"),  { locked = true })' \
+      "${menu_mod}"
   done
   # swww manages the wallpaper, so disable Hyprland's built-in default wallpaper
   # and logo (else the mascot flashes before swww draws). Patch the values in
@@ -630,6 +654,10 @@ hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("swaync-client -d -sw")) -- toggle 
 -- defines fileManager but no browser at all). Conventional SUPER+B; the
 -- user's dotfiles override.
 hl.bind("SUPER + B", hl.dsp.exec_cmd("brave-browser"))
+-- wdisplays (SUPER+P): tiled or oversized it looks bad — float + center.
+-- Deliberately NO forced size: GTK3's minimum-size negotiation clips the
+-- canvas when the rule shrinks the window below it (proven live).
+hl.window_rule({ name = "float-wdisplays", match = { class = "wdisplays" }, float = true, center = true })
 EOF
 
   # hyprlock + hypridle default configs (installer baseline). hyprlock auths via
@@ -1135,6 +1163,132 @@ EOF
 EOF
 }
 
+# Stage the waybar config (issue #68). The Debian package ships the binary,
+# a user unit it AUTO-ENABLES via graphical-session.target.wants (deb-
+# systemd-helper, verified live 2026-07-16 — same as swaync), and a
+# sway-oriented default config we shadow entirely. Comment-free JSON so tests can json.load it.
+# Icons are Font Awesome 6 Free codepoints (fonts-font-awesome rides in
+# TARGET_BASE_PACKAGES; waybar only Suggests it). Palette matches swaync +
+# the #4a6f9a window-border theme. bluetooth/battery: VM/desktop profiles
+# have no adapter/battery — format-no-controller "" hides bluetooth
+# explicitly; battery hides itself when no BAT* exists.
+stage_waybar_config() {
+  local wb_dir
+  wb_dir="${TARGET}$(user_config_home)/.config/waybar"
+  install -d "${wb_dir}"
+  cat >"${wb_dir}/config.jsonc" <<'EOF'
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 6,
+  "modules-left": ["hyprland/workspaces", "hyprland/window"],
+  "modules-center": ["clock"],
+  "modules-right": ["tray", "wireplumber", "network", "bluetooth", "battery"],
+  "hyprland/workspaces": {
+    "format": "{id}"
+  },
+  "hyprland/window": {
+    "max-length": 60,
+    "separate-outputs": true
+  },
+  "clock": {
+    "format": "{:%a %b %d  %H:%M}",
+    "tooltip-format": "<tt>{calendar}</tt>"
+  },
+  "tray": {
+    "spacing": 8
+  },
+  "wireplumber": {
+    "format": " {volume}%",
+    "format-muted": " muted",
+    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "tooltip-format": "{node_name}"
+  },
+  "network": {
+    "format-wifi": " {essid}",
+    "format-ethernet": " wired",
+    "format-disconnected": " offline",
+    "tooltip-format": "{ifname}: {ipaddr}"
+  },
+  "bluetooth": {
+    "format": "",
+    "format-connected": " {num_connections}",
+    "format-no-controller": "",
+    "tooltip-format": "{controller_alias} {status}"
+  },
+  "battery": {
+    "format": " {capacity}%",
+    "format-charging": " {capacity}%",
+    "states": {
+      "warning": 20,
+      "critical": 10
+    }
+  }
+}
+EOF
+  cat >"${wb_dir}/style.css" <<'EOF'
+/* waybar — installer baseline (issue #68). Palette matches swaync and the
+ * #4a6f9a window-border theme; replace wholesale for personal theming. */
+* {
+  font-family: "DejaVu Sans", "Font Awesome 6 Free", sans-serif;
+  font-size: 13px;
+  min-height: 0;
+}
+window#waybar {
+  background: #1e1e2e;
+  color: #f5f5f5;
+}
+#workspaces button {
+  padding: 0 6px;
+  color: #f5f5f5;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+#workspaces button.active {
+  border-bottom: 2px solid #4a6f9a;
+}
+#workspaces button.urgent {
+  border-bottom: 2px solid #cc4444;
+}
+#window, #clock, #tray, #wireplumber, #network, #bluetooth, #battery {
+  padding: 0 10px;
+}
+#battery.warning {
+  color: #e0af68;
+}
+#battery.critical {
+  color: #cc4444;
+}
+EOF
+}
+
+# Stage the swayosd style (issue #75). swayosd reads ~/.config/swayosd/
+# style.css (falls back to its /etc/xdg default when absent or broken), so
+# keep this minimal: dark pill + accent progress bar on the installer
+# palette (swaync/waybar precedent); everything else inherits the default.
+stage_swayosd_config() {
+  local so_dir
+  so_dir="${TARGET}$(user_config_home)/.config/swayosd"
+  install -d "${so_dir}"
+  cat >"${so_dir}/style.css" <<'EOF'
+/* swayosd — installer baseline (issue #75). Palette matches swaync/waybar
+ * and the #4a6f9a window-border theme; replace wholesale for personal
+ * theming. */
+window#osd {
+  background: #1e1e2e;
+}
+window#osd image,
+window#osd label {
+  color: #f5f5f5;
+}
+window#osd progress {
+  background: #4a6f9a;
+}
+EOF
+}
+
 # Stage the kitty terminal config. kitty is installed by apt but ships no
 # user config — ~/.config/kitty stays empty. Copy the package's full annotated
 # default (every option documented inline, all values commented out at their
@@ -1210,6 +1364,24 @@ EOF
   # Guarded: a missing/failed compile must not abort the install (the override is
   # cosmetic). libglib2.0-bin provides glib-compile-schemas.
   in_target "glib-compile-schemas /usr/share/glib-2.0/schemas || true"
+  # Zero the GTK3 CSD shadow margin. Hyprland 0.55 mishandles the xdg
+  # window-geometry offset the shadow creates, clipping GTK3 CSD
+  # windows by the margin width (~24px; proven 2026-07-19 via wdisplays A/B on
+  # the reference machine: margin present = clipped, margin zeroed = clean,
+  # theme-agnostic). The compositor draws window borders anyway, so the
+  # shadow is redundant. Drop this when the compositor bug is fixed upstream.
+  local gtk3_dir=""
+  gtk3_dir="${TARGET}$(user_config_home)/.config/gtk-3.0"
+  install -d "${gtk3_dir}"
+  cat >"${gtk3_dir}/gtk.css" <<'EOF'
+/* Managed by hypr-deb: Hyprland 0.55 clips GTK3 CSD windows (tiled or floating) by the
+ * shadow margin (compositor bug); zeroing it sidesteps the clip and the
+ * compositor's own borders make the shadow redundant. */
+decoration {
+  box-shadow: none;
+  margin: 0;
+}
+EOF
 }
 
 # Session environment: uwsm sources ~/.config/uwsm/env into the systemd user
@@ -1724,11 +1896,19 @@ _has_internal() {  # true when any connected display is internal (eDP/LVDS/DSI)
     for _c in $(connected_connectors); do _is_internal "$_c" && return 0; done
     return 1
 }
+osd_brightness() {  # DISPLAY-ONLY OSD popup after a key nudge (issue #75).
+    # swayosd never SETS brightness — this wrapper stays the sole change path.
+    # Best-effort: OSD absence must never break the nudge. Level read the way
+    # the wrapper itself does: internal backlight's actual post-nudge value,
+    # else the persisted logical level.
+    _p=$(_seed_level 2>/dev/null) || _p=$(get_level 2>/dev/null) || return 0
+    swayosd-client --custom-message "Brightness ${_p}%" --custom-icon display-brightness-symbolic >/dev/null 2>&1 || true
+}
 
 cmd="${1:-}"
 case "$cmd" in
-    up)        nudge + ;;
-    down)      nudge - ;;
+    up)        nudge +; osd_brightness ;;
+    down)      nudge -; osd_brightness ;;
     set)       _L=$(clamp "${2:-$(get_level)}");        set_level "$_L"; apply_level "$_L" ;;
     reconcile) apply_level "$(get_level)" ;;
     dim)       if [ ! -e "$DIM_SAVE" ]; then
@@ -1794,6 +1974,23 @@ RestartSec=1
 [Install]
 WantedBy=graphical-session.target
 HYPRDIM_SERVICE
+  # swayosd-server user unit (issue #75). The Debian swayosd package ships NO
+  # user unit for the server (only the D-Bus-activated system-side libinput
+  # backend), so this is installer glue like hyprdim.service above — unit
+  # validated live on the reference machine 2026-07-16.
+  cat >"${TARGET}/usr/lib/systemd/user/swayosd.service" <<'SWAYOSD_SERVICE'
+[Unit]
+Description=swayosd on-screen display server
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/swayosd-server
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target
+SWAYOSD_SERVICE
   mkdir -p "${TARGET}/etc/systemd/user/graphical-session.target.wants"
   # hypridle is part of the source-compiled stack, now shipped as a .deb with
   # prefix /usr, so its user unit lands at /usr/lib/systemd/user (FHS). The
@@ -1804,9 +2001,13 @@ HYPRDIM_SERVICE
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hypridle.service"
   ln -sf /usr/lib/systemd/user/hyprdim.service \
     "${TARGET}/etc/systemd/user/graphical-session.target.wants/hyprdim.service"
+  ln -sf /usr/lib/systemd/user/swayosd.service \
+    "${TARGET}/etc/systemd/user/graphical-session.target.wants/swayosd.service"
   stage_wallpapers
   stage_capture_helpers
   stage_swaync_config
+  stage_waybar_config
+  stage_swayosd_config
   stage_kitty_config
   stage_walker_launcher
   # Portal routing + dark-mode default; before the chown -R so the user config

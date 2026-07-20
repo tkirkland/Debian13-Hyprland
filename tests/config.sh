@@ -22,7 +22,7 @@ out="$(POOL_NAME=TEST ROOT_DISTRO=d13 bash -c \
 assert_eq "TEST/ROOT/d13" "${out}" "env overrides flow into derivation"
 
 out="$(bash -c 'source lib/00-config.sh; echo "${HYPR_BUILD_ORDER[*]}"')"
-assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle swww hyprdim uwsm" \
+assert_eq "wayland wayland-protocols xkbcommon lua hyprwayland-scanner hyprutils hyprlang hyprcursor hyprgraphics hyprland-protocols hyprwire aquamarine hyprland hyprtoolkit hyprland-guiutils hyprlock hypridle swww hyprdim wdisplays uwsm" \
   "${out}" "build order (too-old Debian libs first, hyprwm stack, then uwsm)"
 
 # hyprdim (external-display gamma brightness daemon, issue #66) builds from

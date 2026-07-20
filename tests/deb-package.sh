@@ -11,6 +11,21 @@ assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0)" "tag_to_debver strips v, adds -1
 assert_eq "1.2.3-1"  "$(tag_to_debver 1.2.3)"   "tag_to_debver bare version"
 assert_eq "1.13.2-1" "$(tag_to_debver xkbcommon-1.13.2)" "tag_to_debver strips name- prefix"
 
+# The revision map lives in lib/00-config.sh (not sourced here) — set the
+# entry locally to unit-test the mechanism, grep-assert the config value.
+HYPR_DEB_REVISION[xkbcommon]=2
+assert_eq "1.13.2-2" "$(tag_to_debver xkbcommon-1.13.2 xkbcommon)" \
+  "tag_to_debver applies HYPR_DEB_REVISION for xkbcommon"
+assert_eq "0.49.0-1" "$(tag_to_debver v0.49.0 hyprland)" \
+  "tag_to_debver defaults unmapped components to -1"
+
+# xkbcommon must declare the libxkbregistry it ships, in all three fields,
+# and carry the r2 revision bump so the pool re-pools the control change.
+assert_eq "3" "$(grep -c 'libxkbregistry0, libxkbregistry-dev' lib/00-config.sh)" \
+  "libxkbregistry declared in Provides+Conflicts+Replaces"
+assert_eq "1" "$(grep -c '\[xkbcommon\]=2' lib/00-config.sh)" \
+  "HYPR_DEB_REVISION carries xkbcommon r2"
+
 tmp="$(mktemp -d)"
 # 0.9.0 vs 0.10.0 discriminates dpkg ordering from bash lexical '>':
 # lexical wrongly prefers 0.9.0, dpkg correctly picks 0.10.0.
@@ -105,6 +120,23 @@ if command -v dpkg-deb >/dev/null; then
   build_component_to_deb foo "${gpool}" >/dev/null 2>&1
   { [[ -f "${gpool}/foo_1.3.0-1_amd64.deb" ]] && echo "  ok: gate builds+packages when newer"; } \
     || { echo "  FAIL: no new deb when upstream newer" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  # Pin resolution: a pinned component must yield the pin WITHOUT any network
+  # tag lookup; unpinned components fall through to resolve_latest_release_tag.
+  declare -gA HYPR_TAG_PIN=([foo]="v1.1.0")
+  # shellcheck disable=SC2317  # must not be reached for a pinned component
+  resolve_latest_release_tag() { echo "FAIL-network-hit"; }
+  ptag="$(resolve_component_tag foo)"
+  { [[ "${ptag}" == "v1.1.0" ]] && echo "  ok: pinned component resolves to the pin, no network"; } \
+    || { echo "  FAIL: pin ignored (got ${ptag})" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  resolve_latest_release_tag() { echo "v9.9.9"; }
+  HYPR_REPO_URL[foo2]="https://example/foo2"
+  utag="$(resolve_component_tag foo2)"
+  { [[ "${utag}" == "v9.9.9" ]] && echo "  ok: unpinned component floats to latest"; } \
+    || { echo "  FAIL: unpinned float broken (got ${utag})" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
+  unset 'HYPR_TAG_PIN[foo]'
+  npins="$(grep -c '^\s*\[\(hyprutils\|aquamarine\)\]="v' lib/00-config.sh || true)"
+  { [[ "${npins}" == "2" ]] && echo "  ok: config pins hyprutils + aquamarine (drop when Hyprland advances)"; } \
+    || { echo "  FAIL: expected exactly 2 stack pins in lib/00-config.sh, got ${npins}" >&2; TEST_FAILURES=$((TEST_FAILURES+1)); }
   rm -rf "${gtmp}"
 else
   echo "  skip: dpkg-deb not installed (gate test)"

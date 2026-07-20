@@ -29,6 +29,16 @@ for key in "color-scheme='prefer-dark'" "gtk-theme='adw-gtk3-dark'" \
     || { echo "  FAIL: gschema override missing ${key}" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
 done
 
+# --- GTK3 CSD shadow-margin zeroing (Hyprland 0.55 clip workaround) -----------
+# Same structural check: write_portal_config must stage a gtk.css that zeroes
+# decoration box-shadow/margin (GTK3 CSD windows, tiled or floating, clip by the shadow
+# margin on Hyprland 0.55 — reference-machine A/B 2026-07-19).
+for frag in "box-shadow: none" "margin: 0"; do
+  { grep -qF "${frag}" "${hypr_src}" \
+    && echo "  ok: gtk.css zeroes CSD ${frag%%:*}"; } \
+    || { echo "  FAIL: gtk.css missing ${frag}" >&2; TEST_FAILURES=$((TEST_FAILURES + 1)); }
+done
+
 # --- write_uwsm_env (scripts/60-hyprland.sh) ----------------------------------
 # Stub the installer logging/target helpers, source the phase script, and run
 # the env writer against a throwaway TARGET on both the no-NVIDIA and NVIDIA

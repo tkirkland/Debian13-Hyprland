@@ -340,9 +340,8 @@ step_build_stack() {
   # Mirrors the already-hoisted installer path (scripts/60-hyprland.sh build_stack).
   install_build_deps
   for name in "${HYPR_BUILD_ORDER[@]}"; do
-    tag="$(resolve_latest_release_tag \
-      "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-    debver="$(tag_to_debver "${tag}")"
+    tag="$(resolve_component_tag "${name}")"
+    debver="$(tag_to_debver "${tag}" "${name}")"
     if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
       stagerel="${BUILD_STAGE_REL}/${name}"
       rm -rf "${TARGET}${stagerel}"
@@ -387,9 +386,8 @@ step_build_portal() {
   local name="${XDPH_COMPONENT}" tag debver stagerel
   (
     set -e
-    tag="$(resolve_latest_release_tag \
-      "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-    debver="$(tag_to_debver "${tag}")"
+    tag="$(resolve_component_tag "${name}")"
+    debver="$(tag_to_debver "${tag}" "${name}")"
     if deb_needs_rebuild "${POOL}" "${name}" "${debver}"; then
       stagerel="${BUILD_STAGE_REL}/${name}"
       rm -rf "${TARGET}${stagerel}"
@@ -495,22 +493,34 @@ step_runtime_closure() {
 # kovidgoyal binaries repackaged) into the pool. Debian ships kitty 0.41,
 # which prints a false sRGB warning on NVIDIA (fixed upstream >= 0.47); the
 # repackaged deb versions higher (e.g. 0.47.4-0gh1), so apt resolves it over
-# Debian's during the golden install with no pin needed. Reuse any staged
-# copy; fetch failure is fatal (a silent fallback to 0.41 would ship the bug).
+# Debian's during the golden install with no pin needed. Like Brave
+# (cache_populate_brave): check the latest release EVERY build and reuse the
+# staged copy only when it IS the latest — the offline guarantee covers
+# installs, not builds, so a cached deb must never pin the shipped version.
+# Only if the release check itself fails does a staged copy get reused (an
+# offline rebuild still works); with no staged copy either, fetch failure is
+# fatal (a silent fallback to Debian's 0.41 would ship the sRGB bug).
 step_stage_kitty() {
-  local dest="${CACHE_DIR}/repo/pool" api="" url=""
-  if compgen -G "${dest}/kitty_*gh*_amd64.deb" >/dev/null; then
-    info "[build] reusing staged upstream kitty deb"
-    return 0
-  fi
+  local dest="${CACHE_DIR}/repo/pool" api="" url="" fname=""
   api="${KITTY_DEB_REPO_URL/github.com/api.github.com\/repos}/releases/latest"
   url="$(curl -fsSL --retry 3 "${api}" 2>/dev/null |
     grep -oE '"browser_download_url": *"[^"]+"' | cut -d'"' -f4 |
     grep -E '/kitty_[^/]+_amd64\.deb$' | head -n1 || true)"
-  [[ -n "${url}" ]] || fatal "no kitty deb asset found at ${api}"
-  info "[build] staging upstream kitty deb: ${url##*/}"
+  if [[ -z "${url}" ]]; then
+    if compgen -G "${dest}/kitty_*gh*_amd64.deb" >/dev/null; then
+      warn "kitty release check failed; reusing staged deb (may be stale)"
+      return 0
+    fi
+    fatal "no kitty deb asset found at ${api} and none staged"
+  fi
+  fname="${url##*/}"
+  if [[ -f "${dest}/${fname}" ]]; then
+    info "[build] reusing staged upstream kitty deb ${fname} (latest)"
+    return 0
+  fi
+  info "[build] staging upstream kitty deb: ${fname}"
   mkdir -p "${dest}"
-  curl -fsSL --retry 5 --retry-all-errors -o "${dest}/${url##*/}" "${url}" ||
+  curl -fsSL --retry 5 --retry-all-errors -o "${dest}/${fname}" "${url}" ||
     fatal "kitty deb download failed: ${url}"
 }
 
@@ -979,6 +989,39 @@ step_nvidia_depsim() {
   rm -rf "${simtmp}"
 }
 
+# 6g-2b) Link-coherence gate: every ELF the image ships in the standard
+# binary/library dirs must resolve its NEEDED sonames inside the image.
+# Catches independently-floating stack components whose soname bumped while
+# prebuilt consumers still reference the old one (hyprutils 0.14 vs
+# libhyprutils.so.12, 2026-07-18: Hyprland unloadable, greetd crashloop,
+# black screen) at BUILD time instead of first boot. chroot ldd resolves with
+# the image's own ld.so and search paths, exactly like the booted system.
+# ldd prints "not found" per missing soname and handles non-ELF gracefully.
+step_golden_linkcheck() {
+  info "[build] golden link-coherence gate (chroot ldd over shipped ELFs)"
+  local out=""
+  out="$(chroot "${GOLDEN}" /bin/bash -s <<'LDDCHK'
+shopt -s nullglob
+for f in /usr/bin/* /usr/sbin/* /usr/libexec/* \
+         /usr/lib/x86_64-linux-gnu/lib*.so.*; do
+  [[ -f "${f}" && ! -L "${f}" ]] || continue
+  ldd "${f}" 2>/dev/null | grep 'not found' | sed "s|^[[:space:]]*|${f}: |"
+done
+true
+LDDCHK
+)"
+  if [[ -n "${out}" ]]; then
+    printf '%s\n' "${out}" >&2
+    # A failed golden must not be reusable. The stamp was written at bake
+    # time, and the poolhash can't see content-only changes: a deb rebuilt
+    # into the SAME filename keeps the hash identical (hit 2026-07-18: xdph
+    # rebuilt clean as 1.4.0-1 over the deleted poisoned 1.4.0-1, the stamp
+    # matched, and the broken golden tree was reused and re-scanned verbatim).
+    rm -f "${ISO_WORKSPACE}/.golden-rootfs-done"
+    fatal "golden image has unresolvable shared libraries (stack soname skew?)"
+  fi
+}
+
 # 6g-5) Finalize the golden image for shipping: permanent Debian sources
 # replace the temporary file:// pool source, the chroot service guard comes
 # OUT (it must never ship), identity is scrubbed (machine-id, ssh host keys
@@ -1000,6 +1043,10 @@ step_finalize_golden() {
 # removed outright (hypr-sshd-keygen / customize regenerate). apt lists and
 # the binary caches are regenerable dead weight in a squashfs.
 golden_hygiene_scrub() {
+  # debootstrap copies the BUILD HOST's hostname into the chroot; without this
+  # the live session boots under the build machine's name (leak, seen live
+  # 2026-07-18 as "precision"). The installer sets the real hostname on disk.
+  printf 'hyprland\n' >"${GOLDEN}/etc/hostname"
   : >"${GOLDEN}/etc/machine-id"
   rm -f "${GOLDEN}/var/lib/dbus/machine-id"
   rm -f "${GOLDEN}/etc/ssh/ssh_host_"*
@@ -1211,6 +1258,7 @@ run_heavy_build() {
     step_stage_adw_gtk3
     step_golden_rootfs      # 6g-1: the REAL offline install (replaces depsim)
     step_golden_session     # 6g-2: skel configs, vendor bakes, dormant firstboot
+    step_golden_linkcheck   # 6g-2b: every shipped ELF resolves inside the image
     step_install_store      # 6g-3: NVIDIA + bootloader store, ZBM, KERNEL
     step_nvidia_depsim      # 6g-4: every variant resolves against the store
     step_finalize_golden    # 6g-5: sources/guard/identity scrub, binds down

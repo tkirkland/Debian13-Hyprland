@@ -8,15 +8,34 @@ if ! declare -f info >/dev/null; then info(){ printf '%s\n' "$*" >&2; }; fi
 # Optional per-package control metadata, looked up by package_to_deb. Declared
 # here (no-op if 00-config.sh already populated them) so referencing a missing
 # key is safe under `set -u` even when this lib is used standalone.
-declare -gA HYPR_DEB_CONFLICTS HYPR_DEB_REPLACES HYPR_DEB_PROVIDES
+declare -gA HYPR_DEB_CONFLICTS HYPR_DEB_REPLACES HYPR_DEB_PROVIDES HYPR_DEB_REVISION HYPR_TAG_PIN
+
+# Pin-aware tag resolution: HYPR_TAG_PIN (lib/00-config.sh) holds a component
+# at a known-good tag when upstream libraries release ahead of the Hyprland
+# release built against them; everything unpinned floats to the latest
+# release tag. Every build-side tag lookup must come through here — calling
+# resolve_latest_release_tag directly bypasses the pin.
+resolve_component_tag() {
+  local name="$1"
+  if [[ -n "${HYPR_TAG_PIN[${name}]:-}" ]]; then
+    printf '%s\n' "${HYPR_TAG_PIN[${name}]}"
+    return 0
+  fi
+  resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}"
+}
 
 # Release tag -> Debian version X.Y.Z-1. Strips any leading non-digit prefix so
 # the version starts with a digit (dpkg requirement). Tags seen: v0.49.0,
 # 1.2.3, xkbcommon-1.13.2 (prefixed). Same prefix-strip idiom as check_compat.
+# $2 (optional) is the component name; HYPR_DEB_REVISION bumps its Debian
+# revision when the CONTROL changes without a new upstream (deb_needs_rebuild
+# and the golden poolhash both key on the version, so a control-only edit
+# would otherwise reuse the stale cached .deb forever).
 tag_to_debver() {
-  local tag="$1"
+  local tag="$1" name="${2:-}" rev=1
+  [[ -n "${name}" ]] && rev="${HYPR_DEB_REVISION[${name}]:-1}"
   tag="${tag#"${tag%%[0-9]*}"}"
-  printf '%s-1\n' "${tag}"
+  printf '%s-%s\n' "${tag}" "${rev}"
 }
 
 # Highest Debian version of <name>_<ver>_<arch>.deb present in pool dir $1
@@ -225,8 +244,8 @@ package_to_deb() {
 # wiring for the build root is completed in Phase 3.
 build_component_to_deb() {
   local name="$1" pool="$2" tag debver destdir out
-  tag="$(resolve_latest_release_tag "${HYPR_REPO_URL[${name}]}" "${HYPR_TAG_PATTERN[${name}]:-}")"
-  debver="$(tag_to_debver "${tag}")"
+  tag="$(resolve_component_tag "${name}")"
+  debver="$(tag_to_debver "${tag}" "${name}")"
   if ! deb_needs_rebuild "${pool}" "${name}" "${debver}"; then
     info "reuse cached ${name} ${debver} (upstream not newer)"
     return 0
